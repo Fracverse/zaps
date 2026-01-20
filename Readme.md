@@ -183,28 +183,104 @@ ZAPS relies on Stellar Anchors for:
 
 ## 🤝 Contributing
 
-Contributions are welcome.
+Contributions are welcome and encouraged 🚀
+To contribute to ZAPS, please use the **fork-and-pull-request** workflow.
 
-- **Clone the repository**
-```bash 
-git clone https://github.com/Fracverse/zaps
+### 1️⃣ Fork the Repository
+
+Click the **Fork** button at the top right of this repository to create your own copy under your GitHub account.
+
+---
+
+### 2️⃣ Clone Your Fork
+
+```bash
+git clone https://github.com/<your-username>/zaps.git
 ```
 
-- **Navigate into the project directory**
+---
+
+### 3️⃣ Navigate Into the Project
+
 ```bash
 cd zaps
 ```
 
-- **Install dependencies**
-```bash 
+---
+
+### 4️⃣ Add the Upstream Repository
+
+This keeps your fork in sync with the main project.
+
+```bash
+git remote add upstream https://github.com/Fracverse/zaps.git
+```
+
+Verify remotes:
+
+```bash
+git remote -v
+```
+
+---
+
+### 5️⃣ Install Dependencies
+
+```bash
 npm install
 ```
 
-- **Start the development server**
-```bash 
+---
+
+### 6️⃣ Create a Feature Branch
+
+Always work on a new branch.
+
+```bash
+git checkout -b feature/your-feature-name
+```
+
+Examples:
+
+* `feature/nfc-flow`
+* `feature/merchant-dashboard`
+* `fix/qr-scan-bug`
+
+---
+
+### 7️⃣ Start the Development Server
+
+```bash
 npm run dev
 ```
+
 ---
+
+### 8️⃣ Commit Your Changes
+
+Write clear, meaningful commit messages.
+
+```bash
+git add .
+git commit -m "feat: add QR scan validation logic"
+```
+
+---
+
+### 9️⃣ Push to Your Fork
+
+```bash
+git push origin feature/your-feature-name
+```
+
+---
+
+### 🔟 Open a Pull Request
+
+1. Go to your fork on GitHub
+2. Click **New Pull Request**
+3. Ensure the base repository is `Fracverse/zaps`
+4. Describe **what you changed** and **why**
 
 ## 📜 License
 
