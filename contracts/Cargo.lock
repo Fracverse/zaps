@@ -766,6 +766,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "payment-router"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1239,6 +1247,15 @@ dependencies = [
  "stellar-xdr",
  "syn",
  "thiserror",
+]
+
+[[package]]
+name = "soroban-token-sdk"
+version = "21.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cef8fc7824bc08813ac12ed3af9a73fc1921873b480fff66c7b768c4d40da659"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

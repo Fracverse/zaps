@@ -1,11 +1,10 @@
 [workspace]
 resolver = "2"
-members = [
-  "example-contract",
-]
+members = ["example-contract", "payment-router"]
 
 [workspace.dependencies]
 soroban-sdk = "21.0.0"
+soroban-token-sdk = "21.0.0"
 
 [profile.release]
 opt-level = "z"
