@@ -51,9 +51,11 @@ impl BridgeService {
         let client = self.db_pool.get().await?;
 
         // In production, this would interact with actual bridge contracts
+        // In production, this would interact with actual bridge contracts
         // For now, we'll simulate the bridge transaction
+        let tx_id = Uuid::new_v4();
         let bridge_tx = BridgeTransaction {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: tx_id.to_string(),
             from_chain: request.from_chain.clone(),
             to_chain: request.to_chain.clone(),
             asset: request.asset.clone(),
@@ -76,7 +78,7 @@ impl BridgeService {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 "#,
                 &[
-                    &bridge_tx.id,
+                    &tx_id,
                     &bridge_tx.from_chain,
                     &bridge_tx.to_chain,
                     &bridge_tx.asset,
@@ -91,7 +93,7 @@ impl BridgeService {
             .await?;
 
         Ok(BridgeTransactionResponse {
-            id: bridge_tx.id,
+            id: tx_id,
             from_chain: bridge_tx.from_chain,
             to_chain: bridge_tx.to_chain,
             asset: bridge_tx.asset,
@@ -102,7 +104,10 @@ impl BridgeService {
         })
     }
 
-    pub async fn get_bridge_transaction(&self, id: Uuid) -> Result<BridgeTransactionResponse, ApiError> {
+    pub async fn get_bridge_transaction(
+        &self,
+        id: Uuid,
+    ) -> Result<BridgeTransactionResponse, ApiError> {
         let client = self.db_pool.get().await?;
 
         let row = client
@@ -155,7 +160,10 @@ impl BridgeService {
 
         // Check if asset is supported
         if !bridge_config.supported_assets.contains(&request.asset) {
-            return Err(ApiError::Validation(format!("Asset {} is not supported for bridging", request.asset)));
+            return Err(ApiError::Validation(format!(
+                "Asset {} is not supported for bridging",
+                request.asset
+            )));
         }
 
         // Check amount limits
@@ -176,11 +184,16 @@ impl BridgeService {
         // Validate chains
         let supported_chains = vec!["ethereum", "polygon", "bsc", "stellar"];
         if !supported_chains.contains(&request.from_chain.as_str()) {
-            return Err(ApiError::Validation(format!("Unsupported source chain: {}", request.from_chain)));
+            return Err(ApiError::Validation(format!(
+                "Unsupported source chain: {}",
+                request.from_chain
+            )));
         }
 
         if request.to_chain != "stellar" {
-            return Err(ApiError::Validation("Only bridging to Stellar is currently supported".to_string()));
+            return Err(ApiError::Validation(
+                "Only bridging to Stellar is currently supported".to_string(),
+            ));
         }
 
         Ok(())

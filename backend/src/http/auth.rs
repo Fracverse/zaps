@@ -41,14 +41,14 @@ pub async fn login(
     // Generate JWT token
     let token = auth::generate_jwt(
         &request.user_id,
-        &services.config.jwt_secret,
-        services.config.jwt_expiration_hours,
+        &services.config.jwt.secret,
+        services.config.jwt.expiration_hours,
     )?;
 
     Ok(Json(AuthResponse {
         token,
         user_id: request.user_id,
-        expires_in: services.config.jwt_expiration_hours * 3600,
+        expires_in: services.config.jwt.expiration_hours * 3600,
     }))
 }
 
@@ -62,19 +62,22 @@ pub async fn register(
     }
 
     // Create user
-    services.identity.create_user(request.user_id.clone()).await?;
+    services
+        .identity
+        .create_user(request.user_id.clone())
+        .await?;
 
     // Generate JWT token
     let token = auth::generate_jwt(
         &request.user_id,
-        &services.config.jwt_secret,
-        services.config.jwt_expiration_hours,
+        &services.config.jwt.secret,
+        services.config.jwt.expiration_hours,
     )?;
 
     Ok(Json(AuthResponse {
         token,
         user_id: request.user_id,
-        expires_in: services.config.jwt_expiration_hours * 3600,
+        expires_in: services.config.jwt.expiration_hours * 3600,
     }))
 }
 
@@ -83,18 +86,18 @@ pub async fn refresh_token(
     Json(request): Json<RefreshTokenRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     // Validate the current token
-    let claims = auth::validate_jwt(&request.token, &services.config.jwt_secret)?;
+    let claims = auth::validate_jwt(&request.token, &services.config.jwt.secret)?;
 
     // Generate new token
     let token = auth::generate_jwt(
         &claims.sub,
-        &services.config.jwt_secret,
-        services.config.jwt_expiration_hours,
+        &services.config.jwt.secret,
+        services.config.jwt.expiration_hours,
     )?;
 
     Ok(Json(AuthResponse {
         token,
         user_id: claims.sub,
-        expires_in: services.config.jwt_expiration_hours * 3600,
+        expires_in: services.config.jwt.expiration_hours * 3600,
     }))
 }

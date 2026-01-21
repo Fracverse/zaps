@@ -18,7 +18,10 @@ impl IndexerService {
         Ok(())
     }
 
-    pub async fn index_transaction(&self, _tx_hash: &str) -> Result<(), crate::api_error::ApiError> {
+    pub async fn index_transaction(
+        &self,
+        _tx_hash: &str,
+    ) -> Result<(), crate::api_error::ApiError> {
         Ok(())
     }
 }

@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::HeaderName,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderName, middleware::Next, response::Response};
 use uuid::Uuid;
 
 static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -20,10 +15,8 @@ pub async fn request_id(mut req: Request, next: Next) -> Response {
 
     let mut res = next.run(req).await;
 
-    res.headers_mut().insert(
-        X_REQUEST_ID.clone(),
-        request_id.parse().unwrap(),
-    );
+    res.headers_mut()
+        .insert(X_REQUEST_ID.clone(), request_id.parse().unwrap());
 
     res
 }
