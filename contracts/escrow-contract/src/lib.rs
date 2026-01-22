@@ -1,5 +1,4 @@
 #![no_std]
-
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, contracterror,
     symbol_short, Address, Env, Map, Symbol, BytesN,
@@ -51,50 +50,51 @@ impl EscrowContract {
 
     // Buyer locks funds into escrow
     // Anyone can call, but must be the buyer and must authorize
-    // pub fn lock_funds(
-    //     env: Env,
-    //     escrow_id: BytesN<32>,
-    //     buyer: Address,
-    //     seller: Address,
-    //     token: Address,
-    //     amount: i128,
-    //     timeout_ledger: u32,           // optional: after how many ledgers buyer can refund
-    //     memo: BytesN<32>,
-    // ) {
-    //     buyer.require_auth();
+    pub fn lock_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        buyer: Address,
+        seller: Address,
+        token: Address,
+        amount: i128,
+        timeout_ledger: u32,           // optional: after how many ledgers buyer can refund
+        memo: BytesN<32>,
+    ) {
+        buyer.require_auth();
 
-    //     if amount <= 0 {
-    //         panic_with_error!(env, EscrowError::InvalidAmount);
-    //     }
+        if amount <= 0 {
+            panic_with_error!(env, EscrowError::InvalidAmount);
+        }
 
-    //     let key = escrow_key(&escrow_id);
-    //     if env.storage().persistent().has(&key) {
-    //         panic_with_error!(env, EscrowError::AlreadyLocked);
-    //     }
+       let key = escrow_key(&env, &escrow_id);
 
-    //     // Transfer tokens from buyer → contract
-    //     let token_client = TokenClient::new(&env, &token);
-    //     token_client.transfer(&buyer, &env.current_contract_address(), &amount);
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(env, EscrowError::AlreadyLocked);
+        }
 
-    //     let escrow = Escrow {
-    //         buyer: buyer.clone(),
-    //         seller: seller.clone(),
-    //         arbitrator: Option::None,           // can be set later or passed in extension
-    //         token,
-    //         amount,
-    //         state: EscrowState::Locked,
-    //         memo,
-    //         created_at: env.ledger().timestamp(),
-    //     };
+        // Transfer tokens from buyer → contract
+        let token_client = TokenClient::new(&env, &token);
+        token_client.transfer(&buyer, &env.current_contract_address(), &amount);
 
-    //     env.storage().persistent().set(&key, &escrow);
+        let escrow = Escrow {
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            arbitrator: Option::None,           // can be set later or passed in extension
+            token,
+            amount,
+            state: EscrowState::Locked,
+            memo,
+            created_at: env.ledger().timestamp(),
+        };
 
-    //     // Optional: emit event
-    //     env.events().publish(
-    //         (symbol_short!("escrow"), symbol_short!("locked")),
-    //         (escrow_id, buyer, seller, amount)
-    //     );
-    // }
+        env.storage().persistent().set(&key, &escrow);
+
+        // Optional: emit event
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("locked")),
+            (escrow_id, buyer, seller, amount)
+        );
+    }
 
     // Seller (or arbitrator) releases funds to seller
     // pub fn release_funds(
@@ -201,8 +201,8 @@ impl EscrowContract {
 }
 
 // Helpers
-// fn escrow_key(id: &BytesN<32>) -> Symbol {
-//     Symbol::new(&Env::default(), &format!("{}{}", ESCROW_PREFIX, id.to_array().iter().map(|b| format!("{:02x}", b)).collect::<String>()))
-//     // Alternative (simpler but longer keys):
-//     // Symbol::new(&env, "escrow_").concat(&id.to_bytes())
-// }
+
+
+fn escrow_key<'a>(env: &'a Env, id: &BytesN<32>) -> (soroban_sdk::Symbol, BytesN<32>) {
+    (symbol_short!("escrow"), id.clone())
+}
