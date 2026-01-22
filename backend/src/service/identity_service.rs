@@ -80,10 +80,7 @@ impl IdentityService {
         let client = self.db_pool.get().await?;
 
         let count: i64 = client
-            .query_one(
-                "SELECT COUNT(*) FROM users WHERE user_id = $1",
-                &[&user_id],
-            )
+            .query_one("SELECT COUNT(*) FROM users WHERE user_id = $1", &[&user_id])
             .await?
             .get(0);
 

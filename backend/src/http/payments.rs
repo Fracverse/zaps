@@ -1,9 +1,15 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{api_error::ApiError, service::{ServiceContainer, payment_service::CreatePaymentRequest}};
+use crate::{
+    api_error::ApiError,
+    service::{payment_service::CreatePaymentRequest, ServiceContainer},
+};
 
 #[derive(Debug, Serialize)]
 pub struct PaymentResponse {
@@ -67,7 +73,10 @@ pub async fn create_payment(
     // For now, using a placeholder address
     let from_address = "GEXAMPLE_ADDRESS".to_string();
 
-    let payment = services.payment.create_payment(from_address, request).await?;
+    let payment = services
+        .payment
+        .create_payment(from_address, request)
+        .await?;
 
     Ok(Json(PaymentResponse {
         id: payment.id,
@@ -120,7 +129,10 @@ pub async fn generate_qr(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<QrPaymentRequest>,
 ) -> Result<Json<QrPaymentResponse>, ApiError> {
-    let qr_data = services.payment.generate_qr_payment(request.clone()).await?;
+    let qr_data = services
+        .payment
+        .generate_qr_payment(request.clone())
+        .await?;
 
     Ok(Json(QrPaymentResponse {
         qr_data,
@@ -134,7 +146,10 @@ pub async fn validate_nfc(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<NfcPaymentRequest>,
 ) -> Result<Json<NfcValidationResponse>, ApiError> {
-    let valid = services.payment.validate_nfc_payment(request.clone()).await?;
+    let valid = services
+        .payment
+        .validate_nfc_payment(request.clone())
+        .await?;
 
     Ok(Json(NfcValidationResponse {
         valid,

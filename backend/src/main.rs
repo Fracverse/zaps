@@ -11,16 +11,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
 
     // Initialize database
-    let db_pool = db::create_pool(&config.database_url).await?;
+    let db_pool = db::create_pool(&config.database.url).await?;
 
     // Run database migrations
-    db::run_migrations(&db_pool).await?;
+    db::run_migrations(&config.database.url).await?;
 
     // Create application
     let app = create_app(db_pool, config.clone()).await?;
 
     // Start server
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     info!("Starting ZAPS backend server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

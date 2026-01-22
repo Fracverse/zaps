@@ -1,7 +1,4 @@
-use crate::{
-    config::Config,
-    models::AuditLog,
-};
+use crate::{config::Config, models::AuditLog};
 use deadpool_postgres::Pool;
 use std::sync::Arc;
 
@@ -23,7 +20,10 @@ impl AuditService {
         Ok(())
     }
 
-    pub async fn get_user_activity(&self, _user_id: &str) -> Result<Vec<AuditLog>, crate::api_error::ApiError> {
+    pub async fn get_user_activity(
+        &self,
+        _user_id: &str,
+    ) -> Result<Vec<AuditLog>, crate::api_error::ApiError> {
         Ok(vec![])
     }
 }

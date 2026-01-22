@@ -1,25 +1,17 @@
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, middleware::Next, response::Response};
 use lazy_static::lazy_static;
 use prometheus::{register_counter, register_histogram, Counter, Histogram};
 use std::time::Instant;
 
 lazy_static! {
-    static ref HTTP_REQUESTS_TOTAL: Counter = register_counter!(
-        "http_requests_total",
-        "Total number of HTTP requests"
-    )
-    .expect("Can't create metric");
-
+    static ref HTTP_REQUESTS_TOTAL: Counter =
+        register_counter!("http_requests_total", "Total number of HTTP requests")
+            .expect("Can't create metric");
     static ref HTTP_REQUEST_DURATION: Histogram = register_histogram!(
         "http_request_duration_seconds",
         "HTTP request duration in seconds"
     )
     .expect("Can't create metric");
-
     static ref HTTP_REQUESTS_BY_STATUS: Counter = register_counter!(
         "http_requests_by_status_total",
         "Total number of HTTP requests by status code"

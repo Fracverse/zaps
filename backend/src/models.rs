@@ -71,6 +71,16 @@ impl FromStr for PaymentStatus {
 
 impl PaymentStatus {
     // Uses Display trait for to_string()
+    pub fn to_string(&self) -> String {
+         match self {
+            PaymentStatus::Pending => "pending",
+            PaymentStatus::Processing => "processing",
+            PaymentStatus::Completed => "completed",
+            PaymentStatus::Failed => "failed",
+            PaymentStatus::Refunded => "refunded",
+        }
+        .to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +122,8 @@ impl TransferStatus {
             TransferStatus::Processing => "processing",
             TransferStatus::Completed => "completed",
             TransferStatus::Failed => "failed",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 
@@ -154,7 +165,8 @@ impl WithdrawalStatus {
             WithdrawalStatus::Processing => "processing",
             WithdrawalStatus::Completed => "completed",
             WithdrawalStatus::Failed => "failed",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 
@@ -217,7 +229,8 @@ impl BridgeTransactionStatus {
             BridgeTransactionStatus::Confirming => "confirming",
             BridgeTransactionStatus::Completed => "completed",
             BridgeTransactionStatus::Failed => "failed",
-        }.to_string()
+        }
+        .to_string()
     }
 }
 

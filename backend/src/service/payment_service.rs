@@ -159,7 +159,10 @@ impl PaymentService {
         Ok(())
     }
 
-    pub async fn generate_qr_payment(&self, payload: crate::http::payments::QrPaymentRequest) -> Result<String, ApiError> {
+    pub async fn generate_qr_payment(
+        &self,
+        payload: crate::http::payments::QrPaymentRequest,
+    ) -> Result<String, ApiError> {
         // Validate merchant exists
         self.get_merchant(&payload.merchant_id).await?;
 
@@ -176,13 +179,17 @@ impl PaymentService {
         Ok(qr_data)
     }
 
-    pub async fn validate_nfc_payment(&self, payload: crate::http::payments::NfcPaymentRequest) -> Result<bool, ApiError> {
+    pub async fn validate_nfc_payment(
+        &self,
+        payload: crate::http::payments::NfcPaymentRequest,
+    ) -> Result<bool, ApiError> {
         // Validate merchant exists
         self.get_merchant(&payload.merchant_id).await?;
 
         // Basic validation - in production, check expiry, signature, etc.
         let current_time = chrono::Utc::now().timestamp();
-        if payload.timestamp > current_time + 300 { // 5 minutes grace
+        if payload.timestamp > current_time + 300 {
+            // 5 minutes grace
             return Ok(false);
         }
 

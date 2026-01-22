@@ -34,7 +34,12 @@ pub async fn readiness_check(
     };
 
     Json(ReadinessResponse {
-        status: if db_status == "connected" { "ready" } else { "not ready" }.to_string(),
+        status: if db_status == "connected" {
+            "ready"
+        } else {
+            "not ready"
+        }
+        .to_string(),
         database: db_status.to_string(),
         timestamp: chrono::Utc::now(),
     })
