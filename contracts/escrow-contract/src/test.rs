@@ -2,8 +2,8 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
-    token, Address, Env, BytesN, Error,
+    testutils::{Address as _, Ledger},
+    token, Address, Env, BytesN,
 };
 
 #[test]
@@ -16,14 +16,15 @@ fn test_lock_funds_success() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &1_000_000);
+
     let escrow_id = BytesN::from_array(&env, &[1u8; 32]);
     let amount: i128 = 1_000_000;
     let timeout_ledger: u32 = 1_000_000;
     let memo = BytesN::from_array(&env, &[0u8; 32]);
-
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &amount);
 
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &timeout_ledger, &memo);
 
@@ -48,20 +49,27 @@ fn test_lock_funds_duplicate_id_fails() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &1_000_000);
+
     let escrow_id = BytesN::from_array(&env, &[2u8; 32]);
     let amount: i128 = 500_000;
 
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &(amount * 2));
-
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
-    let result = client.try_lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+    let result = client.try_lock_funds(
+        &escrow_id,
+        &buyer,
+        &seller,
+        &token,
+        &amount,
+        &1_000_000,
+        &BytesN::from_array(&env, &[0u8; 32]),
+    );
 
     assert!(result.is_err());
-    // Optional: more precise
-    // assert!(matches!(result, Err(Error::Contract(_))));
 }
 
 #[test]
@@ -74,10 +82,20 @@ fn test_lock_funds_zero_amount_fails() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+
     let escrow_id = BytesN::from_array(&env, &[3u8; 32]);
 
-    let result = client.try_lock_funds(&escrow_id, &buyer, &seller, &token, &0, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+    let result = client.try_lock_funds(
+        &escrow_id,
+        &buyer,
+        &seller,
+        &token,
+        &0,
+        &1_000_000,
+        &BytesN::from_array(&env, &[0u8; 32]),
+    );
 
     assert!(result.is_err());
 }
@@ -92,12 +110,13 @@ fn test_release_funds_by_seller_success() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &750_000);
+
     let escrow_id = BytesN::from_array(&env, &[4u8; 32]);
     let amount: i128 = 750_000;
-
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &amount);
 
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
@@ -118,17 +137,18 @@ fn test_release_funds_unauthorized_fails() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let random = Address::generate(&env);
-    let token = Address::generate(&env);
+    let random_caller = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &300_000);
+
     let escrow_id = BytesN::from_array(&env, &[5u8; 32]);
     let amount: i128 = 300_000;
 
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &amount);
-
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
-    let result = client.try_release_funds(&escrow_id, &random);
+    let result = client.try_release_funds(&escrow_id, &random_caller);
     assert!(result.is_err());
 }
 
@@ -142,12 +162,13 @@ fn test_refund_funds_by_buyer_after_timeout_success() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let token = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &1_200_000);
+
     let escrow_id = BytesN::from_array(&env, &[6u8; 32]);
     let amount: i128 = 1_200_000;
-
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &amount);
 
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
@@ -171,17 +192,18 @@ fn test_refund_before_timeout_only_by_buyer_or_arbitrator() {
 
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
-    let random = Address::generate(&env);
-    let token = Address::generate(&env);
+    let random_caller = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    let token = env.register_stellar_asset_contract(token_addr.clone());
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &900_000);
+
     let escrow_id = BytesN::from_array(&env, &[7u8; 32]);
     let amount: i128 = 900_000;
 
-    let sac = token::StellarAssetClient::new(&env, &token);
-    sac.mint(&buyer, &amount);
-
     client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
-    let result = client.try_refund_funds(&escrow_id, &random);
+    let result = client.try_refund_funds(&escrow_id, &random_caller);
     assert!(result.is_err());
 
     client.refund_funds(&escrow_id, &buyer);
