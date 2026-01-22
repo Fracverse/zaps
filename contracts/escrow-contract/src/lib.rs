@@ -97,95 +97,95 @@ impl EscrowContract {
     }
 
     // Seller (or arbitrator) releases funds to seller
-    // pub fn release_funds(
-    //     env: Env,
-    //     escrow_id: BytesN<32>,
-    //     caller: Address,
-    // ) {
-    //     caller.require_auth();
+    pub fn release_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+    ) {
+        caller.require_auth();
 
-    //     let key = escrow_key(&escrow_id);
-    //     let mut escrow: Escrow = env.storage().persistent().get(&key)
-    //         .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+        let key = escrow_key(&env, &escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
 
-    //     if escrow.state != EscrowState::Locked {
-    //         panic_with_error!(env, EscrowError::InvalidState);
-    //     }
+        if escrow.state != EscrowState::Locked {
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
 
-    //     // Only seller or arbitrator can release
-    //     if caller != escrow.seller {
-    //         if let Some(arb) = &escrow.arbitrator {
-    //             if caller != *arb {
-    //                 panic_with_error!(env, EscrowError::NotAuthorized);
-    //             }
-    //         } else {
-    //             panic_with_error!(env, EscrowError::NotAuthorized);
-    //         }
-    //     }
+        // Only seller or arbitrator can release
+        if caller != escrow.seller {
+            if let Some(arb) = &escrow.arbitrator {
+                if caller != *arb {
+                    panic_with_error!(env, EscrowError::NotAuthorized);
+                }
+            } else {
+                panic_with_error!(env, EscrowError::NotAuthorized);
+            }
+        }
 
-    //     let token_client = TokenClient::new(&env, &escrow.token);
-    //     token_client.transfer(
-    //         &env.current_contract_address(),
-    //         &escrow.seller,
-    //         &escrow.amount,
-    //     );
+        let token_client = TokenClient::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.seller,
+            &escrow.amount,
+        );
 
-    //     escrow.state = EscrowState::Released;
-    //     env.storage().persistent().set(&key, &escrow);
+        escrow.state = EscrowState::Released;
+        env.storage().persistent().set(&key, &escrow);
 
-    //     env.events().publish(
-    //         (symbol_short!("escrow"), symbol_short!("released")),
-    //         (escrow_id, caller, escrow.seller, escrow.amount)
-    //     );
-    // }
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("released")),
+            (escrow_id, caller, escrow.seller, escrow.amount)
+        );
+    }
 
     // Buyer can refund if timeout passed (or arbitrator decides)
-    // pub fn refund_funds(
-    //     env: Env,
-    //     escrow_id: BytesN<32>,
-    //     caller: Address,
-    // ) {
-    //     caller.require_auth();
+    pub fn refund_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+    ) {
+        caller.require_auth();
 
-    //     let key = escrow_key(&escrow_id);
-    //     let mut escrow: Escrow = env.storage().persistent().get(&key)
-    //         .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+        let key = escrow_key(&env, &escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
 
-    //     if escrow.state != EscrowState::Locked {
-    //         panic_with_error!(env, EscrowError::InvalidState);
-    //     }
+        if escrow.state != EscrowState::Locked {
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
 
-    //     let is_timeout = env.ledger().timestamp() >= escrow.created_at + 7 * 24 * 60 * 60; // example: 7 days
-    //     let is_authorized = 
-    //         caller == escrow.buyer ||
-    //         escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
+        let is_timeout = env.ledger().timestamp() >= escrow.created_at + 7 * 24 * 60 * 60; // example: 7 days
+        let is_authorized = 
+            caller == escrow.buyer ||
+            escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
 
-    //     if !is_authorized && !is_timeout {
-    //         panic_with_error!(env, EscrowError::NotAuthorized);
-    //     }
+        if !is_authorized && !is_timeout {
+            panic_with_error!(env, EscrowError::NotAuthorized);
+        }
 
-    //     let token_client = TokenClient::new(&env, &escrow.token);
-    //     token_client.transfer(
-    //         &env.current_contract_address(),
-    //         &escrow.buyer,
-    //         &escrow.amount,
-    //     );
+        let token_client = TokenClient::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.buyer,
+            &escrow.amount,
+        );
 
-    //     escrow.state = EscrowState::Refunded;
-    //     env.storage().persistent().set(&key, &escrow);
+        escrow.state = EscrowState::Refunded;
+        env.storage().persistent().set(&key, &escrow);
 
-    //     env.events().publish(
-    //         (symbol_short!("escrow"), symbol_short!("refunded")),
-    //         (escrow_id, caller, escrow.buyer, escrow.amount)
-    //     );
-    // }
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("refunded")),
+            (escrow_id, caller, escrow.buyer, escrow.amount)
+        );
+    }
 
     // ────────────────────────────────────────────────
     // View functions
     // ────────────────────────────────────────────────
 
     // pub fn get_escrow(env: Env, escrow_id: BytesN<32>) -> Escrow {
-    //     let key = escrow_key(&escrow_id);
+    //     let key = escrow_key(&env, &escrow_id);
     //     env.storage().persistent()
     //         .get(&key)
     //         .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked))
