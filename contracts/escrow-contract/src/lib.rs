@@ -7,15 +7,6 @@ use soroban_sdk::{
 };
 
 #[contracttype]
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum EscrowState {
-    Locked = 1,
-    Released = 2,
-    Refunded = 3,
-    Disputed = 4,   
-}
-
-#[contracttype]
 #[derive(Clone)]
 pub struct Escrow {
     pub buyer: Address,
@@ -28,8 +19,17 @@ pub struct Escrow {
     pub created_at: u64,
 }
 
+#[contracttype]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum EscrowState {
+    Locked = 1,
+    Released = 2,
+    Refunded = 3,
+    Disputed = 4,
+}
+
 #[contracterror]
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum EscrowError {
     NotAuthorized = 1,
     AlreadyLocked = 2,
@@ -193,3 +193,5 @@ impl EscrowContract {
 fn escrow_key(id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("escrow"), id.clone())
 }
+
+mod test;

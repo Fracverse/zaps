@@ -1,170 +1,190 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    token, Address, Env, BytesN,
+};
 
 #[test]
-fn test_register_user_success() {
+fn test_lock_funds_success() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
-
-    // Mock the test environment
-    env.mock_all_auths();
-
-    let user_addr = Address::generate(&env);
-    let role = String::from_str(&env, "admin");
-
-    // Register user
-    client.register(&user_addr, &role);
-
-    // Verify user is registered
-    assert!(client.is_registered(&user_addr));
-
-    // Verify user data
-    let user = client.get_user(&user_addr);
-    assert_eq!(user.address, user_addr);
-    assert_eq!(user.role, role);
-}
-
-#[test]
-fn test_register_duplicate_user() {
-    let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
 
-    let user_addr = Address::generate(&env);
-    let role = String::from_str(&env, "user");
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[1u8; 32]);
+    let amount: i128 = 1_000_000;
+    let timeout_ledger: u32 = 1_000_000;
+    let memo = BytesN::from_array(&env, &[0u8; 32]);
 
-    // Register user first time
-    client.register(&user_addr, &role);
+    // Mock token – mint to buyer so transfer succeeds
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &amount);
 
-    // Try to register the same user again
-    let result = client.try_register(&user_addr, &role);
-    assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &timeout_ledger, &memo);
+
+    let stored = client.get_escrow(&escrow_id);
+    assert_eq!(stored.buyer, buyer);
+    assert_eq!(stored.seller, seller);
+    assert_eq!(stored.token, token);
+    assert_eq!(stored.amount, amount);
+    assert_eq!(stored.state, EscrowState::Locked);
+    assert_eq!(stored.memo, memo);
+
+    assert!(client.is_locked(&escrow_id));
 }
 
 #[test]
-fn test_get_user_not_found() {
+fn test_lock_funds_duplicate_id_fails() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
-
-    let user_addr = Address::generate(&env);
-
-    // Try to get user that doesn't exist
-    let result = client.try_get_user(&user_addr);
-    assert_eq!(result, Err(Ok(Error::UserNotFound)));
-}
-
-#[test]
-fn test_is_registered_false() {
-    let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
-
-    let user_addr = Address::generate(&env);
-
-    // Check if unregistered user is registered
-    assert!(!client.is_registered(&user_addr));
-}
-
-#[test]
-fn test_multiple_users_with_different_roles() {
-    let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
 
-    // Register multiple users with different roles
-    let admin_addr = Address::generate(&env);
-    let admin_role = String::from_str(&env, "admin");
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[2u8; 32]);
+    let amount: i128 = 500_000;
 
-    let moderator_addr = Address::generate(&env);
-    let moderator_role = String::from_str(&env, "moderator");
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &(amount * 2));
 
-    let user_addr = Address::generate(&env);
-    let user_role = String::from_str(&env, "user");
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
-    // Register all users
-    client.register(&admin_addr, &admin_role);
-    client.register(&moderator_addr, &moderator_role);
-    client.register(&user_addr, &user_role);
+    let result = client.try_lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
 
-    // Verify all are registered
-    assert!(client.is_registered(&admin_addr));
-    assert!(client.is_registered(&moderator_addr));
-    assert!(client.is_registered(&user_addr));
-
-    // Verify correct roles
-    let admin = client.get_user(&admin_addr);
-    assert_eq!(admin.role, admin_role);
-
-    let moderator = client.get_user(&moderator_addr);
-    assert_eq!(moderator.role, moderator_role);
-
-    let user = client.get_user(&user_addr);
-    assert_eq!(user.role, user_role);
+    assert_eq!(result, Err(Ok(EscrowError::AlreadyLocked)));
 }
 
 #[test]
-fn test_register_requires_auth() {
+fn test_lock_funds_zero_amount_fails() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-    let user_addr = Address::generate(&env);
-    let role = String::from_str(&env, "user");
-
-    // Mock authentication
     env.mock_all_auths();
 
-    client.register(&user_addr, &role);
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[3u8; 32]);
 
-    // Verify auth was required by checking that auth was recorded
-    let auths = env.auths();
-    assert!(!auths.is_empty());
-    assert_eq!(auths.len(), 1);
-    assert_eq!(auths[0].0, user_addr);
+    let result = client.try_lock_funds(&escrow_id, &buyer, &seller, &token, &0, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+
+    assert_eq!(result, Err(Ok(EscrowError::InvalidAmount)));
 }
 
 #[test]
-fn test_register_with_empty_role() {
+fn test_release_funds_by_seller_success() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
 
-    let user_addr = Address::generate(&env);
-    let empty_role = String::from_str(&env, "");
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[4u8; 32]);
+    let amount: i128 = 750_000;
 
-    // Register user with empty role (should succeed as validation is up to the caller)
-    client.register(&user_addr, &empty_role);
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &amount);
 
-    // Verify user is registered with empty role
-    let user = client.get_user(&user_addr);
-    assert_eq!(user.role, empty_role);
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+
+    client.release_funds(&escrow_id, &seller);
+
+    let stored = client.get_escrow(&escrow_id);
+    assert_eq!(stored.state, EscrowState::Released);
+    assert!(!client.is_locked(&escrow_id));
 }
 
 #[test]
-fn test_register_with_long_role_name() {
+fn test_release_funds_unauthorized_fails() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, UserIdentityContract);
-    let client = UserIdentityContractClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
 
-    let user_addr = Address::generate(&env);
-    let long_role = String::from_str(&env, "super_administrator_with_full_permissions");
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let random = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[5u8; 32]);
+    let amount: i128 = 300_000;
 
-    // Register user with long role name
-    client.register(&user_addr, &long_role);
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &amount);
 
-    // Verify user data
-    let user = client.get_user(&user_addr);
-    assert_eq!(user.role, long_role);
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+
+    let result = client.try_release_funds(&escrow_id, &random);
+    assert_eq!(result, Err(Ok(EscrowError::NotAuthorized)));
+}
+
+#[test]
+fn test_refund_funds_by_buyer_after_timeout_success() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[6u8; 32]);
+    let amount: i128 = 1_200_000;
+
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &amount);
+
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+
+    let creation_time = env.ledger().timestamp();
+    env.ledger().set_timestamp(creation_time + 8 * 24 * 60 * 60);
+
+    client.refund_funds(&escrow_id, &buyer);
+
+    let stored = client.get_escrow(&escrow_id);
+    assert_eq!(stored.state, EscrowState::Refunded);
+    assert!(!client.is_locked(&escrow_id));
+}
+
+#[test]
+fn test_refund_before_timeout_only_by_buyer_or_arbitrator() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+
+    let buyer = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let random = Address::generate(&env);
+    let token = Address::generate(&env);
+    let escrow_id = BytesN::from_array(&env, &[7u8; 32]);
+    let amount: i128 = 900_000;
+
+    let sac = token::StellarAssetClient::new(&env, &token);
+    sac.mint(&buyer, &amount);
+
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &amount, &1_000_000, &BytesN::from_array(&env, &[0u8; 32]));
+
+    let result = client.try_refund_funds(&escrow_id, &random);
+    assert_eq!(result, Err(Ok(EscrowError::NotAuthorized)));
+
+    client.refund_funds(&escrow_id, &buyer);
+
+    let stored = client.get_escrow(&escrow_id);
+    assert_eq!(stored.state, EscrowState::Refunded);
 }
