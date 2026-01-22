@@ -12,7 +12,7 @@ pub enum EscrowState {
     Locked = 1,
     Released = 2,
     Refunded = 3,
-    Disputed = 4,   // optional – can be used later
+    Disputed = 4,   
 }
 
 #[contracttype]
@@ -20,11 +20,11 @@ pub enum EscrowState {
 pub struct Escrow {
     pub buyer: Address,
     pub seller: Address,
-    pub arbitrator: Option<Address>,   // optional trusted third party
+    pub arbitrator: Option<Address>,  
     pub token: Address,
     pub amount: i128,
     pub state: EscrowState,
-    pub memo: BytesN<32>,              // optional short identifier / order id
+    pub memo: BytesN<32>,             
     pub created_at: u64,
 }
 
@@ -54,7 +54,7 @@ impl EscrowContract {
         seller: Address,
         token: Address,
         amount: i128,
-        _timeout_ledger: u32,           // prefixed with _ since not used yet
+        _timeout_ledger: u32,           
         memo: BytesN<32>,
     ) {
         buyer.require_auth();
