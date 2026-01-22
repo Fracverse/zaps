@@ -192,12 +192,14 @@ impl EscrowContract {
     }
 
     pub fn is_locked(env: Env, escrow_id: BytesN<32>) -> bool {
-        if !env.storage().persistent().has(&escrow_key(&escrow_id)) {
-            return false;
-        }
-        let escrow: Escrow = env.storage().persistent().get(&escrow_key(&escrow_id));
-        escrow.state == EscrowState::Locked
+    let key = escrow_key(&env, &escrow_id);
+
+    match env.storage().persistent().get::<_, Escrow>(&key) {
+        Some(escrow) => escrow.state == EscrowState::Locked,
+        None => false,
     }
+}
+
 }
 
 // Helpers
