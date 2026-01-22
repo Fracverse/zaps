@@ -46,8 +46,8 @@ pub enum EscrowError {
 #[contract]
 pub struct EscrowContract;
 
-// #[contractimpl]
-// impl EscrowContract {
+#[contractimpl]
+impl EscrowContract {
 
     // Buyer locks funds into escrow
     // Anyone can call, but must be the buyer and must authorize
@@ -198,7 +198,7 @@ pub struct EscrowContract;
     //     let escrow: Escrow = env.storage().persistent().get(&escrow_key(&escrow_id));
     //     escrow.state == EscrowState::Locked
     // }
-// }
+}
 
 // Helpers
 // fn escrow_key(id: &BytesN<32>) -> Symbol {
