@@ -1,11 +1,11 @@
 #![no_std]
 
 use core::option::Option;
+use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, panic_with_error,
     symbol_short, Address, Bytes, Env, Symbol,
 };
-use soroban_sdk::token::Client as TokenClient;
 
 const REGISTRY_KEY: Symbol = symbol_short!("registry");
 const REENTRANCY_KEY: Symbol = symbol_short!("locked");
