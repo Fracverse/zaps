@@ -1,9 +1,15 @@
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{api_error::ApiError, service::{ServiceContainer, payment_service::CreatePaymentRequest}};
+use crate::{
+    api_error::ApiError,
+    service::{payment_service::CreatePaymentRequest, ServiceContainer},
+};
 
 #[derive(Debug, Serialize)]
 pub struct PaymentResponse {
@@ -67,10 +73,13 @@ pub async fn create_payment(
     // For now, using a placeholder address
     let from_address = "GEXAMPLE_ADDRESS".to_string();
 
-    let payment = services.payment.create_payment(from_address, request).await?;
+    let payment = services
+        .payment
+        .create_payment(from_address, request)
+        .await?;
 
     Ok(Json(PaymentResponse {
-        id: payment.id,
+        id: Uuid::parse_str(&payment.id).unwrap_or_default(),
         tx_hash: payment.tx_hash,
         from_address: payment.from_address,
         merchant_id: payment.merchant_id,
@@ -87,10 +96,13 @@ pub async fn get_payment(
     State(services): State<Arc<ServiceContainer>>,
     Path(payment_id): Path<String>,
 ) -> Result<Json<PaymentResponse>, ApiError> {
-    let payment = services.payment.get_payment(payment_id).await?;
+    let payment_uuid = Uuid::parse_str(&payment_id)
+        .map_err(|_| ApiError::Validation("Invalid Payment ID".to_string()))?;
+
+    let payment = services.payment.get_payment(payment_uuid).await?;
 
     Ok(Json(PaymentResponse {
-        id: payment.id,
+        id: Uuid::parse_str(&payment.id).unwrap_or_default(),
         tx_hash: payment.tx_hash,
         from_address: payment.from_address,
         merchant_id: payment.merchant_id,
@@ -107,10 +119,13 @@ pub async fn get_payment_status(
     State(services): State<Arc<ServiceContainer>>,
     Path(payment_id): Path<String>,
 ) -> Result<Json<PaymentStatusResponse>, ApiError> {
-    let payment = services.payment.get_payment(payment_id).await?;
+    let payment_uuid = Uuid::parse_str(&payment_id)
+        .map_err(|_| ApiError::Validation("Invalid Payment ID".to_string()))?;
+
+    let payment = services.payment.get_payment(payment_uuid).await?;
 
     Ok(Json(PaymentStatusResponse {
-        id: payment.id,
+        id: Uuid::parse_str(&payment.id).unwrap_or_default(),
         status: payment.status.to_string(),
         updated_at: payment.updated_at,
     }))
@@ -120,7 +135,10 @@ pub async fn generate_qr(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<QrPaymentRequest>,
 ) -> Result<Json<QrPaymentResponse>, ApiError> {
-    let qr_data = services.payment.generate_qr_payment(request.clone()).await?;
+    let qr_data = services
+        .payment
+        .generate_qr_payment(request.clone())
+        .await?;
 
     Ok(Json(QrPaymentResponse {
         qr_data,
@@ -134,7 +152,10 @@ pub async fn validate_nfc(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<NfcPaymentRequest>,
 ) -> Result<Json<NfcValidationResponse>, ApiError> {
-    let valid = services.payment.validate_nfc_payment(request.clone()).await?;
+    let valid = services
+        .payment
+        .validate_nfc_payment(request.clone())
+        .await?;
 
     Ok(Json(NfcValidationResponse {
         valid,

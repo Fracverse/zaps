@@ -9,9 +9,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{
-        admin, auth, health, identity, payments, transfers, withdrawals,
-    },
+    http::{admin, auth, health, identity, payments, transfers, withdrawals},
     middleware::{auth as auth_middleware, metrics, request_id},
     service::ServiceContainer,
 };
@@ -59,7 +57,10 @@ pub async fn create_app(
     let withdrawal_routes = Router::new()
         .route("/withdrawals", post(withdrawals::create_withdrawal))
         .route("/withdrawals/:id", get(withdrawals::get_withdrawal))
-        .route("/withdrawals/:id/status", get(withdrawals::get_withdrawal_status));
+        .route(
+            "/withdrawals/:id/status",
+            get(withdrawals::get_withdrawal_status),
+        );
 
     // Admin routes (protected)
     let admin_routes = Router::new()
