@@ -184,20 +184,20 @@ impl EscrowContract {
     // View functions
     // ────────────────────────────────────────────────
 
-    // pub fn get_escrow(env: Env, escrow_id: BytesN<32>) -> Escrow {
-    //     let key = escrow_key(&env, &escrow_id);
-    //     env.storage().persistent()
-    //         .get(&key)
-    //         .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked))
-    // }
+    pub fn get_escrow(env: Env, escrow_id: BytesN<32>) -> Escrow {
+        let key = escrow_key(&env, &escrow_id);
+        env.storage().persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked))
+    }
 
-    // pub fn is_locked(env: Env, escrow_id: BytesN<32>) -> bool {
-    //     if !env.storage().persistent().has(&escrow_key(&escrow_id)) {
-    //         return false;
-    //     }
-    //     let escrow: Escrow = env.storage().persistent().get(&escrow_key(&escrow_id));
-    //     escrow.state == EscrowState::Locked
-    // }
+    pub fn is_locked(env: Env, escrow_id: BytesN<32>) -> bool {
+        if !env.storage().persistent().has(&escrow_key(&escrow_id)) {
+            return false;
+        }
+        let escrow: Escrow = env.storage().persistent().get(&escrow_key(&escrow_id));
+        escrow.state == EscrowState::Locked
+    }
 }
 
 // Helpers
