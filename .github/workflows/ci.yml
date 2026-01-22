@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: ['main', 'master']
+  pull_request:
+    branches: ['main', 'master']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Frontend (React Native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Format Check
+        run: npm run format:check
+      - name: Test
+        run: npm test
+      - name: Build Check
+        run: npm run build
+
+  backend:
+    name: Backend (Rust)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: zaps
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ZAPS_DATABASE_URL: postgres://postgres:password@localhost:5432/zaps
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Check
+        working-directory: ./backend
+        run: cargo check
+      - name: Test
+        working-directory: ./backend
+        run: cargo test
+      - name: Format
+        working-directory: ./backend
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: ./backend
+        run: cargo clippy -- -D warnings
+
+  contracts:
+    name: Contracts (Soroban)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+      - name: Build
+        working-directory: ./contracts
+        run: cargo build --target wasm32-unknown-unknown --release --workspace
+      - name: Test
+        working-directory: ./contracts
+        run: cargo test --workspace
+      - name: Format
+        working-directory: ./contracts
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: ./contracts
+        run: cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings

@@ -7,10 +7,12 @@ use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+use std::str::FromStr;
 
 #[derive(Clone)]
 pub struct PaymentService {
     db_pool: Arc<Pool>,
+#[allow(dead_code)]
     config: Config,
 }
 
@@ -54,7 +56,7 @@ impl PaymentService {
         let client = self.db_pool.get().await?;
 
         // Validate merchant exists and is active
-        let merchant = self.get_merchant(&request.merchant_id).await?;
+        let _merchant = self.get_merchant(&request.merchant_id).await?;
 
         // Generate transaction hash (in production, this would be from Stellar)
         let tx_hash = format!("tx_{}", Uuid::new_v4().simple());
@@ -123,7 +125,7 @@ impl PaymentService {
             send_asset: row.get(4),
             send_amount: row.get(5),
             receive_amount: row.get(6),
-            status: PaymentStatus::from_str(row.get(7)),
+            status: PaymentStatus::from_str(&row.get::<_, String>(7)).unwrap_or(PaymentStatus::Pending),
             memo: row.get(8),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(9),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(10),

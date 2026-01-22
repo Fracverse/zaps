@@ -10,6 +10,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct IdentityService {
     db_pool: Arc<Pool>,
+#[allow(dead_code)]
     config: Config,
 }
 

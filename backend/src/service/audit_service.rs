@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AuditService {
+#[allow(dead_code)]
     db_pool: Arc<Pool>,
+    #[allow(dead_code)]
     config: Config,
 }
 

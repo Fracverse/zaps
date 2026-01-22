@@ -1,43 +1,41 @@
 # ZAPS Backend Default Configuration
 
-[database]
-url = "postgres://localhost/zaps"
-
-[server]
+database_url = "postgres://localhost/zaps"
 port = 3000
+jwt_secret = "change-this-in-production"
+jwt_expiration_hours = 24
+environment = "Development"
 
-[jwt]
-secret = "change-this-in-production"
-expiration_hours = 24
-
-[stellar]
-network = "testnet"
+[stellar_network]
+network_id = "testnet"
 passphrase = "Test SDF Network ; September 2015"
 horizon_url = "https://horizon-testnet.stellar.org"
 rpc_url = "https://soroban-testnet.stellar.org"
 
-[anchor]
+[anchor_config]
 sep24_url = "https://anchor.example.com/sep24"
 sep31_url = "https://anchor.example.com/sep31"
 webhook_secret = "webhook-secret"
 kyc_required = true
 
-[bridge]
+[bridge_config]
 ethereum_rpc_url = "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
 polygon_rpc_url = "https://polygon-rpc.com"
 bsc_rpc_url = "https://bsc-dataseed.binance.org"
 supported_assets = ["USDC", "USDT"]
-min_bridge_amount = 1000000  # 1 USD in cents
-max_bridge_amount = 100000000  # 1000 USD in cents
+min_bridge_amount = 1000000
+max_bridge_amount = 100000000
 
-[compliance]
+[compliance_config]
 sanctions_api_url = "https://api.sanctions.example.com"
 sanctions_api_key = "api-key"
-daily_transaction_limit = 10000000  # 10,000 USD
-monthly_transaction_limit = 100000000  # 100,000 USD
-max_transaction_amount = 5000000  # 5,000 USD
-high_risk_amount = 10000000  # 10,000 USD
-medium_risk_amount = 1000000  # 1,000 USD
 
-[environment]
-type = "development"
+[compliance_config.velocity_limits]
+daily_transaction_limit = 10000000
+monthly_transaction_limit = 100000000
+max_transaction_amount = 5000000
+
+[compliance_config.risk_thresholds]
+high_risk_amount = 10000000
+medium_risk_amount = 1000000
+suspicious_patterns = []

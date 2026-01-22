@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use tracing::{info, Level};
+use tracing::info;
 use zaps_backend::{app::create_app, config::Config, db, telemetry};
 
 #[tokio::main]

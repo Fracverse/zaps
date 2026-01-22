@@ -1,9 +1,13 @@
+#![allow(clippy::inherent_to_string)]
+#![allow(clippy::should_implement_trait)]
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    pub id: String,
+    pub id: Uuid,
     pub user_id: String,
     pub stellar_address: String,
     pub created_at: DateTime<Utc>,
@@ -18,7 +22,7 @@ pub struct Wallet {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Merchant {
-    pub id: String,
+    pub id: Uuid,
     pub merchant_id: String,
     pub vault_address: String,
     pub settlement_asset: String,
@@ -26,6 +30,9 @@ pub struct Merchant {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+use std::fmt;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PaymentStatus {
@@ -36,31 +43,39 @@ pub enum PaymentStatus {
     Refunded,
 }
 
-impl PaymentStatus {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "completed" => PaymentStatus::Completed,
-            "processing" => PaymentStatus::Processing,
-            "failed" => PaymentStatus::Failed,
-            "refunded" => PaymentStatus::Refunded,
-            _ => PaymentStatus::Pending,
+impl fmt::Display for PaymentStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PaymentStatus::Pending => write!(f, "pending"),
+            PaymentStatus::Processing => write!(f, "processing"),
+            PaymentStatus::Completed => write!(f, "completed"),
+            PaymentStatus::Failed => write!(f, "failed"),
+            PaymentStatus::Refunded => write!(f, "refunded"),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
-            PaymentStatus::Pending => "pending",
-            PaymentStatus::Processing => "processing",
-            PaymentStatus::Completed => "completed",
-            PaymentStatus::Failed => "failed",
-            PaymentStatus::Refunded => "refunded",
-        }.to_string()
+impl FromStr for PaymentStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "completed" => Ok(PaymentStatus::Completed),
+            "processing" => Ok(PaymentStatus::Processing),
+            "failed" => Ok(PaymentStatus::Failed),
+            "refunded" => Ok(PaymentStatus::Refunded),
+            _ => Ok(PaymentStatus::Pending),
+        }
     }
+}
+
+impl PaymentStatus {
+    // Uses Display trait for to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payment {
-    pub id: String,
+    pub id: Uuid,
     pub tx_hash: Option<String>,
     pub from_address: String,
     pub merchant_id: String,
@@ -103,7 +118,7 @@ impl TransferStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transfer {
-    pub id: String,
+    pub id: Uuid,
     pub tx_hash: Option<String>,
     pub from_user_id: String,
     pub to_user_id: String,
@@ -145,7 +160,7 @@ impl WithdrawalStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Withdrawal {
-    pub id: String,
+    pub id: Uuid,
     pub tx_hash: Option<String>,
     pub user_id: String,
     pub destination_address: String,
@@ -208,7 +223,7 @@ impl BridgeTransactionStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeTransaction {
-    pub id: String,
+    pub id: Uuid,
     pub from_chain: String,
     pub to_chain: String,
     pub asset: String,

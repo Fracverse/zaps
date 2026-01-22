@@ -85,7 +85,7 @@ pub async fn create_payment(
 
 pub async fn get_payment(
     State(services): State<Arc<ServiceContainer>>,
-    Path(payment_id): Path<String>,
+    Path(payment_id): Path<Uuid>,
 ) -> Result<Json<PaymentResponse>, ApiError> {
     let payment = services.payment.get_payment(payment_id).await?;
 
@@ -105,7 +105,7 @@ pub async fn get_payment(
 
 pub async fn get_payment_status(
     State(services): State<Arc<ServiceContainer>>,
-    Path(payment_id): Path<String>,
+    Path(payment_id): Path<Uuid>,
 ) -> Result<Json<PaymentStatusResponse>, ApiError> {
     let payment = services.payment.get_payment(payment_id).await?;
 

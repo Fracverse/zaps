@@ -1,0 +1,10 @@
+node_modules
+.expo
+dist
+coverage
+android
+ios
+backend/target
+contracts/target
+package-lock.json
+Cargo.lock

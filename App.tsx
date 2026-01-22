@@ -1,11 +1,11 @@
-import { StatusBar } from "expo-status-bar";
+import { StatusBar } from 'expo-status-bar';
 import {
   StyleSheet,
   Text,
   View,
   TouchableOpacity,
   SafeAreaView,
-} from "react-native";
+} from 'react-native';
 
 export default function App() {
   return (
@@ -16,7 +16,7 @@ export default function App() {
       <View style={styles.header}>
         <Text style={styles.logo}>⚡ ZAPS</Text>
         <Text style={styles.tagline}>
-          Pay with crypto.{"\n"}Tap or scan. No banks.
+          Pay with crypto.{'\n'}Tap or scan. No banks.
         </Text>
       </View>
 
@@ -26,18 +26,26 @@ export default function App() {
 
         <Text style={styles.cardText}>1️⃣ Transfer crypto into ZAPS</Text>
         <Text style={styles.cardText}>2️⃣ Tap or scan to pay</Text>
-        <Text style={styles.cardText}>
-          3️⃣ Merchant receives USD instantly
-        </Text>
+        <Text style={styles.cardText}>3️⃣ Merchant receives USD instantly</Text>
       </View>
 
       {/* Actions */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.primaryButton}>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          accessibilityRole="button"
+          accessibilityLabel="Scan to Pay"
+          accessibilityHint="Opens camera to scan a QR code for payment"
+        >
           <Text style={styles.primaryButtonText}>📷 Scan to Pay</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.secondaryButton}>
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          accessibilityRole="button"
+          accessibilityLabel="Tap to Pay"
+          accessibilityHint="Initiates NFC payment"
+        >
           <Text style={styles.secondaryButtonText}>📱 Tap to Pay</Text>
         </TouchableOpacity>
       </View>
@@ -55,7 +63,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0B0F1A",
+    backgroundColor: '#0B0F1A',
     paddingHorizontal: 20,
   },
 
@@ -66,19 +74,19 @@ const styles = StyleSheet.create({
 
   logo: {
     fontSize: 32,
-    fontWeight: "800",
-    color: "#FFFFFF",
+    fontWeight: '800',
+    color: '#FFFFFF',
     marginBottom: 10,
   },
 
   tagline: {
     fontSize: 20,
-    color: "#AAB1C3",
+    color: '#AAB1C3',
     lineHeight: 28,
   },
 
   card: {
-    backgroundColor: "#12182A",
+    backgroundColor: '#12182A',
     borderRadius: 20,
     padding: 20,
     marginBottom: 30,
@@ -86,14 +94,14 @@ const styles = StyleSheet.create({
 
   cardTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#FFFFFF",
+    fontWeight: '700',
+    color: '#FFFFFF',
     marginBottom: 15,
   },
 
   cardText: {
     fontSize: 16,
-    color: "#D0D6E1",
+    color: '#D0D6E1',
     marginBottom: 8,
   },
 
@@ -102,41 +110,41 @@ const styles = StyleSheet.create({
   },
 
   primaryButton: {
-    backgroundColor: "#4F46E5",
+    backgroundColor: '#4F46E5',
     paddingVertical: 16,
     borderRadius: 14,
-    alignItems: "center",
+    alignItems: 'center',
   },
 
   primaryButtonText: {
-    color: "#FFFFFF",
+    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: '700',
   },
 
   secondaryButton: {
-    backgroundColor: "#1E243B",
+    backgroundColor: '#1E243B',
     paddingVertical: 16,
     borderRadius: 14,
-    alignItems: "center",
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: "#2F365F",
+    borderColor: '#2F365F',
   },
 
   secondaryButtonText: {
-    color: "#FFFFFF",
+    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: '600',
   },
 
   footer: {
-    marginTop: "auto",
+    marginTop: 'auto',
     paddingVertical: 20,
-    alignItems: "center",
+    alignItems: 'center',
   },
 
   footerText: {
-    color: "#6B7280",
+    color: '#6B7280',
     fontSize: 12,
   },
 });

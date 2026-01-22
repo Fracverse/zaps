@@ -53,7 +53,7 @@ impl BridgeService {
         // In production, this would interact with actual bridge contracts
         // For now, we'll simulate the bridge transaction
         let bridge_tx = BridgeTransaction {
-            id: uuid::Uuid::new_v4().to_string(),
+            id: uuid::Uuid::new_v4(),
             from_chain: request.from_chain.clone(),
             to_chain: request.to_chain.clone(),
             asset: request.asset.clone(),
@@ -84,8 +84,8 @@ impl BridgeService {
                     &bridge_tx.destination_address,
                     &bridge_tx.user_id,
                     &bridge_tx.status.to_string(),
-                    &bridge_tx.created_at.naive_utc(),
-                    &bridge_tx.updated_at.naive_utc(),
+                    &bridge_tx.created_at,
+                    &bridge_tx.updated_at,
                 ],
             )
             .await?;
@@ -174,7 +174,7 @@ impl BridgeService {
         }
 
         // Validate chains
-        let supported_chains = vec!["ethereum", "polygon", "bsc", "stellar"];
+        let supported_chains = ["ethereum", "polygon", "bsc", "stellar"];
         if !supported_chains.contains(&request.from_chain.as_str()) {
             return Err(ApiError::Validation(format!("Unsupported source chain: {}", request.from_chain)));
         }
