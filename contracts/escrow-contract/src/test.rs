@@ -17,7 +17,7 @@ fn test_lock_funds_success() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &1_000_000);
 
@@ -50,7 +50,7 @@ fn test_lock_funds_duplicate_id_fails() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &1_000_000);
 
@@ -83,7 +83,7 @@ fn test_lock_funds_zero_amount_fails() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
 
     let escrow_id = BytesN::from_array(&env, &[3u8; 32]);
 
@@ -111,7 +111,7 @@ fn test_release_funds_by_seller_success() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &750_000);
 
@@ -139,7 +139,7 @@ fn test_release_funds_unauthorized_fails() {
     let seller = Address::generate(&env);
     let random_caller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &300_000);
 
@@ -163,7 +163,7 @@ fn test_refund_funds_by_buyer_after_timeout_success() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &1_200_000);
 
@@ -194,7 +194,7 @@ fn test_refund_before_timeout_only_by_buyer_or_arbitrator() {
     let seller = Address::generate(&env);
     let random_caller = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let token = env.register_stellar_asset_contract_v2(token_addr.clone());
+    let token = env.register_stellar_asset_contract(token_addr.clone());
     let sac = token::StellarAssetClient::new(&env, &token);
     sac.mint(&buyer, &900_000);
 
