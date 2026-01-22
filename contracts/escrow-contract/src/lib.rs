@@ -1,113 +1,208 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, panic_with_error,
+    symbol_short, Address, Env, Map, Symbol, BytesN,
+    token::{Client as TokenClient},
+};
 
-/// Error codes for the User Identity Contract
-#[contracterror]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum Error {
-    /// User is already registered
-    AlreadyRegistered = 1,
-    /// User not found
-    UserNotFound = 2,
-}
+const ESCROW_PREFIX: Symbol = symbol_short!("escrow");
 
-/// User data structure containing address and role
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct User {
-    pub address: Address,
-    pub role: String,
-}
-
-/// Storage keys for the contract
 #[contracttype]
 #[derive(Clone)]
-pub enum DataKey {
-    User(Address),
+pub enum EscrowState {
+    Locked = 1,
+    Released = 2,
+    Refunded = 3,
+    Disputed = 4,   // optional – can be used later
 }
 
-/// User Identity Contract
-/// Maps wallet addresses to roles for identity management
+#[contracttype]
+#[derive(Clone)]
+pub struct Escrow {
+    pub buyer: Address,
+    pub seller: Address,
+    pub arbitrator: Option<Address>,   // optional trusted third party
+    pub token: Address,
+    pub amount: i128,
+    pub state: EscrowState,
+    pub memo: BytesN<32>,              // optional short identifier / order id
+    pub created_at: u64,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum EscrowError {
+    NotAuthorized = 1,
+    AlreadyLocked = 2,
+    NotLocked = 3,
+    AlreadyFinalized = 4,
+    InvalidAmount = 5,
+    InvalidState = 6,
+    InvalidArbitrator = 7,
+    TimeoutNotReached = 8,
+}
+
 #[contract]
-pub struct UserIdentityContract;
+pub struct EscrowContract;
 
 #[contractimpl]
-impl UserIdentityContract {
-    /// Register a new user with an address and role
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `address` - The wallet address to register
-    /// * `role` - The role to assign to the user
-    ///
-    /// # Errors
-    /// * `Error::AlreadyRegistered` - If the address is already registered
-    ///
-    /// # Authentication
-    /// Requires the address to authenticate (sign) the transaction
-    pub fn register(env: Env, address: Address, role: String) -> Result<(), Error> {
-        // Require authentication from the address being registered
-        address.require_auth();
+impl EscrowContract {
 
-        let key = DataKey::User(address.clone());
+    /// Buyer locks funds into escrow
+    /// Anyone can call, but must be the buyer and must authorize
+    pub fn lock_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        buyer: Address,
+        seller: Address,
+        token: Address,
+        amount: i128,
+        timeout_ledger: u32,           // optional: after how many ledgers buyer can refund
+        memo: BytesN<32>,
+    ) {
+        buyer.require_auth();
 
-        // Check if user is already registered
-        if env.storage().persistent().has(&key) {
-            return Err(Error::AlreadyRegistered);
+        if amount <= 0 {
+            panic_with_error!(env, EscrowError::InvalidAmount);
         }
 
-        // Create and store the user
-        let user = User {
-            address: address.clone(),
-            role,
+        let key = escrow_key(&escrow_id);
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(env, EscrowError::AlreadyLocked);
+        }
+
+        // Transfer tokens from buyer → contract
+        let token_client = TokenClient::new(&env, &token);
+        token_client.transfer(&buyer, &env.current_contract_address(), &amount);
+
+        let escrow = Escrow {
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            arbitrator: Option::None,           // can be set later or passed in extension
+            token,
+            amount,
+            state: EscrowState::Locked,
+            memo,
+            created_at: env.ledger().timestamp(),
         };
 
-        // Store in persistent storage with TTL
-        env.storage().persistent().set(&key, &user);
+        env.storage().persistent().set(&key, &escrow);
 
-        // Extend TTL for the stored data (30 days worth of ledgers, ~5 second ledgers)
-        env.storage().persistent().extend_ttl(&key, 518400, 518400);
-
-        // Emit event for user registration
-        env.events().publish(("register", "user"), address);
-
-        Ok(())
+        // Optional: emit event
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("locked")),
+            (escrow_id, buyer, seller, amount)
+        );
     }
 
-    /// Get user information for a given address
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `address` - The wallet address to query
-    ///
-    /// # Returns
-    /// Returns the User struct if found
-    ///
-    /// # Errors
-    /// * `Error::UserNotFound` - If the address is not registered
-    pub fn get_user(env: Env, address: Address) -> Result<User, Error> {
-        let key = DataKey::User(address);
+    /// Seller (or arbitrator) releases funds to seller
+    pub fn release_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+    ) {
+        caller.require_auth();
 
-        env.storage()
-            .persistent()
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        if escrow.state != EscrowState::Locked {
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
+
+        // Only seller or arbitrator can release
+        if caller != escrow.seller {
+            if let Some(arb) = &escrow.arbitrator {
+                if caller != *arb {
+                    panic_with_error!(env, EscrowError::NotAuthorized);
+                }
+            } else {
+                panic_with_error!(env, EscrowError::NotAuthorized);
+            }
+        }
+
+        let token_client = TokenClient::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.seller,
+            &escrow.amount,
+        );
+
+        escrow.state = EscrowState::Released;
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("released")),
+            (escrow_id, caller, escrow.seller, escrow.amount)
+        );
+    }
+
+    /// Buyer can refund if timeout passed (or arbitrator decides)
+    pub fn refund_funds(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+    ) {
+        caller.require_auth();
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        if escrow.state != EscrowState::Locked {
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
+
+        let is_timeout = env.ledger().timestamp() >= escrow.created_at + 7 * 24 * 60 * 60; // example: 7 days
+        let is_authorized = 
+            caller == escrow.buyer ||
+            escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
+
+        if !is_authorized && !is_timeout {
+            panic_with_error!(env, EscrowError::NotAuthorized);
+        }
+
+        let token_client = TokenClient::new(&env, &escrow.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &escrow.buyer,
+            &escrow.amount,
+        );
+
+        escrow.state = EscrowState::Refunded;
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("refunded")),
+            (escrow_id, caller, escrow.buyer, escrow.amount)
+        );
+    }
+
+    // ────────────────────────────────────────────────
+    // View functions
+    // ────────────────────────────────────────────────
+
+    pub fn get_escrow(env: Env, escrow_id: BytesN<32>) -> Escrow {
+        let key = escrow_key(&escrow_id);
+        env.storage().persistent()
             .get(&key)
-            .ok_or(Error::UserNotFound)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked))
     }
 
-    /// Check if an address is registered
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `address` - The wallet address to check
-    ///
-    /// # Returns
-    /// Returns true if the address is registered, false otherwise
-    pub fn is_registered(env: Env, address: Address) -> bool {
-        let key = DataKey::User(address);
-        env.storage().persistent().has(&key)
+    pub fn is_locked(env: Env, escrow_id: BytesN<32>) -> bool {
+        if !env.storage().persistent().has(&escrow_key(&escrow_id)) {
+            return false;
+        }
+        let escrow: Escrow = env.storage().persistent().get(&escrow_key(&escrow_id));
+        escrow.state == EscrowState::Locked
     }
 }
 
-mod test;
+// Helpers
+fn escrow_key(id: &BytesN<32>) -> Symbol {
+    Symbol::new(&Env::default(), &format!("{}{}", ESCROW_PREFIX, id.to_array().iter().map(|b| format!("{:02x}", b)).collect::<String>()))
+    // Alternative (simpler but longer keys):
+    // Symbol::new(&env, "escrow_").concat(&id.to_bytes())
+}
