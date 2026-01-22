@@ -27,7 +27,7 @@ pub struct Escrow {
     pub amount: i128,
     pub state: EscrowState,
     pub memo: BytesN<32>,              // optional short identifier / order id
-    pub created_at: u64,
+    pub created_at: 
 }
 
 #[contracterror]
