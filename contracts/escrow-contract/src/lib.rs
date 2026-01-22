@@ -17,18 +17,18 @@ pub enum EscrowState {
     Disputed = 4,   // optional – can be used later
 }
 
-// #[contracttype]
-// #[derive(Clone)]
-// pub struct Escrow {
-//     pub buyer: Address,
-//     pub seller: Address,
-//     pub arbitrator: Option<Address>,   // optional trusted third party
-//     pub token: Address,
-//     pub amount: i128,
-//     pub state: EscrowState,
-//     pub memo: BytesN<32>,              // optional short identifier / order id
-//     pub created_at: u64,
-// }
+#[contracttype]
+#[derive(Clone)]
+pub struct Escrow {
+    pub buyer: Address,
+    pub seller: Address,
+    pub arbitrator: Option<Address>,   // optional trusted third party
+    pub token: Address,
+    pub amount: i128,
+    pub state: EscrowState,
+    pub memo: BytesN<32>,              // optional short identifier / order id
+    pub created_at: u64,
+}
 
 // #[contracterror]
 // #[derive(Copy, Clone, PartialEq, Eq)]
