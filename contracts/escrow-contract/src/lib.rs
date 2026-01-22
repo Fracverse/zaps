@@ -30,18 +30,18 @@ pub struct Escrow {
     pub created_at: u64,
 }
 
-// #[contracterror]
-// #[derive(Copy, Clone, PartialEq, Eq)]
-// pub enum EscrowError {
-//     NotAuthorized = 1,
-//     AlreadyLocked = 2,
-//     NotLocked = 3,
-//     AlreadyFinalized = 4,
-//     InvalidAmount = 5,
-//     InvalidState = 6,
-//     InvalidArbitrator = 7,
-//     TimeoutNotReached = 8,
-// }
+#[contracterror]
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum EscrowError {
+    NotAuthorized = 1,
+    AlreadyLocked = 2,
+    NotLocked = 3,
+    AlreadyFinalized = 4,
+    InvalidAmount = 5,
+    InvalidState = 6,
+    InvalidArbitrator = 7,
+    TimeoutNotReached = 8,
+}
 
 #[contract]
 pub struct EscrowContract;
