@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["example-contract", "payment-router", "user-identity-contract"]
+members = ["example-contract", "payment-router", "user-identity-contract", "merchant-vault"]
 
 [workspace.dependencies]
 soroban-sdk = "21.0.0"
