@@ -224,3 +224,43 @@ pub struct BridgeTransaction {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NotificationType {
+    SYSTEM,
+    ACTION,
+    SECURITY,
+}
+
+impl NotificationType {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "SYSTEM" => NotificationType::SYSTEM,
+            "ACTION" => NotificationType::ACTION,
+            "SECURITY" => NotificationType::SECURITY,
+            _ => NotificationType::SYSTEM,
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            NotificationType::SYSTEM => "SYSTEM",
+            NotificationType::ACTION => "ACTION",
+            NotificationType::SECURITY => "SECURITY",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: String,
+    pub user_id: String,
+    pub notification_type: NotificationType,
+    pub title: String,
+    pub message: String,
+    pub metadata: Option<serde_json::Value>,
+    pub read: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}

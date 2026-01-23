@@ -9,7 +9,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, payments, transfers, withdrawals},
+    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
     middleware::{auth as auth_middleware, metrics, request_id},
     service::ServiceContainer,
 };
@@ -62,6 +62,15 @@ pub async fn create_app(
             get(withdrawals::get_withdrawal_status),
         );
 
+    // Notification routes
+    let notification_routes = Router::new()
+        .route("/notifications", post(notifications::create_notification))
+        .route("/notifications", get(notifications::get_notifications))
+        .route(
+            "/notifications/:id/read",
+            axum::routing::patch(notifications::mark_notification_read),
+        );
+
     // Admin routes (protected)
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
@@ -76,6 +85,7 @@ pub async fn create_app(
         .nest("/payments", payment_routes)
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
+        .nest("/notifications", notification_routes)
         .nest("/admin", admin_routes)
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
