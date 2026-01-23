@@ -1,6 +1,6 @@
+use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use chrono::{Duration, Utc};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -9,7 +9,11 @@ pub struct Claims {
     pub iat: usize,
 }
 
-pub fn generate_jwt(user_id: &str, secret: &str, expiration_hours: i64) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn generate_jwt(
+    user_id: &str,
+    secret: &str,
+    expiration_hours: i64,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let now = Utc::now();
     let expire = now + Duration::hours(expiration_hours);
 
