@@ -9,7 +9,8 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, payments, transfers, withdrawals},
+    http::{admin, auth, health, identity, jobs, payments, transfers, withdrawals},
+    job_worker::JobWorker,
     middleware::{auth as auth_middleware, metrics, request_id},
     service::ServiceContainer,
 };
@@ -20,6 +21,17 @@ pub async fn create_app(
 ) -> Result<Router, Box<dyn std::error::Error>> {
     // Create service container
     let services = Arc::new(ServiceContainer::new(db_pool, config.clone()).await?);
+
+    // Create job worker
+    let job_worker = Arc::new(JobWorker::new(config.clone()).await?);
+    
+    // Spawn job workers in the background
+    let worker_clone = Arc::clone(&job_worker);
+    tokio::spawn(async move {
+        if let Err(e) = worker_clone.start_workers().await {
+            tracing::error!("Job workers failed: {}", e);
+        }
+    });
 
     // Health check routes
     let health_routes = Router::new()
@@ -70,6 +82,10 @@ pub async fn create_app(
         .route("/system/health", get(admin::get_system_health))
         .layer(middleware::from_fn(auth_middleware::admin_only));
 
+    // Job management routes (protected)
+    let job_routes = jobs::create_job_routes()
+        .layer(middleware::from_fn(auth_middleware::authenticate));
+
     // Protected routes (require authentication)
     let protected_routes = Router::new()
         .nest("/identity", identity_routes)
@@ -77,6 +93,7 @@ pub async fn create_app(
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
         .nest("/admin", admin_routes)
+        .nest("/jobs", job_routes)
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
     // Public routes
@@ -88,11 +105,12 @@ pub async fn create_app(
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
+        .with_state(services)
         .layer(middleware::from_fn(request_id::request_id))
         .layer(middleware::from_fn(metrics::track_metrics))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
-        .with_state(services);
+        .with_state(job_worker);
 
     Ok(app)
 }

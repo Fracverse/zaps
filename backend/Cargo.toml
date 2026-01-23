@@ -64,6 +64,15 @@ base64 = "0.21"
 prometheus = "0.13"
 lazy_static = "1.4"
 
+# Queue system
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+bb8 = "0.8"
+bb8-redis = "0.13"
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+
 # Testing
 [dev-dependencies]
 tokio-test = "0.4"
