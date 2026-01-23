@@ -10,7 +10,8 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
-    middleware::{auth as auth_middleware, metrics, rate_limit, request_id},
+    middleware::{auth as auth_middleware, metrics, rate_limit, request_id, role_guard},
+    role::Role,
     service::ServiceContainer,
 };
 
@@ -77,7 +78,7 @@ pub async fn create_app(
         .route("/transactions", get(admin::get_transactions))
         .route("/users/:user_id/activity", get(admin::get_user_activity))
         .route("/system/health", get(admin::get_system_health))
-        .layer(middleware::from_fn(auth_middleware::admin_only));
+        .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
     // Protected routes (require authentication)
     let protected_routes = Router::new()
