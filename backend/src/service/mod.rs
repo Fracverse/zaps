@@ -5,6 +5,7 @@ pub mod compliance_service;
 pub mod identity_service;
 pub mod indexer_service;
 pub mod payment_service;
+pub mod rate_limit_service;
 
 pub use anchor_service::AnchorService;
 pub use audit_service::AuditService;
@@ -13,6 +14,7 @@ pub use compliance_service::ComplianceService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
 pub use payment_service::PaymentService;
+pub use rate_limit_service::RateLimitService;
 
 use crate::config::Config;
 use deadpool_postgres::Pool;
@@ -27,6 +29,7 @@ pub struct ServiceContainer {
     pub compliance: ComplianceService,
     pub audit: AuditService,
     pub indexer: IndexerService,
+    pub rate_limit: RateLimitService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
@@ -42,6 +45,7 @@ impl ServiceContainer {
         let compliance = ComplianceService::new(db_pool.clone(), config.clone());
         let audit = AuditService::new(db_pool.clone(), config.clone());
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
+        let rate_limit = RateLimitService::new(config.clone());
 
         Ok(Self {
             identity,
@@ -51,6 +55,7 @@ impl ServiceContainer {
             compliance,
             audit,
             indexer,
+            rate_limit,
             config,
             db_pool,
         })

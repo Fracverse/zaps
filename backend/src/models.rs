@@ -224,3 +224,17 @@ pub struct BridgeTransaction {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RateLimitScope {
+    Ip,
+    User,
+    ApiKey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub window_ms: u64,
+    pub max_requests: u32,
+    pub scope: RateLimitScope,
+}

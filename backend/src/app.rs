@@ -10,7 +10,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{admin, auth, health, identity, payments, transfers, withdrawals},
-    middleware::{auth as auth_middleware, metrics, request_id},
+    middleware::{auth as auth_middleware, metrics, rate_limit, request_id},
     service::ServiceContainer,
 };
 
@@ -88,6 +88,7 @@ pub async fn create_app(
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
+        .layer(middleware::from_fn_with_state(services.clone(), rate_limit::rate_limit))
         .layer(middleware::from_fn(request_id::request_id))
         .layer(middleware::from_fn(metrics::track_metrics))
         .layer(TraceLayer::new_for_http())
