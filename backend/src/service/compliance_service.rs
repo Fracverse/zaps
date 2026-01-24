@@ -1,4 +1,4 @@
-use crate::{config::Config, models::AuditLog};
+use crate::{config::Config, models::AuditLogEntry};
 use deadpool_postgres::Pool;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ impl ComplianceService {
 
     pub async fn log_audit_event(
         &self,
-        _event: AuditLog,
+        _event: AuditLogEntry,
     ) -> Result<(), crate::api_error::ApiError> {
         Ok(())
     }

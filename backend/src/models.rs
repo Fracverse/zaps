@@ -170,16 +170,54 @@ pub struct Balance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuditLog {
+pub struct AuditLogEntry {
     pub id: String,
-    pub event_type: String,
-    pub ref_id: String,
-    pub user_id: Option<String>,
-    pub details: serde_json::Value,
+    pub actor_id: String,
+    pub action: String,
+    pub resource: String,
+    pub resource_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub timestamp: DateTime<Utc>,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
-    pub created_at: DateTime<Utc>,
 }
+
+// DTOs for Audit Log API
+#[derive(Debug, Deserialize)]
+pub struct AuditLogQueryParams {
+    pub actor_id: Option<String>,
+    pub action: Option<String>,
+    pub from_date: Option<DateTime<Utc>>,
+    pub to_date: Option<DateTime<Utc>>,
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_limit() -> i64 {
+    50
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuditLogResponse {
+    pub id: String,
+    pub actor_id: String,
+    pub action: String,
+    pub resource: String,
+    pub resource_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuditLogListResponse {
+    pub logs: Vec<AuditLogResponse>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BridgeTransactionStatus {

@@ -9,8 +9,8 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, payments, transfers, withdrawals},
-    middleware::{auth as auth_middleware, metrics, rate_limit, request_id},
+    http::{admin, audit, auth, health, identity, payments, transfers, withdrawals},
+    middleware::{audit_logging, auth as auth_middleware, metrics, rate_limit, request_id},
     service::ServiceContainer,
 };
 
@@ -70,6 +70,12 @@ pub async fn create_app(
         .route("/system/health", get(admin::get_system_health))
         .layer(middleware::from_fn(auth_middleware::admin_only));
 
+    // Audit log routes (admin-only)
+    let audit_routes = Router::new()
+        .route("/audit-logs", get(audit::list_audit_logs))
+        .route("/audit-logs/:id", get(audit::get_audit_log))
+        .layer(middleware::from_fn(auth_middleware::admin_only));
+
     // Protected routes (require authentication)
     let protected_routes = Router::new()
         .nest("/identity", identity_routes)
@@ -77,6 +83,11 @@ pub async fn create_app(
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
         .nest("/admin", admin_routes)
+        .merge(audit_routes) // Audit routes at root level under /audit-logs
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            audit_logging,
+        )) // Audit middleware for automatic logging
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
     // Public routes
