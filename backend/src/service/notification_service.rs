@@ -5,6 +5,7 @@ use crate::{
 };
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -34,7 +35,7 @@ impl NotificationService {
     ) -> Result<Notification, ApiError> {
         let client = self.db_pool.get().await?;
 
-        let notification_id = Uuid::new_v4().to_string();
+        let notification_id = Uuid::new_v4();
 
         let row = client
             .query_one(
@@ -42,7 +43,7 @@ impl NotificationService {
                 INSERT INTO notifications (
                     id, user_id, type, title, message, metadata, read
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES ($1, $2, $3::notification_type, $4, $5, $6, $7)
                 RETURNING id, user_id, type, title, message, metadata, read, created_at, updated_at
                 "#,
                 &[
@@ -58,7 +59,7 @@ impl NotificationService {
             .await?;
 
         let notification = Notification {
-            id: row.get(0),
+            id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             notification_type: NotificationType::from_str(row.get(2)),
             title: row.get(3),
@@ -75,7 +76,10 @@ impl NotificationService {
         Ok(notification)
     }
 
-    pub async fn get_user_notifications(&self, user_id: &str) -> Result<Vec<Notification>, ApiError> {
+    pub async fn get_user_notifications(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<Notification>, ApiError> {
         let client = self.db_pool.get().await?;
 
         let rows = client
@@ -93,7 +97,7 @@ impl NotificationService {
         let notifications = rows
             .into_iter()
             .map(|row| Notification {
-                id: row.get(0),
+                id: row.get::<_, Uuid>(0).to_string(),
                 user_id: row.get(1),
                 notification_type: NotificationType::from_str(row.get(2)),
                 title: row.get(3),

@@ -120,9 +120,7 @@ impl Default for Config {
             database: DatabaseConfig {
                 url: "postgres://localhost/zaps".to_string(),
             },
-            server: ServerConfig {
-                port: 3000,
-            },
+            server: ServerConfig { port: 3000 },
             jwt: JwtConfig {
                 secret: "change-this-in-production".to_string(),
                 expiration_hours: 24,

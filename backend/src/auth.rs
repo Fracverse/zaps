@@ -1,8 +1,8 @@
+use crate::api_error::ApiError;
+use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use bcrypt::{hash, verify, DEFAULT_COST};
-use crate::api_error::ApiError;
 
 /// Token type for distinguishing access vs refresh tokens
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -152,7 +152,8 @@ mod tests {
 
     #[test]
     fn test_refresh_token_rejected_as_access() {
-        let token = generate_refresh_token("user123", TEST_SECRET, 168).expect("Failed to generate");
+        let token =
+            generate_refresh_token("user123", TEST_SECRET, 168).expect("Failed to generate");
 
         let result = validate_access_token(&token, TEST_SECRET);
         assert!(result.is_err());

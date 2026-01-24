@@ -28,7 +28,7 @@ sqlx = { version = "0.7", features = [
     "migrate"
 ] }
 deadpool-postgres = "0.10"
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 
 # Authentication & Security
 jsonwebtoken = "9.0"

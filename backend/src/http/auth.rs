@@ -2,11 +2,7 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{
-    api_error::ApiError,
-    auth,
-    service::ServiceContainer,
-};
+use crate::{api_error::ApiError, auth, service::ServiceContainer};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
