@@ -2,12 +2,16 @@ use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{api_error::ApiError, auth, service::ServiceContainer};
+use crate::{
+    api_error::ApiError,
+    auth,
+    service::ServiceContainer,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
     pub user_id: String,
-    pub pin: String, // In production, this would be hashed
+    pub pin: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,8 +23,10 @@ pub struct RegisterRequest {
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
     pub token: String,
+    pub refresh_token: String,
     pub user_id: String,
     pub expires_in: i64,
+    pub refresh_expires_in: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,23 +38,36 @@ pub async fn login(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    // In production, validate PIN against stored hash
-    // For now, just check if user exists
-    if !services.identity.user_exists(&request.user_id).await? {
+    // Get user with pin hash
+    let (user, pin_hash) = services
+        .identity
+        .get_user_with_pin_hash(&request.user_id)
+        .await?;
+
+    // Verify PIN
+    if !auth::verify_pin(&request.pin, &pin_hash)? {
         return Err(ApiError::Authentication("Invalid credentials".to_string()));
     }
 
-    // Generate JWT token
-    let token = auth::generate_jwt(
-        &request.user_id,
+    // Generate token pair
+    let token = auth::generate_access_token(
+        &user.user_id,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
+    let refresh_token = auth::generate_refresh_token(
+        &user.user_id,
+        &services.config.jwt.secret,
+        services.config.jwt.refresh_expiration_hours,
+    )?;
+
     Ok(Json(AuthResponse {
         token,
-        user_id: request.user_id,
+        refresh_token,
+        user_id: user.user_id,
         expires_in: services.config.jwt.expiration_hours * 3600,
+        refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
 }
 
@@ -61,23 +80,34 @@ pub async fn register(
         return Err(ApiError::Conflict("User already exists".to_string()));
     }
 
-    // Create user
-    services
+    // Hash the PIN
+    let pin_hash = auth::hash_pin(&request.pin)?;
+
+    // Create user with hashed PIN
+    let user = services
         .identity
-        .create_user(request.user_id.clone())
+        .create_user(request.user_id.clone(), pin_hash)
         .await?;
 
-    // Generate JWT token
-    let token = auth::generate_jwt(
-        &request.user_id,
+    // Generate token pair
+    let token = auth::generate_access_token(
+        &user.user_id,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
+    let refresh_token = auth::generate_refresh_token(
+        &user.user_id,
+        &services.config.jwt.secret,
+        services.config.jwt.refresh_expiration_hours,
+    )?;
+
     Ok(Json(AuthResponse {
         token,
-        user_id: request.user_id,
+        refresh_token,
+        user_id: user.user_id,
         expires_in: services.config.jwt.expiration_hours * 3600,
+        refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
 }
 
@@ -85,19 +115,32 @@ pub async fn refresh_token(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<RefreshTokenRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    // Validate the current token
-    let claims = auth::validate_jwt(&request.token, &services.config.jwt.secret)?;
+    // Validate the token is specifically a refresh token
+    let claims = auth::validate_refresh_token(&request.token, &services.config.jwt.secret)?;
 
-    // Generate new token
-    let token = auth::generate_jwt(
+    // Verify user still exists
+    if !services.identity.user_exists(&claims.sub).await? {
+        return Err(ApiError::Authentication("User not found".to_string()));
+    }
+
+    // Generate new token pair
+    let token = auth::generate_access_token(
         &claims.sub,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
+    let refresh_token = auth::generate_refresh_token(
+        &claims.sub,
+        &services.config.jwt.secret,
+        services.config.jwt.refresh_expiration_hours,
+    )?;
+
     Ok(Json(AuthResponse {
         token,
+        refresh_token,
         user_id: claims.sub,
         expires_in: services.config.jwt.expiration_hours * 3600,
+        refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
 }

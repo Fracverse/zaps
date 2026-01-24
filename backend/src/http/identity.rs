@@ -10,6 +10,7 @@ use crate::{api_error::ApiError, service::ServiceContainer};
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub user_id: String,
+    pub pin: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,7 +31,7 @@ pub async fn create_user(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let user = services.identity.create_user(request.user_id).await?;
+    let user = services.identity.create_user(request.user_id, request.pin).await?;
 
     Ok(Json(UserResponse {
         id: uuid::Uuid::parse_str(&user.id).unwrap_or_default(),
