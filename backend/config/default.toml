@@ -10,6 +10,7 @@ port = 3000
 [jwt]
 secret = "change-this-in-production"
 expiration_hours = 24
+refresh_expiration_hours = 168
 
 [stellar]
 network_id = "Test SDF Network ; September 2015"
