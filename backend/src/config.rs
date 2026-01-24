@@ -1,3 +1,4 @@
+use crate::models::{RateLimitConfig, RateLimitScope};
 use config::{Config as ConfigBuilder, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -16,6 +17,7 @@ pub struct Config {
     #[serde(rename = "compliance")]
     pub compliance_config: ComplianceConfig,
     pub environment: EnvironmentType,
+    pub rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +163,11 @@ impl Default for Config {
                 },
             },
             environment: EnvironmentType::Development,
+            rate_limit: RateLimitConfig {
+                window_ms: 60000, // 1 minute
+                max_requests: 100,
+                scope: RateLimitScope::Ip,
+            },
         }
     }
 }
