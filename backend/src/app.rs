@@ -77,7 +77,10 @@ pub async fn create_app(
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
         .nest("/admin", admin_routes)
-        .layer(middleware::from_fn(auth_middleware::authenticate));
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            auth_middleware::authenticate,
+        ));
 
     // Public routes
     let public_routes = Router::new()
