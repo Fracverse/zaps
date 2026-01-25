@@ -49,7 +49,7 @@ pub async fn create_profile(
     Extension(user): Extension<AuthenticatedUser>,
     Json(request): Json<CreateUserProfileDto>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let user_uuid = Uuid::parse_str(&user.user_id).map_err(|_| ApiError::BadRequest("Invalid user ID format".into()))?;
+    let user_uuid = Uuid::parse_str(&user.user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
 
     // Check if profile already exists
     if services.profile.get_profile(user_uuid).await?.is_some() {
@@ -81,7 +81,7 @@ pub async fn get_profile(
     State(services): State<Arc<ServiceContainer>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let user_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::BadRequest("Invalid user ID format".into()))?;
+    let user_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
     
     let profile = services.profile.get_profile(user_uuid).await?
         .ok_or(ApiError::NotFound("Profile not found".into()))?;
@@ -104,12 +104,12 @@ pub async fn update_profile(
     Path(user_id): Path<String>,
     Json(request): Json<UpdateUserProfileDto>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::BadRequest("Invalid user ID format".into()))?;
+    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
     
     // Authorization check: User can only update their own profile, unless Admin
     // Note: Comparing strings for simplicity, assuming user.user_id is valid UUID string
     if user.user_id != user_id && user.role != Role::Admin {
-        return Err(ApiError::Forbidden("You can only update your own profile".into()));
+        return Err(ApiError::Authorization("You can only update your own profile".into()));
     }
 
     let profile = services.profile.update_profile(
@@ -138,11 +138,11 @@ pub async fn delete_profile(
     Extension(user): Extension<AuthenticatedUser>,
     Path(user_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::BadRequest("Invalid user ID format".into()))?;
+    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
 
     // Authorization check: User can only delete their own profile, unless Admin
     if user.user_id != user_id && user.role != Role::Admin {
-        return Err(ApiError::Forbidden("You can only delete your own profile".into()));
+        return Err(ApiError::Authorization("You can only delete your own profile".into()));
     }
 
     services.profile.delete_profile(target_uuid).await?;
