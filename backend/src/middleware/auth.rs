@@ -1,3 +1,5 @@
+use crate::role::Role;
+use crate::{auth, service::ServiceContainer};
 use axum::{
     async_trait,
     extract::{FromRequestParts, Request, State},
@@ -5,10 +7,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::{auth, service::ServiceContainer};
-use crate::role::Role;
 
 /// Authenticated user information extracted from JWT
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +16,6 @@ pub struct AuthenticatedUser {
     pub user_id: String,
     pub role: Role,
 }
-
 
 /// Authentication middleware - validates JWT and extracts user info
 pub async fn authenticate(
@@ -48,7 +47,6 @@ pub async fn authenticate(
         Err(_) => Err(StatusCode::UNAUTHORIZED),
     }
 }
-
 
 /// Axum extractor for getting the authenticated user from request
 #[async_trait]

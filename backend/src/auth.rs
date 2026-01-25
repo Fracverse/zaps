@@ -1,9 +1,9 @@
 use crate::api_error::ApiError;
+use crate::role::Role;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use crate::role::Role;
 
 /// Token type for distinguishing access vs refresh tokens
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -15,11 +15,11 @@ pub enum TokenType {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String, // user_id
-    pub role: Role,  // user role
+    pub sub: String,           // user_id
+    pub role: Role,            // user role
     pub token_type: TokenType, // JWT token type
-    pub exp: usize,  // expiration timestamp
-    pub iat: usize,  // issued at timestamp
+    pub exp: usize,            // expiration timestamp
+    pub iat: usize,            // issued at timestamp
 }
 
 /// Generate an access token (short-lived)
@@ -123,7 +123,8 @@ mod tests {
     fn test_access_token_generation_and_validation() {
         let user_id = "user123";
         let role = Role::Admin;
-        let token = generate_access_token(user_id, role, TEST_SECRET, 24).expect("Failed to generate token");
+        let token = generate_access_token(user_id, role, TEST_SECRET, 24)
+            .expect("Failed to generate token");
 
         let claims = validate_jwt(&token, TEST_SECRET).expect("Failed to validate");
         assert_eq!(claims.sub, user_id);
@@ -135,7 +136,8 @@ mod tests {
     fn test_refresh_token_generation_and_validation() {
         let user_id = "user123";
         let role = Role::User;
-        let token = generate_refresh_token(user_id, role, TEST_SECRET, 168).expect("Failed to generate token");
+        let token = generate_refresh_token(user_id, role, TEST_SECRET, 168)
+            .expect("Failed to generate token");
 
         let claims = validate_jwt(&token, TEST_SECRET).expect("Failed to validate");
         assert_eq!(claims.sub, user_id);
@@ -145,7 +147,8 @@ mod tests {
 
     #[test]
     fn test_access_token_rejected_as_refresh() {
-        let token = generate_access_token("user123", Role::User, TEST_SECRET, 24).expect("Failed to generate token");
+        let token = generate_access_token("user123", Role::User, TEST_SECRET, 24)
+            .expect("Failed to generate token");
 
         let result = validate_refresh_token(&token, TEST_SECRET);
         assert!(result.is_err());
@@ -154,7 +157,8 @@ mod tests {
     #[test]
     fn test_jwt_with_different_roles() {
         for role in [Role::User, Role::Merchant, Role::Admin] {
-            let token = generate_access_token("user123", role, TEST_SECRET, 24).expect("Failed to generate token");
+            let token = generate_access_token("user123", role, TEST_SECRET, 24)
+                .expect("Failed to generate token");
             let claims = validate_jwt(&token, TEST_SECRET).expect("Failed to validate");
             assert_eq!(claims.role, role);
         }
@@ -168,8 +172,8 @@ mod tests {
 
     #[test]
     fn test_refresh_token_rejected_as_access() {
-        let token =
-            generate_refresh_token("user123", Role::User, TEST_SECRET, 168).expect("Failed to generate token");
+        let token = generate_refresh_token("user123", Role::User, TEST_SECRET, 168)
+            .expect("Failed to generate token");
 
         let result = validate_access_token(&token, TEST_SECRET);
         assert!(result.is_err());
@@ -177,7 +181,8 @@ mod tests {
 
     #[test]
     fn test_invalid_secret_rejected() {
-        let token = generate_access_token("user123", Role::User, TEST_SECRET, 24).expect("Failed to generate token");
+        let token = generate_access_token("user123", Role::User, TEST_SECRET, 24)
+            .expect("Failed to generate token");
 
         let result = validate_jwt(&token, "wrong-secret");
         assert!(result.is_err());

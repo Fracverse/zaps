@@ -1,5 +1,5 @@
 //! Cargo command to generate a new migration file with a unique timestamp
-//! 
+//!
 //! Usage: cargo run --bin new_migration -- <description>
 //! Example: cargo run --bin new_migration -- add_user_preferences
 
@@ -9,28 +9,28 @@ use std::process;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    
+
     if args.len() < 2 {
         eprintln!("Error: Migration description is required");
         eprintln!("Usage: cargo run --bin new_migration -- <description>");
         eprintln!("Example: cargo run --bin new_migration -- add_user_preferences");
         process::exit(1);
     }
-    
+
     let description = &args[1];
     let description = sanitize_description(description);
-    
+
     let migrations_dir = PathBuf::from("migrations");
     if !migrations_dir.exists() {
         eprintln!("Error: migrations directory not found");
         process::exit(1);
     }
-    
+
     // Generate timestamp
     let timestamp = generate_unique_timestamp(&migrations_dir);
-    
+
     let migration_file = migrations_dir.join(format!("{}_{}.sql", timestamp, description));
-    
+
     // Create migration file with template
     let template = format!(
         "-- Migration: {}\n\
@@ -41,10 +41,9 @@ fn main() {
         description,
         chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
     );
-    
-    fs::write(&migration_file, template)
-        .expect("Failed to write migration file");
-    
+
+    fs::write(&migration_file, template).expect("Failed to write migration file");
+
     println!("Created migration file: {}", migration_file.display());
     println!();
     println!("Next steps:");
@@ -70,11 +69,11 @@ fn sanitize_description(description: &str) -> String {
 
 fn generate_unique_timestamp(migrations_dir: &Path) -> String {
     let mut timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
-    
+
     // Check if a migration with this timestamp already exists
     loop {
         let mut found = false;
-        
+
         if let Ok(entries) = fs::read_dir(migrations_dir) {
             for entry in entries.flatten() {
                 if let Some(name) = entry.file_name().to_str() {
@@ -85,15 +84,15 @@ fn generate_unique_timestamp(migrations_dir: &Path) -> String {
                 }
             }
         }
-        
+
         if !found {
             break;
         }
-        
+
         // Wait a bit and try again
         std::thread::sleep(std::time::Duration::from_millis(100));
         timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     }
-    
+
     timestamp
 }

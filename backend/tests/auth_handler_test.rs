@@ -3,8 +3,8 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use serde_json::{json, Value};
 use lazy_static::lazy_static;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tower::util::ServiceExt; // for oneshot
 
@@ -65,7 +65,7 @@ async fn parse_response(response: axum::response::Response) -> Value {
     let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("Failed to read response body");
-    
+
     match serde_json::from_slice::<Value>(&body_bytes) {
         Ok(json) => json,
         Err(e) => {
@@ -84,7 +84,10 @@ async fn parse_response(response: axum::response::Response) -> Value {
 
 #[cfg(test)]
 mod unit_tests {
-    use zaps_backend::{auth::{self, TokenType}, role::Role};
+    use zaps_backend::{
+        auth::{self, TokenType},
+        role::Role,
+    };
 
     #[test]
     fn test_pin_hash_and_verify_flow() {

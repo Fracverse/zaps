@@ -21,12 +21,12 @@ pub async fn run_migrations(database_url: &str) -> Result<(), Box<dyn std::error
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .map_err(|e| format!("Failed to connect to database for migrations: {}", e))?;
-    
+
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .map_err(|e| format!("Failed to run database migrations: {}", e))?;
-    
+
     pool.close().await;
     Ok(())
 }
@@ -38,11 +38,13 @@ pub async fn reset_migrations(database_url: &str) -> Result<(), Box<dyn std::err
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .map_err(|e| format!("Failed to connect to database for migration reset: {}", e))?;
-    
+
     // Use a transaction to ensure atomic cleanup
-    let mut tx = pool.begin().await
+    let mut tx = pool
+        .begin()
+        .await
         .map_err(|e| format!("Failed to begin transaction: {}", e))?;
-    
+
     // Drop all tables in public schema (CASCADE will also drop dependent objects)
     // This ensures a clean state for re-running migrations
     sqlx::query(
@@ -68,23 +70,24 @@ pub async fn reset_migrations(database_url: &str) -> Result<(), Box<dyn std::err
     .execute(&mut *tx)
     .await
     .map_err(|e| format!("Failed to reset database: {}", e))?;
-    
+
     // Commit the transaction to ensure all drops are applied
-    tx.commit().await
+    tx.commit()
+        .await
         .map_err(|e| format!("Failed to commit reset transaction: {}", e))?;
-    
+
     // Verify _sqlx_migrations is gone (it should be after the above)
     let table_exists: bool = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
             SELECT FROM information_schema.tables 
             WHERE table_schema = 'public' 
             AND table_name = '_sqlx_migrations'
-        )"
+        )",
     )
     .fetch_one(&pool)
     .await
     .unwrap_or(false);
-    
+
     if table_exists {
         // Force drop if it still exists
         sqlx::query("DROP TABLE _sqlx_migrations CASCADE")
@@ -92,7 +95,7 @@ pub async fn reset_migrations(database_url: &str) -> Result<(), Box<dyn std::err
             .await
             .ok();
     }
-    
+
     pool.close().await;
     Ok(())
 }
