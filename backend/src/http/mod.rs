@@ -6,6 +6,7 @@ pub mod notifications;
 pub mod payments;
 pub mod transfers;
 pub mod withdrawals;
+pub mod profiles;
 
 pub use admin::*;
 pub use auth::*;
@@ -15,3 +16,4 @@ pub use notifications::*;
 pub use payments::*;
 pub use transfers::*;
 pub use withdrawals::*;
+pub use profiles::*;
