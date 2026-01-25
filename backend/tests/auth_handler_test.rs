@@ -10,8 +10,6 @@ use tower::util::ServiceExt; // for oneshot
 
 use zaps_backend::{app::create_app, config::Config, db};
 
-// Global mutex to ensure migrations are only reset/run sequentially across all concurrent tests
-// This prevents race conditions when multiple tests run in parallel
 lazy_static! {
     static ref MIGRATION_LOCK: Mutex<bool> = Mutex::new(false);
 }
@@ -55,6 +53,7 @@ fn json_post(uri: &str, body: Value) -> Request<Body> {
         .method("POST")
         .uri(uri)
         .header("Content-Type", "application/json")
+        // Add a dummy socket address for testing (required by rate limit middleware)
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
         .body(Body::from(body.to_string()))
         .unwrap()
