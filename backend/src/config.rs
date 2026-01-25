@@ -18,6 +18,7 @@ pub struct Config {
     pub compliance_config: ComplianceConfig,
     pub environment: EnvironmentType,
     pub rate_limit: RateLimitConfig,
+    pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +91,23 @@ pub struct RiskThresholds {
     pub high_risk_amount: u64,
     pub medium_risk_amount: u64,
     pub suspicious_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum StorageBackend {
+    Local,
+    S3,
+    Ipfs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    pub backend: StorageBackend,
+    pub local_path: Option<String>,
+    pub s3_bucket: Option<String>,
+    pub s3_region: Option<String>,
+    pub ipfs_gateway: Option<String>,
 }
 
 impl Config {
@@ -165,6 +183,13 @@ impl Default for Config {
                 window_ms: 60000, // 1 minute
                 max_requests: 100,
                 scope: RateLimitScope::Ip,
+            },
+            storage: StorageConfig {
+                backend: StorageBackend::Local,
+                local_path: Some("./uploads".to_string()),
+                s3_bucket: None,
+                s3_region: None,
+                ipfs_gateway: None,
             },
         }
     }

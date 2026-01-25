@@ -10,6 +10,7 @@ pub mod role;
 // pub mod realtime; // TODO: Implement when needed
 pub mod service;
 pub mod telemetry;
+pub mod storage;
 
 pub use api_error::ApiError;
 pub use app::create_app;
