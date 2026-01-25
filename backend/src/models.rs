@@ -282,3 +282,23 @@ pub struct RateLimitConfig {
     pub max_requests: u32,
     pub scope: RateLimitScope,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildTransactionDto {
+    pub contract_id: String,
+    pub method: String,
+    pub args: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    PENDING,
+    CONFIRMED,
+    FAILED,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedTransactionResponse {
+    pub tx_hash: String,
+    pub status: TransactionStatus,
+}
