@@ -108,11 +108,11 @@ mod role_tests {
 #[cfg(test)]
 mod jwt_tests {
     use super::*;
-    use zaps_backend::auth::{generate_jwt, validate_jwt};
+    use zaps_backend::auth::{generate_access_token, validate_jwt};
 
     #[test]
     fn test_jwt_with_user_role() {
-        let token = generate_jwt("user123", Role::User, "test-secret", 1).unwrap();
+        let token = generate_access_token("user123", Role::User, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "user123");
@@ -121,7 +121,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_with_admin_role() {
-        let token = generate_jwt("admin123", Role::Admin, "test-secret", 1).unwrap();
+        let token = generate_access_token("admin123", Role::Admin, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "admin123");
@@ -130,7 +130,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_with_merchant_role() {
-        let token = generate_jwt("merchant123", Role::Merchant, "test-secret", 1).unwrap();
+        let token = generate_access_token("merchant123", Role::Merchant, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "merchant123");
@@ -145,7 +145,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_wrong_secret() {
-        let token = generate_jwt("user123", Role::User, "secret1", 1).unwrap();
+        let token = generate_access_token("user123", Role::User, "secret1", 1).unwrap();
         let result = validate_jwt(&token, "secret2");
         assert!(result.is_err());
     }
@@ -153,7 +153,7 @@ mod jwt_tests {
     #[test]
     fn test_jwt_role_preserved_in_claims() {
         for role in [Role::User, Role::Merchant, Role::Admin] {
-            let token = generate_jwt("testuser", role, "secret", 1).unwrap();
+            let token = generate_access_token("testuser", role, "secret", 1).unwrap();
             let claims = validate_jwt(&token, "secret").unwrap();
             assert_eq!(claims.role, role, "Role should be preserved in JWT claims");
         }

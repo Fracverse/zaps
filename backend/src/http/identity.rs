@@ -48,7 +48,6 @@ pub async fn get_user(
     State(services): State<Arc<ServiceContainer>>,
     user: AuthenticatedUser,
 ) -> Result<Json<UserResponse>, ApiError> {
-    // TODO: for admin access, check user role
     let user = services.identity.get_user_by_id(&user.user_id).await?;
 
     Ok(Json(UserResponse {

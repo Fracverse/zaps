@@ -61,10 +61,10 @@ impl IdentityService {
             user_id: row.get(1),
             stellar_address: row.get(2),
             role: Role::from_str(row.get::<_, &str>(3)),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
-            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(6),
         };
-        let pin_hash: String = row.get(5);
+        let pin_hash: String = row.get(4);
 
         Ok((user, pin_hash))
     }

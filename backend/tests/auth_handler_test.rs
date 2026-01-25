@@ -4,9 +4,17 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use lazy_static::lazy_static;
+use tokio::sync::Mutex;
 use tower::util::ServiceExt; // for oneshot
 
-use zaps_backend::{app::create_app, auth, config::Config, db};
+use zaps_backend::{app::create_app, config::Config, db};
+
+// Global mutex to ensure migrations are only reset/run sequentially across all concurrent tests
+// This prevents race conditions when multiple tests run in parallel
+lazy_static! {
+    static ref MIGRATION_LOCK: Mutex<bool> = Mutex::new(false);
+}
 
 /// Helper to create a test app with a test database
 /// Note: These tests require a running database as defined in the config/env.
@@ -15,8 +23,18 @@ async fn create_test_app() -> Router {
     // Attempt to load config - if fails, use default
     let config = Config::load().expect("Failed to load config");
 
-    // Ensure migrations are run for the test database
-    let _ = db::run_migrations(&config.database.url).await;
+    // Use a mutex to ensure migrations are only run once for all tests
+    {
+        let mut initialized = MIGRATION_LOCK.lock().await;
+        if !*initialized {
+            // Reset migrations first only on the first initialization
+            let _ = db::reset_migrations(&config.database.url).await;
+            db::run_migrations(&config.database.url)
+                .await
+                .expect("Failed to run database migrations");
+            *initialized = true;
+        }
+    }
 
     // Create a database pool using the config URL
     let pool = db::create_pool(&config.database.url)
@@ -30,20 +48,35 @@ async fn create_test_app() -> Router {
 
 /// Helper to make JSON POST request
 fn json_post(uri: &str, body: Value) -> Request<Body> {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
     Request::builder()
         .method("POST")
         .uri(uri)
         .header("Content-Type", "application/json")
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
         .body(Body::from(body.to_string()))
         .unwrap()
 }
 
 /// Helper to parse JSON response
 async fn parse_response(response: axum::response::Response) -> Value {
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+    let status = response.status();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
-        .unwrap();
-    serde_json::from_slice(&body).unwrap_or(json!({}))
+        .expect("Failed to read response body");
+    
+    match serde_json::from_slice::<Value>(&body_bytes) {
+        Ok(json) => json,
+        Err(e) => {
+            let body_str = String::from_utf8_lossy(&body_bytes);
+            panic!(
+                "Failed to parse response body as JSON. Status: {}. Error: {}. Body: {}",
+                status, e, body_str
+            );
+        }
+    }
 }
 
 // =============================================================================
@@ -52,7 +85,7 @@ async fn parse_response(response: axum::response::Response) -> Value {
 
 #[cfg(test)]
 mod unit_tests {
-    use zaps_backend::auth;
+    use zaps_backend::{auth::{self, TokenType}, role::Role};
 
     #[test]
     fn test_pin_hash_and_verify_flow() {
@@ -66,7 +99,8 @@ mod unit_tests {
     #[test]
     fn test_access_token_cannot_refresh() {
         let secret = "test-secret";
-        let access_token = auth::generate_access_token("user1", secret, 1).unwrap();
+        let role = Role::User;
+        let access_token = auth::generate_access_token("user1", role, secret, 1).unwrap();
 
         // Access token should fail refresh validation
         let result = auth::validate_refresh_token(&access_token, secret);
@@ -76,7 +110,8 @@ mod unit_tests {
     #[test]
     fn test_refresh_token_cannot_access() {
         let secret = "test-secret";
-        let refresh_token = auth::generate_refresh_token("user1", secret, 168).unwrap();
+        let role = Role::User;
+        let refresh_token = auth::generate_refresh_token("user1", role, secret, 168).unwrap();
 
         // Refresh token should fail access validation
         let result = auth::validate_access_token(&refresh_token, secret);
@@ -87,16 +122,21 @@ mod unit_tests {
     fn test_token_pair_generation() {
         let secret = "test-secret";
         let user_id = "testuser";
+        let role = Role::User;
 
-        let access = auth::generate_access_token(user_id, secret, 24).unwrap();
-        let refresh = auth::generate_refresh_token(user_id, secret, 168).unwrap();
+        let access = auth::generate_access_token(user_id, role, secret, 24).unwrap();
+        let refresh = auth::generate_refresh_token(user_id, role, secret, 168).unwrap();
 
         // Both tokens are valid
         let access_claims = auth::validate_access_token(&access, secret).unwrap();
         let refresh_claims = auth::validate_refresh_token(&refresh, secret).unwrap();
 
         assert_eq!(access_claims.sub, user_id);
+        assert_eq!(access_claims.role, role);
+        assert_eq!(access_claims.token_type, TokenType::Access);
         assert_eq!(refresh_claims.sub, user_id);
+        assert_eq!(refresh_claims.role, role);
+        assert_eq!(refresh_claims.token_type, TokenType::Refresh);
 
         // Tokens are different
         assert_ne!(access, refresh);
