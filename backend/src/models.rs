@@ -282,3 +282,16 @@ pub struct RateLimitConfig {
     pub max_requests: u32,
     pub scope: RateLimitScope,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserProfile {
+    pub id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub country: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
