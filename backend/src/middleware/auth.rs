@@ -5,17 +5,20 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use serde::{Serialize, Deserialize};
 use std::sync::Arc;
-
 use crate::{auth, service::ServiceContainer};
+use crate::role::Role;
 
-/// Represents an authenticated user extracted from the JWT token
-#[derive(Debug, Clone)]
+/// Authenticated user information extracted from JWT
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
     pub user_id: String,
+    pub role: Role,
 }
 
-/// Middleware function that validates JWT tokens from Authorization header
+
+/// Authentication middleware - validates JWT and extracts user info
 pub async fn authenticate(
     State(services): State<Arc<ServiceContainer>>,
     mut req: Request,
@@ -35,28 +38,17 @@ pub async fn authenticate(
     // Validate as access token using secret from config
     match auth::validate_access_token(token, &services.config.jwt.secret) {
         Ok(claims) => {
-            // Add authenticated user to request extensions
-            req.extensions_mut().insert(AuthenticatedUser {
+            let auth_user = AuthenticatedUser {
                 user_id: claims.sub,
-            });
+                role: claims.role,
+            };
+            req.extensions_mut().insert(auth_user);
             Ok(next.run(req).await)
         }
         Err(_) => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
-/// Middleware for admin-only routes
-pub async fn admin_only(req: Request, next: Next) -> Result<Response, StatusCode> {
-    // Check if user is authenticated
-    let user = req.extensions().get::<AuthenticatedUser>().cloned();
-    if user.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    // In production, check if user has admin role
-    // For now, we'll allow all authenticated users
-    Ok(next.run(req).await)
-}
 
 /// Axum extractor for getting the authenticated user from request
 #[async_trait]
@@ -75,9 +67,12 @@ where
     }
 }
 
-/// Helper function for backward compatibility ()
+/// Get authenticated user from request extensions
+pub fn get_authenticated_user(req: &Request) -> Option<AuthenticatedUser> {
+    req.extensions().get::<AuthenticatedUser>().cloned()
+}
+
+/// Legacy helper for backwards compatibility
 pub fn get_user_id_from_request(req: &Request) -> Option<String> {
-    req.extensions()
-        .get::<AuthenticatedUser>()
-        .map(|u| u.user_id.clone())
+    get_authenticated_user(req).map(|u| u.user_id)
 }

@@ -14,6 +14,8 @@ pub struct LoginRequest {
 pub struct RegisterRequest {
     pub user_id: String,
     pub pin: String,
+    #[serde(default)]
+    pub role: Option<String>, // Optional role for registration (admin-only in production)
 }
 
 #[derive(Debug, Serialize)]
@@ -21,6 +23,7 @@ pub struct AuthResponse {
     pub token: String,
     pub refresh_token: String,
     pub user_id: String,
+    pub role: String,
     pub expires_in: i64,
     pub refresh_expires_in: i64,
 }
@@ -48,12 +51,14 @@ pub async fn login(
     // Generate token pair
     let token = auth::generate_access_token(
         &user.user_id,
+        user.role,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
     let refresh_token = auth::generate_refresh_token(
         &user.user_id,
+        user.role,
         &services.config.jwt.secret,
         services.config.jwt.refresh_expiration_hours,
     )?;
@@ -62,6 +67,7 @@ pub async fn login(
         token,
         refresh_token,
         user_id: user.user_id,
+        role: user.role.to_string(),
         expires_in: services.config.jwt.expiration_hours * 3600,
         refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
@@ -79,7 +85,8 @@ pub async fn register(
     // Hash the PIN
     let pin_hash = auth::hash_pin(&request.pin)?;
 
-    // Create user with hashed PIN
+    // Create user with default role (User)
+    // In production, role assignment should be restricted
     let user = services
         .identity
         .create_user(request.user_id.clone(), pin_hash)
@@ -88,12 +95,14 @@ pub async fn register(
     // Generate token pair
     let token = auth::generate_access_token(
         &user.user_id,
+        user.role,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
     let refresh_token = auth::generate_refresh_token(
         &user.user_id,
+        user.role,
         &services.config.jwt.secret,
         services.config.jwt.refresh_expiration_hours,
     )?;
@@ -102,6 +111,7 @@ pub async fn register(
         token,
         refresh_token,
         user_id: user.user_id,
+        role: user.role.to_string(),
         expires_in: services.config.jwt.expiration_hours * 3600,
         refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
@@ -122,12 +132,14 @@ pub async fn refresh_token(
     // Generate new token pair
     let token = auth::generate_access_token(
         &claims.sub,
+        claims.role,
         &services.config.jwt.secret,
         services.config.jwt.expiration_hours,
     )?;
 
     let refresh_token = auth::generate_refresh_token(
         &claims.sub,
+        claims.role,
         &services.config.jwt.secret,
         services.config.jwt.refresh_expiration_hours,
     )?;
@@ -136,6 +148,7 @@ pub async fn refresh_token(
         token,
         refresh_token,
         user_id: claims.sub,
+        role: claims.role.to_string(),
         expires_in: services.config.jwt.expiration_hours * 3600,
         refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))

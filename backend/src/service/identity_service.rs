@@ -2,12 +2,14 @@ use crate::{
     api_error::ApiError,
     config::Config,
     models::{User, Wallet},
+    role::Role,
 };
 use deadpool_postgres::Pool;
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct IdentityService {
     db_pool: Arc<Pool>,
     config: Config,
@@ -25,10 +27,11 @@ impl IdentityService {
         let stellar_address = format!("G{}", Uuid::new_v4().simple().to_string().to_uppercase());
         let user_id_db = Uuid::new_v4(); // ensure that a UUID type is used
 
+        let role_str = Role::User.as_str();
         let row = client
             .query_one(
-                "INSERT INTO users (id, user_id, stellar_address, pin_hash) VALUES ($1, $2, $3, $4) RETURNING id, user_id, stellar_address, created_at, updated_at",
-                &[&user_id_db, &user_id, &stellar_address, &pin_hash],
+                "INSERT INTO users (id, user_id, stellar_address, role, pin_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
+                &[&user_id_db, &user_id, &stellar_address, &role_str, &pin_hash],
             )
             .await?;
 
@@ -36,8 +39,9 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3),
-            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            role: Role::from_str(row.get::<_, &str>(3)),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         })
     }
 
@@ -46,7 +50,7 @@ impl IdentityService {
 
         let row = client
             .query_one(
-                "SELECT id, user_id, stellar_address, created_at, updated_at, pin_hash FROM users WHERE user_id = $1",
+                "SELECT id, user_id, stellar_address, role, pin_hash, created_at, updated_at FROM users WHERE user_id = $1",
                 &[&user_id],
             )
             .await
@@ -56,8 +60,9 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3),
-            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            role: Role::from_str(row.get::<_, &str>(3)),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         };
         let pin_hash: String = row.get(5);
 
@@ -69,7 +74,7 @@ impl IdentityService {
 
         let row = client
             .query_one(
-                "SELECT id, user_id, stellar_address, created_at, updated_at FROM users WHERE user_id = $1",
+                "SELECT id, user_id, stellar_address, role, created_at, updated_at FROM users WHERE user_id = $1",
                 &[&user_id],
             )
             .await
@@ -79,8 +84,9 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3),
-            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            role: Role::from_str(row.get::<_, &str>(3)),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
+            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         })
     }
 
