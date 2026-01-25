@@ -11,7 +11,6 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct NotificationService {
     db_pool: Arc<Pool>,
-    config: Config,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,8 +23,8 @@ pub struct CreateNotificationRequest {
 }
 
 impl NotificationService {
-    pub fn new(db_pool: Arc<Pool>, config: Config) -> Self {
-        Self { db_pool, config }
+    pub fn new(db_pool: Arc<Pool>, _config: Config) -> Self {
+        Self { db_pool }
     }
 
     pub async fn create_notification(

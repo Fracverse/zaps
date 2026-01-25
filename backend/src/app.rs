@@ -9,7 +9,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
+    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals, files},
     middleware::{auth as auth_middleware, metrics, rate_limit, request_id, role_guard},
     role::Role,
     service::ServiceContainer,
@@ -80,6 +80,12 @@ pub async fn create_app(
         .route("/system/health", get(admin::get_system_health))
         .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
+    // File routes
+    let file_routes = Router::new()
+        .route("/upload", post(files::upload_file))
+        .route("/:id", get(files::get_file))
+        .route("/:id", axum::routing::delete(files::delete_file));
+
     // Protected routes (require authentication)
     let protected_routes = Router::new()
         .nest("/identity", identity_routes)
@@ -88,6 +94,7 @@ pub async fn create_app(
         .nest("/withdrawals", withdrawal_routes)
         .nest("/notifications", notification_routes)
         .nest("/admin", admin_routes)
+        .nest("/files", file_routes)
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
     // Public routes

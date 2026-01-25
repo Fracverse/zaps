@@ -282,3 +282,13 @@ pub struct RateLimitConfig {
     pub max_requests: u32,
     pub scope: RateLimitScope,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileUploadResponseDto {
+    pub file_id: String,
+    pub original_name: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub url: String,
+}

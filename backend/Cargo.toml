@@ -60,6 +60,8 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.10"
 base64 = "0.21"
+async-trait = "0.1"
+bytes = "1.5"
 
 # Metrics & monitoring
 prometheus = "0.13"

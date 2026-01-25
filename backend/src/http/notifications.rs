@@ -36,7 +36,8 @@ pub struct NotificationResponseDto {
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationQuery {
-    pub userId: String,
+    #[serde(rename = "userId")]
+    pub user_id: String,
 }
 
 pub async fn create_notification(
@@ -74,7 +75,7 @@ pub async fn get_notifications(
 ) -> Result<Json<Vec<NotificationResponseDto>>, ApiError> {
     let notifications = services
         .notification
-        .get_user_notifications(&query.userId)
+        .get_user_notifications(&query.user_id)
         .await?;
 
     let response = notifications

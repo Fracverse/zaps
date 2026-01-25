@@ -5030,9 +5030,11 @@ name = "zaps-backend"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.21.7",
  "bcrypt",
+ "bytes",
  "chrono",
  "config",
  "dashmap",
