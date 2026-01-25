@@ -35,8 +35,8 @@ pub async fn create_app(
     // Identity & Wallet routes
     let identity_routes = Router::new()
         .route("/users", post(identity::create_user))
-        .route("/users/:user_id", get(identity::get_user))
-        .route("/users/:user_id/wallet", get(identity::get_wallet))
+        .route("/users/me", get(identity::get_user))
+        .route("/users/me/wallet", get(identity::get_wallet))
         .route("/resolve/:user_id", get(identity::resolve_user_id));
 
     // Payment routes
