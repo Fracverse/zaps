@@ -1,3 +1,6 @@
+-- Migration: add_user_roles
+-- Created: 2026-01-25 12:28:05 UTC
+
 -- Add role column to users table
 ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user';
 

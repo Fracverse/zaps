@@ -70,3 +70,8 @@ dashmap = "5.5"
 [dev-dependencies]
 tokio-test = "0.4"
 httpmock = "0.7"
+
+# Binaries
+[[bin]]
+name = "new_migration"
+path = "src/bin/new_migration.rs"
