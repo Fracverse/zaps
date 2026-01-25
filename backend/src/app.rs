@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use deadpool_postgres::Pool;
@@ -9,7 +9,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
+    http::{admin, auth, health, identity, notifications, payments, profiles, transfers, withdrawals},
     middleware::{auth as auth_middleware, metrics, rate_limit, request_id, role_guard},
     role::Role,
     service::ServiceContainer,
@@ -72,6 +72,13 @@ pub async fn create_app(
             axum::routing::patch(notifications::mark_notification_read),
         );
 
+    // Profile routes
+    let profile_routes = Router::new()
+        .route("/", post(profiles::create_profile))
+        .route("/:user_id", get(profiles::get_profile))
+        .route("/:user_id", patch(profiles::update_profile))
+        .route("/:user_id", delete(profiles::delete_profile));
+
     // Admin routes (protected)
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
@@ -87,6 +94,7 @@ pub async fn create_app(
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
         .nest("/notifications", notification_routes)
+        .nest("/profiles", profile_routes)
         .nest("/admin", admin_routes)
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
