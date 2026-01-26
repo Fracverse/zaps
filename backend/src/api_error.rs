@@ -45,8 +45,8 @@ pub enum ApiError {
     #[error("Compliance violation: {0}")]
     Compliance(String),
 
-    #[error("Rate limit exceeded")]
-    RateLimit,
+    #[error("Rate limit exceeded: {0}")]
+    RateLimit(String),
 }
 
 #[derive(Serialize)]
@@ -71,7 +71,7 @@ impl IntoResponse for ApiError {
             ApiError::Jwt(_) => (StatusCode::UNAUTHORIZED, "INVALID_TOKEN"),
             ApiError::Stellar(_) => (StatusCode::BAD_REQUEST, "STELLAR_ERROR"),
             ApiError::Compliance(_) => (StatusCode::FORBIDDEN, "COMPLIANCE_VIOLATION"),
-            ApiError::RateLimit => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMIT_EXCEEDED"),
+            ApiError::RateLimit(_) => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMIT_EXCEEDED"),
         };
 
         let error_response = ErrorResponse {

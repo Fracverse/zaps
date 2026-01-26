@@ -1,3 +1,4 @@
+use crate::models::{RateLimitConfig, RateLimitScope};
 use config::{Config as ConfigBuilder, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -18,6 +19,7 @@ pub struct Config {
     #[serde(rename = "queue")]
     pub queue_config: QueueConfig,
     pub environment: EnvironmentType,
+    pub rate_limit: RateLimitConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -182,6 +184,10 @@ impl Default for Config {
                 dead_letter_max_size: 10000,
                 worker_count: 4,
                 reclaim_interval_seconds: 60,
+            rate_limit: RateLimitConfig {
+                window_ms: 60000, // 1 minute
+                max_requests: 100,
+                scope: RateLimitScope::Ip,
             },
         }
     }

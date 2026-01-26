@@ -10,6 +10,7 @@ pub mod job_worker;
 pub mod middleware;
 pub mod models;
 pub mod queue;
+pub mod role;
 // pub mod realtime; // TODO: Implement when needed
 pub mod service;
 pub mod telemetry;
