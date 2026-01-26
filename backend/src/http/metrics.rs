@@ -36,7 +36,7 @@ impl IntoResponse for PrometheusMetrics {
 }
 
 /// GET /metrics - Prometheus-compatible metrics endpoint
-/// 
+///
 /// Returns metrics in Prometheus text exposition format.
 /// This endpoint can be scraped by Prometheus or other compatible monitoring systems.
 pub async fn prometheus_metrics() -> impl IntoResponse {
@@ -54,20 +54,18 @@ pub async fn prometheus_metrics() -> impl IntoResponse {
 }
 
 /// GET /metrics/json - JSON metrics endpoint
-/// 
+///
 /// Returns the metrics payload as specified in the issue:
 /// - uptime: number (seconds)
 /// - requestCount: number
 /// - errorRate: number (percentage)
-pub async fn json_metrics(
-    State(services): State<Arc<ServiceContainer>>,
-) -> Json<MetricsResponse> {
+pub async fn json_metrics(State(services): State<Arc<ServiceContainer>>) -> Json<MetricsResponse> {
     // Update database pool metrics
     let db_pool_size = services.db_pool.status().size as usize;
     MetricsService::update_db_pool_metrics(db_pool_size);
 
     let detailed = MetricsService::get_detailed_metrics();
-    
+
     Json(MetricsResponse {
         uptime: detailed.basic.uptime,
         request_count: detailed.basic.request_count,
@@ -79,7 +77,7 @@ pub async fn json_metrics(
 }
 
 /// GET /metrics/alerts - Check current alert status
-/// 
+///
 /// Returns any active alerts based on configured thresholds.
 /// This is a placeholder for future alerting integration.
 pub async fn check_alerts() -> Json<Vec<crate::service::AlertPayload>> {

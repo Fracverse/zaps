@@ -1,8 +1,7 @@
 use lazy_static::lazy_static;
 use prometheus::{
-    core::Collector,
-    register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Encoder, Gauge,
-    HistogramVec, TextEncoder,
+    core::Collector, register_counter_vec, register_gauge, register_histogram_vec, CounterVec,
+    Encoder, Gauge, HistogramVec, TextEncoder,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -139,7 +138,7 @@ impl MetricsService {
         let alert_thresholds = vec![
             AlertThreshold {
                 metric_name: "error_rate".to_string(),
-                warning_threshold: 5.0,  // 5% error rate warning
+                warning_threshold: 5.0,   // 5% error rate warning
                 critical_threshold: 10.0, // 10% error rate critical
             },
             AlertThreshold {
@@ -178,7 +177,7 @@ impl MetricsService {
     /// Get total request count from Prometheus metrics
     pub fn get_request_count() -> u64 {
         use prometheus::proto::MetricFamily;
-        
+
         let metric_families: Vec<MetricFamily> = HTTP_REQUESTS_TOTAL.collect();
         metric_families
             .first()
@@ -194,7 +193,7 @@ impl MetricsService {
     /// Get total error count from Prometheus metrics
     pub fn get_error_count() -> u64 {
         use prometheus::proto::MetricFamily;
-        
+
         let metric_families: Vec<MetricFamily> = HTTP_ERRORS_TOTAL.collect();
         metric_families
             .first()
@@ -284,9 +283,10 @@ impl MetricsService {
     /// Normalize path for metric labels (replace IDs with placeholders)
     fn normalize_path(path: &str) -> String {
         // Replace UUIDs with :id placeholder
-        let uuid_regex =
-            regex::Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-                .unwrap();
+        let uuid_regex = regex::Regex::new(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        )
+        .unwrap();
         let path = uuid_regex.replace_all(path, ":id");
 
         // Replace numeric IDs with :id placeholder
@@ -386,7 +386,11 @@ impl MetricsService {
     /// Placeholder for sending alerts to external systems (webhooks, Slack, PagerDuty, etc.)
     /// TODO: Implement actual webhook integration
     #[allow(dead_code)]
-    pub async fn send_alert_webhook(&self, alert: &AlertPayload, webhook_url: &str) -> Result<(), reqwest::Error> {
+    pub async fn send_alert_webhook(
+        &self,
+        alert: &AlertPayload,
+        webhook_url: &str,
+    ) -> Result<(), reqwest::Error> {
         tracing::info!(
             webhook_url = %webhook_url,
             alert_title = %alert.title,
@@ -420,10 +424,7 @@ mod tests {
             MetricsService::normalize_path("/orders/12345"),
             "/orders/:id"
         );
-        assert_eq!(
-            MetricsService::normalize_path("/health"),
-            "/health"
-        );
+        assert_eq!(MetricsService::normalize_path("/health"), "/health");
     }
 
     #[test]

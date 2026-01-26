@@ -25,11 +25,11 @@ pub fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Initialize tracing/logging with custom configuration
-/// 
+///
 /// Supports two logging formats:
 /// - Compact: Human-readable format for development
 /// - JSON: Structured format for production and log aggregation (Datadog, Elasticsearch, etc.)
-/// 
+///
 /// Set `LOG_FORMAT=json` environment variable to enable JSON logging.
 pub fn init_tracing_with_config(config: TelemetryConfig) -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = match config.log_filter {
@@ -85,7 +85,7 @@ pub fn init_tracing_with_config(config: TelemetryConfig) -> Result<(), Box<dyn s
 }
 
 /// Create a span for tracing a specific operation
-/// 
+///
 /// Example usage:
 /// ```ignore
 /// let _span = create_operation_span("process_payment", &[("payment_id", "123")]);
@@ -111,4 +111,3 @@ macro_rules! log_event {
         );
     };
 }
-

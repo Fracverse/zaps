@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::service::MetricsService;
 
 /// Middleware that tracks HTTP request metrics using the MetricsService.
-/// 
+///
 /// This middleware:
 /// - Records request count, duration, and error rates
 /// - Tracks active connections

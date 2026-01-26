@@ -16,7 +16,9 @@ pub use bridge_service::BridgeService;
 pub use compliance_service::ComplianceService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
-pub use metrics_service::{AlertPayload, AlertSeverity, DetailedMetrics, MetricsPayload, MetricsService};
+pub use metrics_service::{
+    AlertPayload, AlertSeverity, DetailedMetrics, MetricsPayload, MetricsService,
+};
 pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
 pub use rate_limit_service::RateLimitService;

@@ -39,7 +39,7 @@ pub struct LivenessResponse {
 }
 
 /// GET /health/health - Basic health check
-/// 
+///
 /// Returns a simple health status indicating the service is running.
 /// This endpoint is suitable for basic load balancer health checks.
 pub async fn health_check() -> Json<HealthResponse> {
@@ -51,12 +51,10 @@ pub async fn health_check() -> Json<HealthResponse> {
 }
 
 /// GET /health/ready - Readiness probe
-/// 
+///
 /// Returns detailed health status including database connectivity.
 /// This endpoint is suitable for Kubernetes readiness probes.
-pub async fn readiness_check(
-    State(services): State<Arc<ServiceContainer>>,
-) -> impl IntoResponse {
+pub async fn readiness_check(State(services): State<Arc<ServiceContainer>>) -> impl IntoResponse {
     // Check database connectivity
     let (db_status, pool_status) = match services.db_pool.get().await {
         Ok(_client) => {
@@ -99,7 +97,7 @@ pub async fn readiness_check(
 }
 
 /// GET /health/live - Liveness probe
-/// 
+///
 /// Returns a simple "alive" status. This endpoint should always return 200
 /// as long as the process is running. Suitable for Kubernetes liveness probes.
 pub async fn liveness_check() -> Json<LivenessResponse> {
