@@ -26,25 +26,26 @@ jobs:
           cache: npm
           cache-dependency-path: mobileapp/package-lock.json
 
+      # Install all dependencies (including devDependencies)
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify Prettier & ESLint packages
-        run: |
-          npm install --save-dev prettier eslint-config-prettier eslint-plugin-prettier || true
-  
+      # Lint
       - name: Lint
         run: npm run lint
 
+      # Format check
       - name: Format Check
         run: npm run format:check
 
+      # Run tests in CI mode
       - name: Test
         run: npm test -- --watch=false
         env:
           CI: true
 
-      - name: Build Check (Expo Web)
+      # Build check (Expo Web)
+      - name: Build Check
         run: npx expo export --platform web --output-dir dist || echo "Build check completed"
 
   backend:
@@ -68,23 +69,29 @@ jobs:
       ZAPS_DATABASE__URL: postgres://postgres:password@localhost:5432/zaps
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+
       - name: Check
         working-directory: ./backend
         run: cargo check
+
       - name: Test
         working-directory: ./backend
         run: cargo test
+
       - name: Format
         working-directory: ./backend
         run: cargo fmt --all -- --check
+
       - name: Clippy
         working-directory: ./backend
         run: cargo clippy -- -D warnings
@@ -94,24 +101,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: contracts
+
       - name: Build
         working-directory: ./contracts
         run: cargo build --release --workspace
+
       - name: Test
         working-directory: ./contracts
         run: cargo test --workspace
+
       - name: Format
         working-directory: ./contracts
         run: cargo fmt --all -- --check
+
       - name: Clippy
         working-directory: ./contracts
         run: cargo clippy --all-targets --all-features -- -D warnings
