@@ -49,7 +49,9 @@ pub async fn create_profile(
     Extension(user): Extension<AuthenticatedUser>,
     Json(request): Json<CreateUserProfileDto>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let user_uuid = Uuid::parse_str(&user.user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
+    // Resolve username to internal UUID
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
     // Check if profile already exists
     if services.profile.get_profile(user_uuid).await?.is_some() {
@@ -67,7 +69,7 @@ pub async fn create_profile(
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
-        user_id: profile.user_id,
+        user_id: user.user_id, // Return the username string
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -81,14 +83,16 @@ pub async fn get_profile(
     State(services): State<Arc<ServiceContainer>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let user_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
+    // Resolve username to internal UUID
+    let user_model = services.identity.get_user_by_id(&user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
     
     let profile = services.profile.get_profile(user_uuid).await?
         .ok_or(ApiError::NotFound("Profile not found".into()))?;
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
-        user_id: profile.user_id,
+        user_id: user_id, // Return the username string
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -104,13 +108,14 @@ pub async fn update_profile(
     Path(user_id): Path<String>,
     Json(request): Json<UpdateUserProfileDto>,
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
-    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
-    
     // Authorization check: User can only update their own profile, unless Admin
-    // Note: Comparing strings for simplicity, assuming user.user_id is valid UUID string
     if user.user_id != user_id && user.role != Role::Admin {
         return Err(ApiError::Authorization("You can only update your own profile".into()));
     }
+
+    // Resolve username to internal UUID
+    let user_model = services.identity.get_user_by_id(&user_id).await?;
+    let target_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
     let profile = services.profile.update_profile(
         target_uuid,
@@ -123,7 +128,7 @@ pub async fn update_profile(
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
-        user_id: profile.user_id,
+        user_id: user_id,
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -138,12 +143,14 @@ pub async fn delete_profile(
     Extension(user): Extension<AuthenticatedUser>,
     Path(user_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let target_uuid = Uuid::parse_str(&user_id).map_err(|_| ApiError::Validation("Invalid user ID format".into()))?;
-
     // Authorization check: User can only delete their own profile, unless Admin
     if user.user_id != user_id && user.role != Role::Admin {
         return Err(ApiError::Authorization("You can only delete your own profile".into()));
     }
+
+    // Resolve username to internal UUID
+    let user_model = services.identity.get_user_by_id(&user_id).await?;
+    let target_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
     services.profile.delete_profile(target_uuid).await?;
 
