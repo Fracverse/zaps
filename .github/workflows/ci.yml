@@ -20,15 +20,21 @@ jobs:
         with:
           node-version: '18.x'
           cache: 'npm'
+          cache-dependency-path: mobileapp/package-lock.json
       - name: Install dependencies
+        working-directory: ./mobileapp
         run: npm ci
       - name: Lint
+        working-directory: ./mobileapp
         run: npm run lint
       - name: Format Check
+        working-directory: ./mobileapp
         run: npm run format:check
       - name: Test
+        working-directory: ./mobileapp
         run: npm test
       - name: Build Check
+        working-directory: ./mobileapp
         run: npm run build
 
   backend:
