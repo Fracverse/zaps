@@ -25,18 +25,17 @@ impl IdentityService {
 
         // Generate a unique Stellar address (in production, this would be generated properly)
         let stellar_address = format!("G{}", Uuid::new_v4().simple().to_string().to_uppercase());
-        let user_id_db = Uuid::new_v4().to_string();
 
         let role_str = Role::User.as_str();
         let row = client
             .query_one(
-                "INSERT INTO users (id, user_id, stellar_address, role) VALUES ($1, $2, $3, $4) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
-                &[&user_id_db, &user_id, &stellar_address, &role_str],
+                "INSERT INTO users (user_id, stellar_address, role) VALUES ($1, $2, $3) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
+                &[&user_id, &stellar_address, &role_str],
             )
             .await?;
 
         Ok(User {
-            id: row.get(0),
+            id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
             role: Role::from_str(row.get::<_, &str>(3)),
@@ -57,7 +56,7 @@ impl IdentityService {
             .map_err(|_| ApiError::NotFound("User not found".to_string()))?;
 
         Ok(User {
-            id: row.get(0),
+            id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
             role: Role::from_str(row.get::<_, &str>(3)),
