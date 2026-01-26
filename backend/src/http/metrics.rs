@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, Response, StatusCode},
+    http::{Response, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -61,7 +61,7 @@ pub async fn prometheus_metrics() -> impl IntoResponse {
 /// - errorRate: number (percentage)
 pub async fn json_metrics(State(services): State<Arc<ServiceContainer>>) -> Json<MetricsResponse> {
     // Update database pool metrics
-    let db_pool_size = services.db_pool.status().size as usize;
+    let db_pool_size = services.db_pool.status().size;
     MetricsService::update_db_pool_metrics(db_pool_size);
 
     let detailed = MetricsService::get_detailed_metrics();

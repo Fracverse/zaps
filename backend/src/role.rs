@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 
 /// User roles for authorization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -14,15 +15,19 @@ pub enum Role {
     Admin,
 }
 
-impl Role {
-    /// Parse role from string (case-insensitive)
-    pub fn from_string(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl FromStr for Role {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "admin" => Role::Admin,
             "merchant" => Role::Merchant,
             _ => Role::User,
-        }
+        })
     }
+}
+
+impl Role {
 
     /// Convert role to string representation
     pub fn as_str(&self) -> &'static str {
@@ -46,12 +51,6 @@ impl Role {
         }
     }
 }
-
-// impl Default for Role {
-//     fn default() -> Self {
-//         Role::User
-//     }
-// }
 
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
