@@ -1,8 +1,9 @@
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
+use axum::{extract::{Request, State}, http::StatusCode, middleware::Next, response::Response};
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-use crate::role::Role;
+use crate::{role::Role, service::ServiceContainer};
 
 /// Authenticated user information extracted from JWT
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +21,11 @@ pub struct Claims {
 }
 
 /// Authentication middleware - validates JWT and extracts user info
-pub async fn authenticate(mut req: Request, next: Next) -> Result<Response, StatusCode> {
+pub async fn authenticate(
+    State(services): State<Arc<ServiceContainer>>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let auth_header = req
         .headers()
         .get("authorization")
@@ -32,8 +37,7 @@ pub async fn authenticate(mut req: Request, next: Next) -> Result<Response, Stat
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    // In production, get the secret from config via state
-    let decoding_key = DecodingKey::from_secret(b"your-secret-key");
+    let decoding_key = DecodingKey::from_secret(services.config.jwt.secret.as_bytes());
 
     match decode::<Claims>(token, &decoding_key, &Validation::default()) {
         Ok(token_data) => {
