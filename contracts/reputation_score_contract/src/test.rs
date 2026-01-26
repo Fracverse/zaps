@@ -22,18 +22,18 @@ fn test_initialize() {
 fn test_increase_score() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
+
     client.increase_score(&user, &10);
     assert_eq!(client.get_score(&user), 10);
-    
+
     client.increase_score(&user, &5);
     assert_eq!(client.get_score(&user), 15);
 }
@@ -42,21 +42,21 @@ fn test_increase_score() {
 fn test_decrease_score() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
+
     client.increase_score(&user, &20);
     assert_eq!(client.get_score(&user), 20);
-    
+
     client.decrease_score(&user, &5);
     assert_eq!(client.get_score(&user), 15);
-    
+
     // Test underflow prevention
     client.decrease_score(&user, &20);
     assert_eq!(client.get_score(&user), 0);
@@ -67,34 +67,32 @@ fn test_decrease_score() {
 fn test_auth_enforcement_increase() {
     let env = Env::default();
     // No mock_all_auths() here to test actual auth
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let attacker = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
+
     // This should fail because attacker is trying to call it
-    // In a real test we'd need to mock the auth for the admin, 
+    // In a real test we'd need to mock the auth for the admin,
     // but here we just want to see it fail when no auth is provided or wrong one is used.
-    // client.increase_score(&user, &10); 
-    
+    // client.increase_score(&user, &10);
+
     // Setting up the specific auth for admin
-    env.mock_auths(&[
-        soroban_sdk::testutils::MockAuth {
-            address: &attacker,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "increase_score",
-                args: vec![&env, user.into_val(&env), 10u32.into_val(&env)],
-                sub_invokes: &[],
-            },
-        }
-    ]);
-    
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "increase_score",
+            args: vec![&env, user.into_val(&env), 10u32.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
     client.increase_score(&user, &10);
 }
 
@@ -112,22 +110,22 @@ fn test_get_score_uninitialized_user() {
 fn test_multiple_users() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user1 = Address::generate(&env);
     let user2 = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
+
     client.increase_score(&user1, &10);
     client.increase_score(&user2, &20);
-    
+
     assert_eq!(client.get_score(&user1), 10);
     assert_eq!(client.get_score(&user2), 20);
-    
+
     client.decrease_score(&user1, &5);
     assert_eq!(client.get_score(&user1), 5);
     assert_eq!(client.get_score(&user2), 20);
@@ -138,15 +136,15 @@ fn test_multiple_users() {
 fn test_score_overflow() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
+
     client.increase_score(&user, &u32::MAX);
     client.increase_score(&user, &1); // Should panic
 }
@@ -155,28 +153,25 @@ fn test_score_overflow() {
 #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
 fn test_auth_enforcement_decrease() {
     let env = Env::default();
-    
+
     let contract_id = env.register_contract(None, ReputationScoreContract);
     let client = ReputationScoreContractClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     let attacker = Address::generate(&env);
-    
+
     client.initialize(&admin);
-    
-    env.mock_auths(&[
-        soroban_sdk::testutils::MockAuth {
-            address: &attacker,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "decrease_score",
-                args: vec![&env, user.into_val(&env), 10u32.into_val(&env)],
-                sub_invokes: &[],
-            },
-        }
-    ]);
-    
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "decrease_score",
+            args: vec![&env, user.into_val(&env), 10u32.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
     client.decrease_score(&user, &10);
 }
-

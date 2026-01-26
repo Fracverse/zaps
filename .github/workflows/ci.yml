@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ['main', 'master']
+    branches: ['main', 'master','fix-ci']
   pull_request:
-    branches: ['main', 'master']
+    branches: ['main', 'master','fix-ci']
 
 env:
   CARGO_TERM_COLOR: always
@@ -89,7 +89,7 @@ jobs:
           workspaces: contracts
       - name: Build
         working-directory: ./contracts
-        run: cargo build --target wasm32-unknown-unknown --release --workspace
+        run: cargo build --release --workspace
       - name: Test
         working-directory: ./contracts
         run: cargo test --workspace
@@ -98,4 +98,4 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         working-directory: ./contracts
-        run: cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings

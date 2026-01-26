@@ -39,7 +39,7 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            role: Role::from_str(row.get::<_, &str>(3)),
+            role: Role::from_string(row.get::<_, &str>(3)),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         })
@@ -60,7 +60,7 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            role: Role::from_str(row.get::<_, &str>(3)),
+            role: Role::from_string(row.get::<_, &str>(3)),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(6),
         };
@@ -84,7 +84,7 @@ impl IdentityService {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
             stellar_address: row.get(2),
-            role: Role::from_str(row.get::<_, &str>(3)),
+            role: Role::from_string(row.get::<_, &str>(3)),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         })
