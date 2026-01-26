@@ -4,10 +4,11 @@ pub mod bridge_service;
 pub mod compliance_service;
 pub mod identity_service;
 pub mod indexer_service;
-pub mod payment_service;
 pub mod notification_service;
+pub mod payment_service;
 pub mod rate_limit_service;
 pub mod profile_service;
+pub mod soroban_service;
 
 pub use anchor_service::AnchorService;
 pub use audit_service::AuditService;
@@ -15,10 +16,11 @@ pub use bridge_service::BridgeService;
 pub use compliance_service::ComplianceService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
-pub use payment_service::PaymentService;
 pub use notification_service::NotificationService;
+pub use payment_service::PaymentService;
 pub use rate_limit_service::RateLimitService;
 pub use profile_service::ProfileService;
+pub use soroban_service::SorobanService;
 
 use crate::config::Config;
 use deadpool_postgres::Pool;
@@ -36,6 +38,7 @@ pub struct ServiceContainer {
     pub notification: NotificationService,
     pub rate_limit: RateLimitService,
     pub profile: ProfileService,
+    pub soroban: SorobanService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
@@ -54,6 +57,7 @@ impl ServiceContainer {
         let notification = NotificationService::new(db_pool.clone(), config.clone());
         let rate_limit = RateLimitService::new(config.clone());
         let profile = ProfileService::new(db_pool.clone(), config.clone());
+        let soroban = SorobanService::new(config.clone());
 
         Ok(Self {
             identity,
@@ -66,6 +70,7 @@ impl ServiceContainer {
             notification,
             rate_limit,
             profile,
+            soroban,
             config,
             db_pool,
         })

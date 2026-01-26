@@ -36,7 +36,8 @@ pub struct NotificationResponseDto {
 
 #[derive(Debug, Deserialize)]
 pub struct NotificationQuery {
-    pub userId: String,
+    #[serde(rename = "userId")]
+    pub user_id: String,
 }
 
 pub async fn create_notification(
@@ -44,7 +45,7 @@ pub async fn create_notification(
     Json(request): Json<CreateNotificationDto>,
 ) -> Result<Json<NotificationResponseDto>, ApiError> {
     let notification_type = crate::models::NotificationType::from_str(&request.notification_type);
-    
+
     let notification = services
         .notification
         .create_notification(CreateNotificationRequest {
@@ -74,7 +75,7 @@ pub async fn get_notifications(
 ) -> Result<Json<Vec<NotificationResponseDto>>, ApiError> {
     let notifications = services
         .notification
-        .get_user_notifications(&query.userId)
+        .get_user_notifications(&query.user_id)
         .await?;
 
     let response = notifications
@@ -101,7 +102,10 @@ pub async fn mark_notification_read(
     let notification_uuid = Uuid::parse_str(&id)
         .map_err(|_| ApiError::Validation("Invalid Notification ID".to_string()))?;
 
-    services.notification.mark_as_read(notification_uuid).await?;
+    services
+        .notification
+        .mark_as_read(notification_uuid)
+        .await?;
 
     Ok(())
 }

@@ -38,7 +38,7 @@ ring = "0.17"
 # Stellar SDK - TODO: Use correct Stellar Rust SDK
 # Check: https://crates.io/crates/stellar-rust-sdk or similar
 # For now, we'll comment this out until we find the right crate
-# stellar-sdk = "0.1"
+# stellar_sdk = "0.1"
 soroban-sdk = "21.0"
 
 # HTTP client
@@ -70,3 +70,8 @@ dashmap = "5.5"
 [dev-dependencies]
 tokio-test = "0.4"
 httpmock = "0.7"
+
+# Binaries
+[[bin]]
+name = "new_migration"
+path = "src/bin/new_migration.rs"

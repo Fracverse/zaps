@@ -10,6 +10,7 @@ port = 3000
 [jwt]
 secret = "change-this-in-production"
 expiration_hours = 24
+refresh_expiration_hours = 168
 
 [stellar]
 network_id = "Test SDF Network ; September 2015"
@@ -46,6 +47,7 @@ medium_risk_amount = 1000000  # 1,000 USD
 suspicious_patterns = []
 
 [rate_limit]
-window_ms = 60000
+window_ms = 60000 # 1 minute
 max_requests = 100
 scope = "IP"
+

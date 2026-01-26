@@ -294,4 +294,21 @@ pub struct UserProfile {
     pub metadata: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+pub struct BuildTransactionDto {
+    pub contract_id: String,
+    pub method: String,
+    pub args: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    PENDING,
+    CONFIRMED,
+    FAILED,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedTransactionResponse {
+    pub tx_hash: String,
+    pub status: TransactionStatus,
 }

@@ -20,7 +20,7 @@ impl IdentityService {
         Self { db_pool, config }
     }
 
-    pub async fn create_user(&self, user_id: String) -> Result<User, ApiError> {
+    pub async fn create_user(&self, user_id: String, pin_hash: String) -> Result<User, ApiError> {
         let client = self.db_pool.get().await?;
 
         // Generate a unique Stellar address (in production, this would be generated properly)
@@ -42,6 +42,30 @@ impl IdentityService {
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
         })
+    }
+
+    pub async fn get_user_with_pin_hash(&self, user_id: &str) -> Result<(User, String), ApiError> {
+        let client = self.db_pool.get().await?;
+
+        let row = client
+            .query_one(
+                "SELECT id, user_id, stellar_address, role, pin_hash, created_at, updated_at FROM users WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await
+            .map_err(|_| ApiError::NotFound("User not found".to_string()))?;
+
+        let user = User {
+            id: row.get::<_, Uuid>(0).to_string(),
+            user_id: row.get(1),
+            stellar_address: row.get(2),
+            role: Role::from_str(row.get::<_, &str>(3)),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+        };
+        let pin_hash: String = row.get(4);
+
+        Ok((user, pin_hash))
     }
 
     pub async fn get_user_by_id(&self, user_id: &str) -> Result<User, ApiError> {

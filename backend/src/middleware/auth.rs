@@ -1,23 +1,20 @@
-use axum::{extract::{Request, State}, http::StatusCode, middleware::Next, response::Response};
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use crate::role::Role;
+use crate::{auth, service::ServiceContainer};
+use axum::{
+    async_trait,
+    extract::{FromRequestParts, Request, State},
+    http::{request::Parts, StatusCode},
+    middleware::Next,
+    response::Response,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-use crate::{role::Role, service::ServiceContainer};
 
 /// Authenticated user information extracted from JWT
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
     pub user_id: String,
     pub role: Role,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String, // user_id
-    pub role: Role,
-    pub exp: usize,
-    pub iat: usize,
 }
 
 /// Authentication middleware - validates JWT and extracts user info
@@ -37,18 +34,34 @@ pub async fn authenticate(
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    let decoding_key = DecodingKey::from_secret(services.config.jwt.secret.as_bytes());
-
-    match decode::<Claims>(token, &decoding_key, &Validation::default()) {
-        Ok(token_data) => {
+    // Validate as access token using secret from config
+    match auth::validate_access_token(token, &services.config.jwt.secret) {
+        Ok(claims) => {
             let auth_user = AuthenticatedUser {
-                user_id: token_data.claims.sub,
-                role: token_data.claims.role,
+                user_id: claims.sub,
+                role: claims.role,
             };
             req.extensions_mut().insert(auth_user);
             Ok(next.run(req).await)
         }
         Err(_) => Err(StatusCode::UNAUTHORIZED),
+    }
+}
+
+/// Axum extractor for getting the authenticated user from request
+#[async_trait]
+impl<S> FromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<AuthenticatedUser>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
     }
 }
 
