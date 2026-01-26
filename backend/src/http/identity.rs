@@ -5,11 +5,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{api_error::ApiError, service::ServiceContainer};
+use crate::{api_error::ApiError, middleware::AuthenticatedUser, service::ServiceContainer};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub user_id: String,
+    pub pin: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,7 +31,10 @@ pub async fn create_user(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let user = services.identity.create_user(request.user_id).await?;
+    let user = services
+        .identity
+        .create_user(request.user_id, request.pin)
+        .await?;
 
     Ok(Json(UserResponse {
         id: uuid::Uuid::parse_str(&user.id).unwrap_or_default(),
@@ -42,9 +46,9 @@ pub async fn create_user(
 
 pub async fn get_user(
     State(services): State<Arc<ServiceContainer>>,
-    Path(user_id): Path<String>,
+    user: AuthenticatedUser,
 ) -> Result<Json<UserResponse>, ApiError> {
-    let user = services.identity.get_user_by_id(&user_id).await?;
+    let user = services.identity.get_user_by_id(&user.user_id).await?;
 
     Ok(Json(UserResponse {
         id: uuid::Uuid::parse_str(&user.id).unwrap_or_default(),
@@ -56,9 +60,9 @@ pub async fn get_user(
 
 pub async fn get_wallet(
     State(services): State<Arc<ServiceContainer>>,
-    Path(user_id): Path<String>,
+    user: AuthenticatedUser,
 ) -> Result<Json<WalletResponse>, ApiError> {
-    let wallet = services.identity.get_user_wallet(&user_id).await?;
+    let wallet = services.identity.get_user_wallet(&user.user_id).await?;
 
     Ok(Json(WalletResponse {
         user_id: wallet.user_id,

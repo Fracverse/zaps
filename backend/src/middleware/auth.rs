@@ -1,15 +1,28 @@
-use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use crate::role::Role;
+use crate::{auth, service::ServiceContainer};
+use axum::{
+    async_trait,
+    extract::{FromRequestParts, Request, State},
+    http::{request::Parts, StatusCode},
+    middleware::Next,
+    response::Response,
+};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String, // user_id
-    pub exp: usize,
-    pub iat: usize,
+/// Authenticated user information extracted from JWT
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthenticatedUser {
+    pub user_id: String,
+    pub role: Role,
 }
 
-pub async fn authenticate(mut req: Request, next: Next) -> Result<Response, StatusCode> {
+/// Authentication middleware - validates JWT and extracts user info
+pub async fn authenticate(
+    State(services): State<Arc<ServiceContainer>>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
     let auth_header = req
         .headers()
         .get("authorization")
@@ -21,31 +34,43 @@ pub async fn authenticate(mut req: Request, next: Next) -> Result<Response, Stat
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    // In production, get the secret from config
-    let decoding_key = DecodingKey::from_secret(b"your-secret-key");
-
-    match decode::<Claims>(token, &decoding_key, &Validation::default()) {
-        Ok(token_data) => {
-            // Add user_id to request extensions
-            req.extensions_mut().insert(token_data.claims.sub);
+    // Validate as access token using secret from config
+    match auth::validate_access_token(token, &services.config.jwt.secret) {
+        Ok(claims) => {
+            let auth_user = AuthenticatedUser {
+                user_id: claims.sub,
+                role: claims.role,
+            };
+            req.extensions_mut().insert(auth_user);
             Ok(next.run(req).await)
         }
         Err(_) => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
-pub async fn admin_only(req: Request, next: Next) -> Result<Response, StatusCode> {
-    // First check if user is authenticated
-    let user_id = req.extensions().get::<String>().cloned();
-    if user_id.is_none() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
+/// Axum extractor for getting the authenticated user from request
+#[async_trait]
+impl<S> FromRequestParts<S> for AuthenticatedUser
+where
+    S: Send + Sync,
+{
+    type Rejection = StatusCode;
 
-    // In production, check if user has admin role
-    // For now, we'll allow all authenticated users
-    Ok(next.run(req).await)
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<AuthenticatedUser>()
+            .cloned()
+            .ok_or(StatusCode::UNAUTHORIZED)
+    }
 }
 
+/// Get authenticated user from request extensions
+pub fn get_authenticated_user(req: &Request) -> Option<AuthenticatedUser> {
+    req.extensions().get::<AuthenticatedUser>().cloned()
+}
+
+/// Legacy helper for backwards compatibility
 pub fn get_user_id_from_request(req: &Request) -> Option<String> {
-    req.extensions().get::<String>().cloned()
+    get_authenticated_user(req).map(|u| u.user_id)
 }

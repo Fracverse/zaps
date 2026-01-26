@@ -5,6 +5,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AuditService {
     db_pool: Arc<Pool>,
     config: Config,

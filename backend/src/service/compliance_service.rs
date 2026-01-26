@@ -3,6 +3,7 @@ use deadpool_postgres::Pool;
 use std::sync::Arc;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ComplianceService {
     db_pool: Arc<Pool>,
     config: Config,

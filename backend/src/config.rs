@@ -34,6 +34,7 @@ pub struct ServerConfig {
 pub struct JwtConfig {
     pub secret: String,
     pub expiration_hours: i64,
+    pub refresh_expiration_hours: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,12 +120,11 @@ impl Default for Config {
             database: DatabaseConfig {
                 url: "postgres://localhost/zaps".to_string(),
             },
-            server: ServerConfig {
-                port: 3000,
-            },
+            server: ServerConfig { port: 3000 },
             jwt: JwtConfig {
                 secret: "change-this-in-production".to_string(),
                 expiration_hours: 24,
+                refresh_expiration_hours: 168, // 7 days
             },
             stellar_network: StellarNetwork {
                 passphrase: "Test SDF Network ; September 2015".to_string(),
