@@ -10,8 +10,9 @@ tokio-util = "0.7"
 
 # Web framework
 axum = { version = "0.7", features = ["json", "multipart", "macros"] }
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace", "request-id", "util"] }
+governor = "0.6"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -27,7 +28,7 @@ sqlx = { version = "0.7", features = [
     "migrate"
 ] }
 deadpool-postgres = "0.10"
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 
 # Authentication & Security
 jsonwebtoken = "9.0"
@@ -37,7 +38,7 @@ ring = "0.17"
 # Stellar SDK - TODO: Use correct Stellar Rust SDK
 # Check: https://crates.io/crates/stellar-rust-sdk or similar
 # For now, we'll comment this out until we find the right crate
-# stellar-sdk = "0.1"
+# stellar_sdk = "0.1"
 soroban-sdk = "21.0"
 
 # HTTP client
@@ -63,8 +64,14 @@ base64 = "0.21"
 # Metrics & monitoring
 prometheus = "0.13"
 lazy_static = "1.4"
+dashmap = "5.5"
 
 # Testing
 [dev-dependencies]
 tokio-test = "0.4"
 httpmock = "0.7"
+
+# Binaries
+[[bin]]
+name = "new_migration"
+path = "src/bin/new_migration.rs"

@@ -9,8 +9,9 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, payments, transfers, withdrawals},
-    middleware::{auth as auth_middleware, metrics, request_id},
+    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
+    middleware::{auth as auth_middleware, metrics, rate_limit, request_id, role_guard},
+    role::Role,
     service::ServiceContainer,
 };
 
@@ -35,8 +36,8 @@ pub async fn create_app(
     // Identity & Wallet routes
     let identity_routes = Router::new()
         .route("/users", post(identity::create_user))
-        .route("/users/:user_id", get(identity::get_user))
-        .route("/users/:user_id/wallet", get(identity::get_wallet))
+        .route("/users/me", get(identity::get_user))
+        .route("/users/me/wallet", get(identity::get_wallet))
         .route("/resolve/:user_id", get(identity::resolve_user_id));
 
     // Payment routes
@@ -62,13 +63,22 @@ pub async fn create_app(
             get(withdrawals::get_withdrawal_status),
         );
 
+    // Notification routes
+    let notification_routes = Router::new()
+        .route("/notifications", post(notifications::create_notification))
+        .route("/notifications", get(notifications::get_notifications))
+        .route(
+            "/notifications/:id/read",
+            axum::routing::patch(notifications::mark_notification_read),
+        );
+
     // Admin routes (protected)
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
         .route("/transactions", get(admin::get_transactions))
         .route("/users/:user_id/activity", get(admin::get_user_activity))
         .route("/system/health", get(admin::get_system_health))
-        .layer(middleware::from_fn(auth_middleware::admin_only));
+        .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
     // Protected routes (require authentication)
     let protected_routes = Router::new()
@@ -76,8 +86,12 @@ pub async fn create_app(
         .nest("/payments", payment_routes)
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
+        .nest("/notifications", notification_routes)
         .nest("/admin", admin_routes)
-        .layer(middleware::from_fn(auth_middleware::authenticate));
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            auth_middleware::authenticate,
+        ));
 
     // Public routes
     let public_routes = Router::new()
@@ -88,6 +102,10 @@ pub async fn create_app(
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            rate_limit::rate_limit,
+        ))
         .layer(middleware::from_fn(request_id::request_id))
         .layer(middleware::from_fn(metrics::track_metrics))
         .layer(TraceLayer::new_for_http())

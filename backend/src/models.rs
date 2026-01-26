@@ -1,11 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::role::Role;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: String,
     pub user_id: String,
     pub stellar_address: String,
+    pub role: Role,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -223,4 +226,79 @@ pub struct BridgeTransaction {
     pub tx_hash: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NotificationType {
+    SYSTEM,
+    ACTION,
+    SECURITY,
+}
+
+impl NotificationType {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "SYSTEM" => NotificationType::SYSTEM,
+            "ACTION" => NotificationType::ACTION,
+            "SECURITY" => NotificationType::SECURITY,
+            _ => NotificationType::SYSTEM,
+        }
+    }
+
+    pub fn to_string(&self) -> String {
+        match self {
+            NotificationType::SYSTEM => "SYSTEM",
+            NotificationType::ACTION => "ACTION",
+            NotificationType::SECURITY => "SECURITY",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: String,
+    pub user_id: String,
+    pub notification_type: NotificationType,
+    pub title: String,
+    pub message: String,
+    pub metadata: Option<serde_json::Value>,
+    pub read: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RateLimitScope {
+    Ip,
+    User,
+    ApiKey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    pub window_ms: u64,
+    pub max_requests: u32,
+    pub scope: RateLimitScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildTransactionDto {
+    pub contract_id: String,
+    pub method: String,
+    pub args: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    PENDING,
+    CONFIRMED,
+    FAILED,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedTransactionResponse {
+    pub tx_hash: String,
+    pub status: TransactionStatus,
 }

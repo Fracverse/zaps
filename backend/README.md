@@ -116,8 +116,17 @@ cargo clippy
 
 ### Database Migrations
 
-Migrations are automatically run on startup. To manually run migrations:
+Migrations are automatically run on startup. 
 
+**Creating a new migration:**
+```bash
+# Using the Rust binary (recommended)
+cargo run --bin new_migration -- <description>
+```
+
+**Important:** Migration filenames must have unique timestamps to avoid conflicts.
+
+To manually run migrations:
 ```bash
 cargo run --bin migrate
 ```
