@@ -1,6 +1,9 @@
 #[cfg(test)]
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env,IntoVal};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, IntoVal,
+};
 
 #[test]
 fn test_initialization() {
