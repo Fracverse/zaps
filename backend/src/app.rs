@@ -9,23 +9,36 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     config::Config,
-    http::{admin, auth, health, identity, notifications, payments, transfers, withdrawals},
+    http::{
+        admin, auth, health, identity, metrics as metrics_http, notifications, payments, transfers,
+        withdrawals,
+    },
     middleware::{auth as auth_middleware, metrics, rate_limit, request_id, role_guard},
     role::Role,
-    service::ServiceContainer,
+    service::{MetricsService, ServiceContainer},
 };
 
 pub async fn create_app(
     db_pool: Pool,
     config: Config,
 ) -> Result<Router, Box<dyn std::error::Error>> {
+    // Initialize metrics service
+    MetricsService::init();
+
     // Create service container
     let services = Arc::new(ServiceContainer::new(db_pool, config.clone()).await?);
 
     // Health check routes
     let health_routes = Router::new()
         .route("/health", get(health::health_check))
-        .route("/ready", get(health::readiness_check));
+        .route("/ready", get(health::readiness_check))
+        .route("/live", get(health::liveness_check));
+
+    // Metrics routes (Prometheus-compatible)
+    let metrics_routes = Router::new()
+        .route("/metrics", get(metrics_http::prometheus_metrics))
+        .route("/metrics/json", get(metrics_http::json_metrics))
+        .route("/metrics/alerts", get(metrics_http::check_alerts));
 
     // Auth routes
     let auth_routes = Router::new()
@@ -96,7 +109,8 @@ pub async fn create_app(
     // Public routes
     let public_routes = Router::new()
         .nest("/auth", auth_routes)
-        .nest("/health", health_routes);
+        .nest("/health", health_routes)
+        .merge(metrics_routes);
 
     // Combine all routes
     let app = Router::new()

@@ -86,7 +86,7 @@ pub async fn create_payment(
         send_asset: payment.send_asset,
         send_amount: payment.send_amount,
         receive_amount: payment.receive_amount,
-        status: payment.status.to_string_lose(),
+        status: payment.status.to_string(),
         memo: payment.memo,
         created_at: payment.created_at,
     }))
@@ -109,7 +109,7 @@ pub async fn get_payment(
         send_asset: payment.send_asset,
         send_amount: payment.send_amount,
         receive_amount: payment.receive_amount,
-        status: payment.status.to_string_lose(),
+        status: payment.status.to_string(),
         memo: payment.memo,
         created_at: payment.created_at,
     }))
@@ -126,7 +126,7 @@ pub async fn get_payment_status(
 
     Ok(Json(PaymentStatusResponse {
         id: Uuid::parse_str(&payment.id).unwrap_or_default(),
-        status: payment.status.to_string_lose(),
+        status: payment.status.to_string(),
         updated_at: payment.updated_at,
     }))
 }
