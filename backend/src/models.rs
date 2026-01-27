@@ -294,6 +294,9 @@ pub struct UserProfile {
     pub metadata: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildTransactionDto {
     pub contract_id: String,
     pub method: String,
