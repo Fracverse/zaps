@@ -1,18 +1,28 @@
-pub mod identity_service;
-pub mod payment_service;
-pub mod bridge_service;
 pub mod anchor_service;
-pub mod compliance_service;
 pub mod audit_service;
+pub mod bridge_service;
+pub mod compliance_service;
+pub mod identity_service;
 pub mod indexer_service;
+pub mod metrics_service;
+pub mod notification_service;
+pub mod payment_service;
+pub mod rate_limit_service;
+pub mod soroban_service;
 
-pub use identity_service::IdentityService;
-pub use payment_service::PaymentService;
-pub use bridge_service::BridgeService;
 pub use anchor_service::AnchorService;
-pub use compliance_service::ComplianceService;
 pub use audit_service::AuditService;
+pub use bridge_service::BridgeService;
+pub use compliance_service::ComplianceService;
+pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
+pub use metrics_service::{
+    AlertPayload, AlertSeverity, DetailedMetrics, MetricsPayload, MetricsService,
+};
+pub use notification_service::NotificationService;
+pub use payment_service::PaymentService;
+pub use rate_limit_service::RateLimitService;
+pub use soroban_service::SorobanService;
 
 use crate::config::Config;
 use deadpool_postgres::Pool;
@@ -27,15 +37,15 @@ pub struct ServiceContainer {
     pub compliance: ComplianceService,
     pub audit: AuditService,
     pub indexer: IndexerService,
+    pub notification: NotificationService,
+    pub rate_limit: RateLimitService,
+    pub soroban: SorobanService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
 
 impl ServiceContainer {
-    pub async fn new(
-        db_pool: Pool,
-        config: Config,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(db_pool: Pool, config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db_pool = Arc::new(db_pool);
 
         let identity = IdentityService::new(db_pool.clone(), config.clone());
@@ -45,6 +55,9 @@ impl ServiceContainer {
         let compliance = ComplianceService::new(db_pool.clone(), config.clone());
         let audit = AuditService::new(db_pool.clone(), config.clone());
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
+        let notification = NotificationService::new(db_pool.clone(), config.clone());
+        let rate_limit = RateLimitService::new(config.clone());
+        let soroban = SorobanService::new(config.clone());
 
         Ok(Self {
             identity,
@@ -54,6 +67,9 @@ impl ServiceContainer {
             compliance,
             audit,
             indexer,
+            notification,
+            rate_limit,
+            soroban,
             config,
             db_pool,
         })

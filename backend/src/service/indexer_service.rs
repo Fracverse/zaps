@@ -3,6 +3,7 @@ use deadpool_postgres::Pool;
 use std::sync::Arc;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct IndexerService {
     db_pool: Arc<Pool>,
     config: Config,
@@ -18,7 +19,10 @@ impl IndexerService {
         Ok(())
     }
 
-    pub async fn index_transaction(&self, _tx_hash: &str) -> Result<(), crate::api_error::ApiError> {
+    pub async fn index_transaction(
+        &self,
+        _tx_hash: &str,
+    ) -> Result<(), crate::api_error::ApiError> {
         Ok(())
     }
 }

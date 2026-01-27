@@ -5,10 +5,12 @@ use crate::{
 };
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct PaymentService {
     db_pool: Arc<Pool>,
     config: Config,
@@ -54,7 +56,7 @@ impl PaymentService {
         let client = self.db_pool.get().await?;
 
         // Validate merchant exists and is active
-        let merchant = self.get_merchant(&request.merchant_id).await?;
+        let _merchant = self.get_merchant(&request.merchant_id).await?;
 
         // Generate transaction hash (in production, this would be from Stellar)
         let tx_hash = format!("tx_{}", Uuid::new_v4().simple());
@@ -123,7 +125,7 @@ impl PaymentService {
             send_asset: row.get(4),
             send_amount: row.get(5),
             receive_amount: row.get(6),
-            status: PaymentStatus::from_str(row.get(7)),
+            status: PaymentStatus::from_str(row.get(7)).unwrap(),
             memo: row.get(8),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(9),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(10),
@@ -157,7 +159,10 @@ impl PaymentService {
         Ok(())
     }
 
-    pub async fn generate_qr_payment(&self, payload: crate::http::payments::QrPaymentRequest) -> Result<String, ApiError> {
+    pub async fn generate_qr_payment(
+        &self,
+        payload: crate::http::payments::QrPaymentRequest,
+    ) -> Result<String, ApiError> {
         // Validate merchant exists
         self.get_merchant(&payload.merchant_id).await?;
 
@@ -174,13 +179,17 @@ impl PaymentService {
         Ok(qr_data)
     }
 
-    pub async fn validate_nfc_payment(&self, payload: crate::http::payments::NfcPaymentRequest) -> Result<bool, ApiError> {
+    pub async fn validate_nfc_payment(
+        &self,
+        payload: crate::http::payments::NfcPaymentRequest,
+    ) -> Result<bool, ApiError> {
         // Validate merchant exists
         self.get_merchant(&payload.merchant_id).await?;
 
         // Basic validation - in production, check expiry, signature, etc.
         let current_time = chrono::Utc::now().timestamp();
-        if payload.timestamp > current_time + 300 { // 5 minutes grace
+        if payload.timestamp > current_time + 300 {
+            // 5 minutes grace
             return Ok(false);
         }
 

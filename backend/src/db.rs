@@ -1,234 +1,101 @@
-use deadpool_postgres::{Config, Pool, Runtime};
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
+use std::str::FromStr;
+use tokio_postgres::NoTls;
 
 pub type DbPool = Pool;
 
 pub async fn create_pool(database_url: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    let mut cfg = Config::new();
-    cfg.url = Some(database_url.to_string());
-    let pool = cfg.create_pool(Some(Runtime::Tokio1), ())?;
+    let pg_config = tokio_postgres::Config::from_str(database_url)?;
+    let mgr_config = ManagerConfig {
+        recycling_method: RecyclingMethod::Fast,
+    };
+    let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
+    let pool = Pool::builder(mgr)
+        .max_size(16)
+        .runtime(Runtime::Tokio1)
+        .build()?;
     Ok(pool)
 }
 
-pub async fn run_migrations(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
-    let client = pool.get().await?;
+pub async fn run_migrations(database_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(database_url)
+        .await
+        .map_err(|e| format!("Failed to connect to database for migrations: {}", e))?;
 
-    // Create users table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS users (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id VARCHAR(255) UNIQUE NOT NULL,
-            stellar_address VARCHAR(56) UNIQUE NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .map_err(|e| format!("Failed to run database migrations: {}", e))?;
+
+    pool.close().await;
+    Ok(())
+}
+
+/// Reset migrations for testing purposes
+/// This drops all tables, types, and the migration history to allow re-running migrations
+/// WARNING: Only use this in test environments! This will destroy all data in the database.
+pub async fn reset_migrations(database_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let pool = sqlx::PgPool::connect(database_url)
+        .await
+        .map_err(|e| format!("Failed to connect to database for migration reset: {}", e))?;
+
+    // Use a transaction to ensure atomic cleanup
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+    // Drop all tables in public schema (CASCADE will also drop dependent objects)
+    // This ensures a clean state for re-running migrations
+    sqlx::query(
+        r#"
+        DO $$ 
+        DECLARE 
+            r RECORD;
+        BEGIN
+            -- Drop all tables (including _sqlx_migrations)
+            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') 
+            LOOP
+                EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+            END LOOP;
+            
+            -- Drop all custom types
+            FOR r IN (SELECT typname FROM pg_type WHERE typnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public') AND typtype = 'e')
+            LOOP
+                EXECUTE 'DROP TYPE IF EXISTS public.' || quote_ident(r.typname) || ' CASCADE';
+            END LOOP;
+        END $$;
         "#,
-            &[],
-        )
-        .await?;
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Failed to reset database: {}", e))?;
 
-    // Create merchants table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS merchants (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            merchant_id VARCHAR(255) UNIQUE NOT NULL,
-            vault_address VARCHAR(56) NOT NULL,
-            settlement_asset VARCHAR(56) NOT NULL,
-            active BOOLEAN DEFAULT true,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
-        "#,
-            &[],
-        )
-        .await?;
+    // Commit the transaction to ensure all drops are applied
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit reset transaction: {}", e))?;
 
-    // Create payments table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS payments (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            tx_hash VARCHAR(64) UNIQUE,
-            from_address VARCHAR(56) NOT NULL,
-            merchant_id VARCHAR(255) NOT NULL,
-            send_asset VARCHAR(56) NOT NULL,
-            send_amount BIGINT NOT NULL,
-            receive_amount BIGINT,
-            status VARCHAR(50) DEFAULT 'pending',
-            memo TEXT,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            FOREIGN KEY (merchant_id) REFERENCES merchants(merchant_id)
-        )
-        "#,
-            &[],
-        )
-        .await?;
+    // Verify _sqlx_migrations is gone (it should be after the above)
+    let table_exists: bool = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = '_sqlx_migrations'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
 
-    // Create transfers table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS transfers (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            tx_hash VARCHAR(64) UNIQUE,
-            from_user_id VARCHAR(255) NOT NULL,
-            to_user_id VARCHAR(255) NOT NULL,
-            amount BIGINT NOT NULL,
-            asset VARCHAR(56) NOT NULL,
-            status VARCHAR(50) DEFAULT 'pending',
-            memo TEXT,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            FOREIGN KEY (from_user_id) REFERENCES users(user_id),
-            FOREIGN KEY (to_user_id) REFERENCES users(user_id)
-        )
-        "#,
-            &[],
-        )
-        .await?;
+    if table_exists {
+        // Force drop if it still exists
+        sqlx::query("DROP TABLE _sqlx_migrations CASCADE")
+            .execute(&pool)
+            .await
+            .ok();
+    }
 
-    // Create withdrawals table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS withdrawals (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            tx_hash VARCHAR(64) UNIQUE,
-            user_id VARCHAR(255) NOT NULL,
-            destination_address VARCHAR(100) NOT NULL,
-            amount BIGINT NOT NULL,
-            asset VARCHAR(56) NOT NULL,
-            status VARCHAR(50) DEFAULT 'pending',
-            anchor_tx_id VARCHAR(255),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
-        )
-        "#,
-            &[],
-        )
-        .await?;
-
-    // Create balances table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS balances (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            owner_id VARCHAR(255) NOT NULL,
-            asset VARCHAR(56) NOT NULL,
-            amount BIGINT NOT NULL DEFAULT 0,
-            last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            UNIQUE(owner_id, asset)
-        )
-        "#,
-            &[],
-        )
-        .await?;
-
-    // Create audit_logs table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            event_type VARCHAR(100) NOT NULL,
-            ref_id UUID NOT NULL,
-            user_id VARCHAR(255),
-            details JSONB,
-            ip_address INET,
-            user_agent TEXT,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        )
-        "#,
-            &[],
-        )
-        .await?;
-
-    // Create indexes for better performance
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_payments_merchant_id ON payments(merchant_id)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_transfers_from_user ON transfers(from_user_id)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_transfers_to_user ON transfers(to_user_id)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)",
-            &[],
-        )
-        .await?;
-
-    // Create bridge_transactions table
-    client
-        .execute(
-            r#"
-        CREATE TABLE IF NOT EXISTS bridge_transactions (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            from_chain VARCHAR(50) NOT NULL,
-            to_chain VARCHAR(50) NOT NULL,
-            asset VARCHAR(20) NOT NULL,
-            amount BIGINT NOT NULL,
-            destination_address VARCHAR(100) NOT NULL,
-            user_id VARCHAR(255) NOT NULL,
-            status VARCHAR(50) DEFAULT 'pending',
-            tx_hash VARCHAR(100),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            FOREIGN KEY (user_id) REFERENCES users(user_id)
-        )
-        "#,
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_bridge_transactions_user_id ON bridge_transactions(user_id)",
-            &[],
-        )
-        .await?;
-
-    client
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_bridge_transactions_status ON bridge_transactions(status)",
-            &[],
-        )
-        .await?;
-
+    pool.close().await;
     Ok(())
 }
