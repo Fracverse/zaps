@@ -57,11 +57,7 @@ impl ReputationScoreContract {
         let key = DataKey::Score(user.clone());
         let current_score: u32 = env.storage().persistent().get(&key).unwrap_or(0);
 
-        let new_score = if current_score < value {
-            0
-        } else {
-            current_score - value
-        };
+        let new_score = current_score.saturating_sub(value);
 
         env.storage().persistent().set(&key, &new_score);
         log!(
