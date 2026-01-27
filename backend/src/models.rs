@@ -235,7 +235,6 @@ pub struct AuditLogListResponse {
     pub offset: i64,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BridgeTransactionStatus {
     Pending,

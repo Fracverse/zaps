@@ -1,5 +1,4 @@
 use axum::{
-
     extract::{Request, State},
     http::Method,
     middleware::Next,
@@ -55,7 +54,7 @@ pub async fn audit_logging(
     if status.is_success() {
         // Clone services for async task
         let audit_service = services.audit.clone();
-        
+
         // Log asynchronously to avoid blocking the response
         tokio::spawn(async move {
             let _ = audit_service
@@ -80,11 +79,7 @@ fn parse_request_info(method: &Method, path: &str) -> (String, String, Option<St
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     if parts.is_empty() {
-        return (
-            method.to_string(),
-            "unknown".to_string(),
-            None,
-        );
+        return (method.to_string(), "unknown".to_string(), None);
     }
 
     // Determine resource from path
@@ -132,8 +127,7 @@ mod tests {
     #[test]
     fn test_parse_request_info() {
         // Test GET with ID
-        let (action, resource, resource_id) =
-            parse_request_info(&Method::GET, "/payments/123-456");
+        let (action, resource, resource_id) = parse_request_info(&Method::GET, "/payments/123-456");
         assert_eq!(action, "view_payments");
         assert_eq!(resource, "payments");
         assert_eq!(resource_id, Some("123-456".to_string()));

@@ -1,4 +1,8 @@
-use crate::{api_error::ApiError, config::Config, models::{AuditLogEntry, AuditLogQueryParams}};
+use crate::{
+    api_error::ApiError,
+    config::Config,
+    models::{AuditLogEntry, AuditLogQueryParams},
+};
 use chrono::Utc;
 use deadpool_postgres::Pool;
 use std::sync::Arc;
@@ -47,7 +51,10 @@ impl AuditService {
             action: row.get("action"),
             resource: row.get("resource"),
             resource_id: row.get("resource_id"),
-            metadata: row.try_get::<_, Option<serde_json::Value>>("metadata").ok().flatten(),
+            metadata: row
+                .try_get::<_, Option<serde_json::Value>>("metadata")
+                .ok()
+                .flatten(),
             timestamp: row.get("timestamp"),
             ip_address: row.get("ip_address"),
             user_agent: row.get("user_agent"),
@@ -74,7 +81,10 @@ impl AuditService {
             action: row.get("action"),
             resource: row.get("resource"),
             resource_id: row.get("resource_id"),
-            metadata: row.try_get::<_, Option<serde_json::Value>>("metadata").ok().flatten(),
+            metadata: row
+                .try_get::<_, Option<serde_json::Value>>("metadata")
+                .ok()
+                .flatten(),
             timestamp: row.get("timestamp"),
             ip_address: row.get("ip_address"),
             user_agent: row.get("user_agent"),
@@ -122,17 +132,23 @@ impl AuditService {
         }
 
         query.push_str(" ORDER BY timestamp DESC");
-        
+
         // Sanitize limit and offset
         let limit = params.limit.min(100).max(1);
         let offset = params.offset.max(0);
-        
-        query.push_str(&format!(" LIMIT ${} OFFSET ${}", param_index, param_index + 1));
+
+        query.push_str(&format!(
+            " LIMIT ${} OFFSET ${}",
+            param_index,
+            param_index + 1
+        ));
         params_vec.push(Box::new(limit));
         params_vec.push(Box::new(offset));
 
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params_vec.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params_vec
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
         let rows = client.query(&query, &param_refs[..]).await?;
 
@@ -144,7 +160,10 @@ impl AuditService {
                 action: row.get("action"),
                 resource: row.get("resource"),
                 resource_id: row.get("resource_id"),
-                metadata: row.try_get::<_, Option<serde_json::Value>>("metadata").ok().flatten(),
+                metadata: row
+                    .try_get::<_, Option<serde_json::Value>>("metadata")
+                    .ok()
+                    .flatten(),
                 timestamp: row.get("timestamp"),
                 ip_address: row.get("ip_address"),
                 user_agent: row.get("user_agent"),
@@ -155,10 +174,7 @@ impl AuditService {
     }
 
     /// Count audit logs for pagination
-    pub async fn count_audit_logs(
-        &self,
-        params: &AuditLogQueryParams,
-    ) -> Result<i64, ApiError> {
+    pub async fn count_audit_logs(&self, params: &AuditLogQueryParams) -> Result<i64, ApiError> {
         let client = self.db_pool.get().await?;
 
         let mut query = String::from("SELECT COUNT(*) FROM audit_logs WHERE 1=1");
@@ -189,8 +205,10 @@ impl AuditService {
             param_index += 1;
         }
 
-        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params_vec.iter().map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params_vec
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
         let row = client.query_one(&query, &param_refs[..]).await?;
         let count: i64 = row.get(0);
