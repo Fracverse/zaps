@@ -16,6 +16,8 @@ pub struct Config {
     pub bridge_config: BridgeConfig,
     #[serde(rename = "compliance")]
     pub compliance_config: ComplianceConfig,
+    #[serde(rename = "queue")]
+    pub queue_config: QueueConfig,
     pub environment: EnvironmentType,
     pub rate_limit: RateLimitConfig,
 }
@@ -93,6 +95,18 @@ pub struct RiskThresholds {
     pub suspicious_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueConfig {
+    pub redis_url: String,
+    pub max_retries: u32,
+    pub visibility_timeout_seconds: u64,
+    pub backoff_multiplier: f64,
+    pub max_backoff_seconds: u64,
+    pub dead_letter_max_size: usize,
+    pub worker_count: usize,
+    pub reclaim_interval_seconds: u64,
+}
+
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
         let mut builder = ConfigBuilder::builder()
@@ -161,6 +175,15 @@ impl Default for Config {
                 },
             },
             environment: EnvironmentType::Development,
+            queue_config: QueueConfig {
+                redis_url: "redis://localhost:6379".to_string(),
+                max_retries: 3,
+                visibility_timeout_seconds: 300,
+                backoff_multiplier: 2.0,
+                max_backoff_seconds: 3600,
+                dead_letter_max_size: 10000,
+                worker_count: 4,
+                reclaim_interval_seconds: 60,
             rate_limit: RateLimitConfig {
                 window_ms: 60000, // 1 minute
                 max_requests: 100,
