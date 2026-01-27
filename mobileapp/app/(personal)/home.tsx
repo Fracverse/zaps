@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,7 +18,7 @@ import ReceiveIcon from "../../assets/icon-2.svg";
 import ScanIcon from "../../assets/icon-3.svg";
 import TapIcon from "../../assets/icon-3.svg"; // Using icon-3 for both or placeholder if 4th is missing
 
-const TokenItem = ({ name, symbol, balance, value, Icon }: any) => (
+const TokenItem = ({ _name, symbol, balance, value, Icon }: any) => (
   <View style={styles.tokenCard}>
     <View style={styles.tokenIcon}>
       <Icon width={24} height={24} />

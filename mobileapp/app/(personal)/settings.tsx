@@ -8,7 +8,7 @@ import {
   Switch,
   SafeAreaView,
 } from "react-native";
-import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../../src/constants/colors";
 import { useRouter } from "expo-router";
 
