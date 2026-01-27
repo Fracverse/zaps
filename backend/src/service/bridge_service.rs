@@ -4,7 +4,9 @@ use crate::{
     models::{BridgeTransaction, BridgeTransactionStatus},
 };
 use deadpool_postgres::Pool;
-use serde::{Deserialize, Serialize};use std::str::FromStr;use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]

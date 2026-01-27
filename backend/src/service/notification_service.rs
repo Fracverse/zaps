@@ -134,9 +134,7 @@ impl NotificationService {
         // MOCK EMAIL PROVIDER
         println!(
             "[MOCK EMAIL] Sending {} email to {}: {}",
-            notification.notification_type,
-            notification.user_id,
-            notification.title
+            notification.notification_type, notification.user_id, notification.title
         );
         // In a real implementation, this would call an external API like SendGrid or AWS SES
         Ok(())

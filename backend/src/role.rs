@@ -28,7 +28,6 @@ impl FromStr for Role {
 }
 
 impl Role {
-
     /// Convert role to string representation
     pub fn as_str(&self) -> &'static str {
         match self {
