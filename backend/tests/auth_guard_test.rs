@@ -10,14 +10,14 @@ mod role_tests {
 
     #[test]
     fn test_role_from_str() {
-        assert_eq!(Role::from_str("admin"), Role::Admin);
-        assert_eq!(Role::from_str("Admin"), Role::Admin);
-        assert_eq!(Role::from_str("ADMIN"), Role::Admin);
-        assert_eq!(Role::from_str("merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("Merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("user"), Role::User);
-        assert_eq!(Role::from_str("unknown"), Role::User); // Default to User
-        assert_eq!(Role::from_str(""), Role::User);
+        assert_eq!(Role::from_string("admin"), Role::Admin);
+        assert_eq!(Role::from_string("Admin"), Role::Admin);
+        assert_eq!(Role::from_string("ADMIN"), Role::Admin);
+        assert_eq!(Role::from_string("merchant"), Role::Merchant);
+        assert_eq!(Role::from_string("Merchant"), Role::Merchant);
+        assert_eq!(Role::from_string("user"), Role::User);
+        assert_eq!(Role::from_string("unknown"), Role::User); // Default to User
+        assert_eq!(Role::from_string(""), Role::User);
     }
 
     #[test]
@@ -100,7 +100,7 @@ mod role_tests {
     #[test]
     fn test_role_clone() {
         let admin = Role::Admin;
-        let cloned = admin.clone();
+        let cloned = admin;
         assert_eq!(admin, cloned);
     }
 }

@@ -1,17 +1,17 @@
+use axum::async_trait;
+
 use crate::{
     api_error::ApiError,
     config::Config,
     models::{BuildTransactionDto, SignedTransactionResponse, TransactionStatus},
 };
-use async_trait::async_trait;
-use serde_json::Value;
 use std::sync::Arc;
 
 // Mocking Stellar SDK types for now as we don't have the full crate docs loaded
 // In a real scenario, these would be imports from stellar-sdk
 pub struct StellarClient {
-    network_passphrase: String,
-    rpc_url: String,
+    pub network_passphrase: String,
+    pub rpc_url: String,
 }
 
 impl StellarClient {
@@ -36,10 +36,7 @@ pub struct SorobanService {
 
 #[async_trait]
 pub trait TransactionBuilder {
-    async fn build_transaction(
-        &self,
-        dto: BuildTransactionDto,
-    ) -> Result<String, ApiError>; // Returns base64 XDR
+    async fn build_transaction(&self, dto: BuildTransactionDto) -> Result<String, ApiError>; // Returns base64 XDR
 }
 
 #[async_trait]
@@ -48,7 +45,7 @@ pub trait Signer {
 }
 
 pub struct CustodialSigner {
-    secret_key: String,
+    pub secret_key: String,
 }
 
 impl CustodialSigner {
@@ -92,19 +89,16 @@ impl SorobanService {
         }
     }
 
-    fn normalize_error(&self, error: String) -> ApiError {
+    fn normalize_error(&self, _: String) -> ApiError {
         // Normalize Soroban/Stellar errors into ApiError
         // This is a basic implementation
-        ApiError::InternalServerError(format!("Blockchain Error: {}", error))
+        ApiError::InternalServerError
     }
 }
 
 #[async_trait]
 impl TransactionBuilder for SorobanService {
-    async fn build_transaction(
-        &self,
-        dto: BuildTransactionDto,
-    ) -> Result<String, ApiError> {
+    async fn build_transaction(&self, dto: BuildTransactionDto) -> Result<String, ApiError> {
         // Mock transaction building
         // In reality: Use SDK to build InvokeHostFunctionOp
         let tx_xdr = format!(
