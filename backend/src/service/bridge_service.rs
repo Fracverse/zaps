@@ -5,6 +5,7 @@ use crate::{
 };
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -128,7 +129,7 @@ impl BridgeService {
             to_chain: row.get(2),
             asset: row.get(3),
             amount: row.get::<_, i64>(4) as u64,
-            status: BridgeTransactionStatus::from_str(row.get(7)),
+            status: BridgeTransactionStatus::from_str(row.get(7)).unwrap(),
             tx_hash: row.get(8),
             created_at: row.get(9),
         })
@@ -182,7 +183,7 @@ impl BridgeService {
         }
 
         // Validate chains
-        let supported_chains = vec!["ethereum", "polygon", "bsc", "stellar"];
+        let supported_chains = ["ethereum", "polygon", "bsc", "stellar"];
         if !supported_chains.contains(&request.from_chain.as_str()) {
             return Err(ApiError::Validation(format!(
                 "Unsupported source chain: {}",

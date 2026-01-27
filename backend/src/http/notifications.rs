@@ -3,6 +3,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -44,7 +45,8 @@ pub async fn create_notification(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreateNotificationDto>,
 ) -> Result<Json<NotificationResponseDto>, ApiError> {
-    let notification_type = crate::models::NotificationType::from_str(&request.notification_type);
+    let notification_type =
+        crate::models::NotificationType::from_str(&request.notification_type).unwrap();
 
     let notification = services
         .notification

@@ -2,6 +2,7 @@
 //!
 //! These tests verify role-based access control functionality.
 
+use std::str::FromStr;
 use zaps_backend::role::Role;
 
 #[cfg(test)]
@@ -10,14 +11,14 @@ mod role_tests {
 
     #[test]
     fn test_role_from_str() {
-        assert_eq!(Role::from_str("admin"), Role::Admin);
-        assert_eq!(Role::from_str("Admin"), Role::Admin);
-        assert_eq!(Role::from_str("ADMIN"), Role::Admin);
-        assert_eq!(Role::from_str("merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("Merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("user"), Role::User);
-        assert_eq!(Role::from_str("unknown"), Role::User); // Default to User
-        assert_eq!(Role::from_str(""), Role::User);
+        assert_eq!(Role::from_str("admin").unwrap(), Role::Admin);
+        assert_eq!(Role::from_str("Admin").unwrap(), Role::Admin);
+        assert_eq!(Role::from_str("ADMIN").unwrap(), Role::Admin);
+        assert_eq!(Role::from_str("merchant").unwrap(), Role::Merchant);
+        assert_eq!(Role::from_str("Merchant").unwrap(), Role::Merchant);
+        assert_eq!(Role::from_str("user").unwrap(), Role::User);
+        assert_eq!(Role::from_str("unknown").unwrap(), Role::User); // Default to User
+        assert_eq!(Role::from_str("").unwrap(), Role::User);
     }
 
     #[test]
@@ -100,7 +101,7 @@ mod role_tests {
     #[test]
     fn test_role_clone() {
         let admin = Role::Admin;
-        let cloned = admin.clone();
+        let cloned = admin;
         assert_eq!(admin, cloned);
     }
 }

@@ -19,6 +19,17 @@ pub struct MerchantMetadata {
     pub fx_router: Option<Address>,
 }
 
+pub struct FxSettlementCtx<'a> {
+    pub env: &'a Env,
+    pub from: &'a Address,
+    pub merchant: &'a MerchantMetadata,
+    pub merchant_id: &'a Bytes,
+    pub send_asset: &'a Address,
+    pub send_amount: i128,
+    pub settlement_asset: &'a Address,
+    pub min_receive: i128,
+}
+
 #[contracttype]
 pub struct PaymentEvent {
     pub payer: Address,
@@ -127,16 +138,17 @@ impl PaymentRouter {
         let settled_amount = if send_asset == settlement_asset {
             settle_direct(&env, &from, &merchant.vault, &settlement_asset, send_amount)
         } else {
-            settle_with_fx(
-                &env,
-                &from,
-                &merchant,
-                &merchant_id,
-                &send_asset,
-                send_amount,
-                &settlement_asset,
+            let data = FxSettlementCtx {
+                env: &env,
+                from: &from,
+                merchant: &merchant,
+                merchant_id: &merchant_id,
                 min_receive,
-            )
+                send_amount: min_receive,
+                send_asset: &send_asset,
+                settlement_asset: &settlement_asset,
+            };
+            settle_with_fx(data)
         };
 
         if settled_amount < min_receive {
@@ -222,16 +234,18 @@ fn settle_direct(
     received
 }
 
-fn settle_with_fx(
-    env: &Env,
-    from: &Address,
-    merchant: &MerchantMetadata,
-    merchant_id: &Bytes,
-    send_asset: &Address,
-    send_amount: i128,
-    settlement_asset: &Address,
-    min_receive: i128,
-) -> i128 {
+fn settle_with_fx(ctx: FxSettlementCtx) -> i128 {
+    let FxSettlementCtx {
+        env,
+        from,
+        merchant,
+        merchant_id,
+        send_asset,
+        send_amount,
+        settlement_asset,
+        min_receive,
+    } = ctx;
+
     let fx_router = match merchant.fx_router.clone() {
         Option::Some(addr) => addr,
         Option::None => {

@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .bind(user_id)
     .bind("USDC")
-    .bind(1000_000_000_i64) // 1000 USDC
+    .bind(1_000_000_000_i64) // 1000 USDC
     .execute(&pool)
     .await?;
 

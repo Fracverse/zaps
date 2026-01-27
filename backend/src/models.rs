@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::str::FromStr;
 
 use crate::role::Role;
 
@@ -39,26 +41,30 @@ pub enum PaymentStatus {
     Refunded,
 }
 
-impl PaymentStatus {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for PaymentStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "completed" => PaymentStatus::Completed,
             "processing" => PaymentStatus::Processing,
             "failed" => PaymentStatus::Failed,
             "refunded" => PaymentStatus::Refunded,
             _ => PaymentStatus::Pending,
-        }
+        })
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for PaymentStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             PaymentStatus::Pending => "pending",
             PaymentStatus::Processing => "processing",
             PaymentStatus::Completed => "completed",
             PaymentStatus::Failed => "failed",
             PaymentStatus::Refunded => "refunded",
-        }
-        .to_string()
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -85,24 +91,28 @@ pub enum TransferStatus {
     Failed,
 }
 
-impl TransferStatus {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for TransferStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "processing" => TransferStatus::Processing,
             "completed" => TransferStatus::Completed,
             "failed" => TransferStatus::Failed,
             _ => TransferStatus::Pending,
-        }
+        })
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for TransferStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             TransferStatus::Pending => "pending",
             TransferStatus::Processing => "processing",
             TransferStatus::Completed => "completed",
             TransferStatus::Failed => "failed",
-        }
-        .to_string()
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -128,24 +138,28 @@ pub enum WithdrawalStatus {
     Failed,
 }
 
-impl WithdrawalStatus {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for WithdrawalStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "processing" => WithdrawalStatus::Processing,
             "completed" => WithdrawalStatus::Completed,
             "failed" => WithdrawalStatus::Failed,
             _ => WithdrawalStatus::Pending,
-        }
+        })
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for WithdrawalStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             WithdrawalStatus::Pending => "pending",
             WithdrawalStatus::Processing => "processing",
             WithdrawalStatus::Completed => "completed",
             WithdrawalStatus::Failed => "failed",
-        }
-        .to_string()
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -230,24 +244,28 @@ pub enum BridgeTransactionStatus {
     Failed,
 }
 
-impl BridgeTransactionStatus {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for BridgeTransactionStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "confirming" => BridgeTransactionStatus::Confirming,
             "completed" => BridgeTransactionStatus::Completed,
             "failed" => BridgeTransactionStatus::Failed,
             _ => BridgeTransactionStatus::Pending,
-        }
+        })
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for BridgeTransactionStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             BridgeTransactionStatus::Pending => "pending",
             BridgeTransactionStatus::Confirming => "confirming",
             BridgeTransactionStatus::Completed => "completed",
             BridgeTransactionStatus::Failed => "failed",
-        }
-        .to_string()
+        };
+        write!(f, "{}", s)
     }
 }
 
@@ -273,23 +291,27 @@ pub enum NotificationType {
     SECURITY,
 }
 
-impl NotificationType {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl FromStr for NotificationType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "SYSTEM" => NotificationType::SYSTEM,
             "ACTION" => NotificationType::ACTION,
             "SECURITY" => NotificationType::SECURITY,
             _ => NotificationType::SYSTEM,
-        }
+        })
     }
+}
 
-    pub fn to_string(&self) -> String {
-        match self {
+impl fmt::Display for NotificationType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
             NotificationType::SYSTEM => "SYSTEM",
             NotificationType::ACTION => "ACTION",
             NotificationType::SECURITY => "SECURITY",
-        }
-        .to_string()
+        };
+        write!(f, "{}", s)
     }
 }
 

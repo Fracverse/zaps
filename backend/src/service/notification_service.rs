@@ -12,6 +12,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct NotificationService {
     db_pool: Arc<Pool>,
+    #[allow(dead_code)]
     config: Config,
 }
 
@@ -61,7 +62,7 @@ impl NotificationService {
         let notification = Notification {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
-            notification_type: NotificationType::from_str(row.get(2)),
+            notification_type: NotificationType::from_str(row.get(2)).unwrap(),
             title: row.get(3),
             message: row.get(4),
             metadata: row.get(5),
@@ -99,7 +100,7 @@ impl NotificationService {
             .map(|row| Notification {
                 id: row.get::<_, Uuid>(0).to_string(),
                 user_id: row.get(1),
-                notification_type: NotificationType::from_str(row.get(2)),
+                notification_type: NotificationType::from_str(row.get(2)).unwrap(),
                 title: row.get(3),
                 message: row.get(4),
                 metadata: row.get(5),
@@ -133,9 +134,7 @@ impl NotificationService {
         // MOCK EMAIL PROVIDER
         println!(
             "[MOCK EMAIL] Sending {} email to {}: {}",
-            notification.notification_type.to_string(),
-            notification.user_id,
-            notification.title
+            notification.notification_type, notification.user_id, notification.title
         );
         // In a real implementation, this would call an external API like SendGrid or AWS SES
         Ok(())
