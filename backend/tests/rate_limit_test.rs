@@ -1,6 +1,7 @@
 use std::thread;
 use std::time::Duration;
 use zaps_backend::config::Config;
+use zaps_backend::models::{RateLimitConfig, RateLimitScope};
 use zaps_backend::service::RateLimitService;
 
 // #[test]

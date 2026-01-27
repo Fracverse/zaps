@@ -5,6 +5,7 @@ use crate::{
 };
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -124,7 +125,7 @@ impl PaymentService {
             send_asset: row.get(4),
             send_amount: row.get(5),
             receive_amount: row.get(6),
-            status: PaymentStatus::from_string(row.get(7)),
+            status: PaymentStatus::from_str(row.get(7)).unwrap(),
             memo: row.get(8),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(9),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(10),
@@ -143,14 +144,14 @@ impl PaymentService {
             client
                 .execute(
                     "UPDATE payments SET status = $1, tx_hash = $2, updated_at = NOW() WHERE id = $3",
-                    &[&status.to_string_lose(), &hash, &payment_id],
+                    &[&status.to_string(), &hash, &payment_id],
                 )
                 .await?;
         } else {
             client
                 .execute(
                     "UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2",
-                    &[&status.to_string_lose(), &payment_id],
+                    &[&status.to_string(), &payment_id],
                 )
                 .await?;
         }
