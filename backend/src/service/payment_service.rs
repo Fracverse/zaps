@@ -144,14 +144,14 @@ impl PaymentService {
             client
                 .execute(
                     "UPDATE payments SET status = $1, tx_hash = $2, updated_at = NOW() WHERE id = $3",
-                    &[&status.to_string_lose(), &hash, &payment_id],
+                    &[&status.to_string(), &hash, &payment_id],
                 )
                 .await?;
         } else {
             client
                 .execute(
                     "UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2",
-                    &[&status.to_string_lose(), &payment_id],
+                    &[&status.to_string(), &payment_id],
                 )
                 .await?;
         }

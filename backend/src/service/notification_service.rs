@@ -50,7 +50,7 @@ impl NotificationService {
                 &[
                     &notification_id,
                     &request.user_id,
-                    &request.notification_type.to_string_lose(),
+                    &request.notification_type.to_string(),
                     &request.title,
                     &request.message,
                     &request.metadata,

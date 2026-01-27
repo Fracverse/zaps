@@ -84,7 +84,7 @@ impl BridgeService {
                     &(bridge_tx.amount as i64),
                     &bridge_tx.destination_address,
                     &bridge_tx.user_id,
-                    &bridge_tx.status.to_string_lose(),
+                    &bridge_tx.status.to_string(),
                     &bridge_tx.created_at.naive_utc(),
                     &bridge_tx.updated_at.naive_utc(),
                 ],
@@ -143,7 +143,7 @@ impl BridgeService {
         client
             .execute(
                 "UPDATE bridge_transactions SET status = $1, tx_hash = $2, updated_at = NOW() WHERE id = $3",
-                &[&BridgeTransactionStatus::Completed.to_string_lose(), &tx_hash, &id],
+                &[&BridgeTransactionStatus::Completed.to_string(), &tx_hash, &id],
             )
             .await?;
 
