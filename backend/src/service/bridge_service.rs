@@ -85,7 +85,7 @@ impl BridgeService {
                     &(bridge_tx.amount as i64),
                     &bridge_tx.destination_address,
                     &bridge_tx.user_id,
-                    &bridge_tx.status.to_string(),
+                    &bridge_tx.status.to_string_lose(),
                     &bridge_tx.created_at.naive_utc(),
                     &bridge_tx.updated_at.naive_utc(),
                 ],
@@ -128,7 +128,7 @@ impl BridgeService {
             to_chain: row.get(2),
             asset: row.get(3),
             amount: row.get::<_, i64>(4) as u64,
-            status: BridgeTransactionStatus::from_str(row.get(7)),
+            status: BridgeTransactionStatus::from_string(row.get(7)),
             tx_hash: row.get(8),
             created_at: row.get(9),
         })
@@ -144,7 +144,7 @@ impl BridgeService {
         client
             .execute(
                 "UPDATE bridge_transactions SET status = $1, tx_hash = $2, updated_at = NOW() WHERE id = $3",
-                &[&BridgeTransactionStatus::Completed.to_string(), &tx_hash, &id],
+                &[&BridgeTransactionStatus::Completed.to_string_lose(), &tx_hash, &id],
             )
             .await?;
 
@@ -182,7 +182,7 @@ impl BridgeService {
         }
 
         // Validate chains
-        let supported_chains = vec!["ethereum", "polygon", "bsc", "stellar"];
+        let supported_chains = ["ethereum", "polygon", "bsc", "stellar"];
         if !supported_chains.contains(&request.from_chain.as_str()) {
             return Err(ApiError::Validation(format!(
                 "Unsupported source chain: {}",

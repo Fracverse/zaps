@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// User roles for authorization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Standard user with basic access
+    #[default]
     User,
     /// Merchant with payment-related permissions
     Merchant,
@@ -15,7 +16,7 @@ pub enum Role {
 
 impl Role {
     /// Parse role from string (case-insensitive)
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "admin" => Role::Admin,
             "merchant" => Role::Merchant,
@@ -46,11 +47,11 @@ impl Role {
     }
 }
 
-impl Default for Role {
-    fn default() -> Self {
-        Role::User
-    }
-}
+// impl Default for Role {
+//     fn default() -> Self {
+//         Role::User
+//     }
+// }
 
 impl fmt::Display for Role {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -64,11 +65,11 @@ mod tests {
 
     #[test]
     fn test_role_from_str() {
-        assert_eq!(Role::from_str("admin"), Role::Admin);
-        assert_eq!(Role::from_str("ADMIN"), Role::Admin);
-        assert_eq!(Role::from_str("merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("user"), Role::User);
-        assert_eq!(Role::from_str("unknown"), Role::User);
+        assert_eq!(Role::from_string("admin"), Role::Admin);
+        assert_eq!(Role::from_string("ADMIN"), Role::Admin);
+        assert_eq!(Role::from_string("merchant"), Role::Merchant);
+        assert_eq!(Role::from_string("user"), Role::User);
+        assert_eq!(Role::from_string("unknown"), Role::User);
     }
 
     #[test]

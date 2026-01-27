@@ -44,7 +44,8 @@ pub async fn create_notification(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreateNotificationDto>,
 ) -> Result<Json<NotificationResponseDto>, ApiError> {
-    let notification_type = crate::models::NotificationType::from_str(&request.notification_type);
+    let notification_type =
+        crate::models::NotificationType::from_string(&request.notification_type);
 
     let notification = services
         .notification
@@ -60,7 +61,7 @@ pub async fn create_notification(
     Ok(Json(NotificationResponseDto {
         id: notification.id,
         user_id: notification.user_id,
-        notification_type: notification.notification_type.to_string(),
+        notification_type: notification.notification_type.to_string_lose(),
         title: notification.title,
         message: notification.message,
         read: notification.read,
@@ -83,7 +84,7 @@ pub async fn get_notifications(
         .map(|n| NotificationResponseDto {
             id: n.id,
             user_id: n.user_id,
-            notification_type: n.notification_type.to_string(),
+            notification_type: n.notification_type.to_string_lose(),
             title: n.title,
             message: n.message,
             read: n.read,
