@@ -87,7 +87,6 @@ Returns the admin address.
 
 - `NotInitialized`: Registry has not been initialized
 
-
 ## Project Structure
 
 ```text
