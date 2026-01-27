@@ -1,13 +1,30 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, SafeAreaView } from 'react-native';
-import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
-import { COLORS } from '../../src/constants/colors';
-import { useRouter } from 'expo-router';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Switch,
+  SafeAreaView,
+} from "react-native";
+import { Ionicons, MaterialCommunityIcons, Feather } from "@expo/vector-icons";
+import { COLORS } from "../../src/constants/colors";
+import { useRouter } from "expo-router";
 
-const SettingsItem = ({ icon, label, sublabel, hasToggle, value, onToggle, onPress, isLast }: any) => {
+const SettingsItem = ({
+  icon,
+  label,
+  sublabel,
+  hasToggle,
+  value,
+  onToggle,
+  onPress,
+  isLast,
+}: any) => {
   return (
-    <TouchableOpacity 
-      style={[styles.settingsItem, isLast && styles.lastSettingsItem]} 
+    <TouchableOpacity
+      style={[styles.settingsItem, isLast && styles.lastSettingsItem]}
       onPress={onPress}
       activeOpacity={0.7}
       disabled={hasToggle}
@@ -23,8 +40,8 @@ const SettingsItem = ({ icon, label, sublabel, hasToggle, value, onToggle, onPre
         <Switch
           value={value}
           onValueChange={onToggle}
-          trackColor={{ false: '#E0E0E0', true: COLORS.secondary }}
-          thumbColor={value ? COLORS.primary : '#F5F5F5'}
+          trackColor={{ false: "#E0E0E0", true: COLORS.secondary }}
+          thumbColor={value ? COLORS.primary : "#F5F5F5"}
         />
       ) : (
         <Ionicons name="chevron-forward" size={20} color={COLORS.black} />
@@ -41,14 +58,20 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.profileCard}>
           <Text style={styles.profileName}>Ejembiii.zaps</Text>
           <View style={styles.addressRow}>
@@ -60,37 +83,37 @@ export default function SettingsScreen() {
         </View>
 
         <View style={styles.settingsList}>
-          <SettingsItem 
-            icon="notifications-outline" 
-            label="Notification" 
+          <SettingsItem
+            icon="notifications-outline"
+            label="Notification"
             sublabel="Enable or disable push notifications"
             hasToggle={true}
             value={notifications}
             onToggle={setNotifications}
           />
-          <SettingsItem 
-            icon="lock-closed-outline" 
-            label="Password" 
+          <SettingsItem
+            icon="lock-closed-outline"
+            label="Password"
             sublabel="Change Password"
-            onPress={() => router.push('/(personal)/change-password')}
+            onPress={() => router.push("/(personal)/change-password")}
           />
-          <SettingsItem 
-            icon="finger-print-outline" 
-            label="Biometrics" 
+          <SettingsItem
+            icon="finger-print-outline"
+            label="Biometrics"
             sublabel="Use Face ID / Fingerprint"
             hasToggle={true}
             value={biometrics}
             onToggle={setBiometrics}
           />
-          <SettingsItem 
-            icon="language-outline" 
-            label="Language" 
+          <SettingsItem
+            icon="language-outline"
+            label="Language"
             sublabel="English"
             onPress={() => {}}
           />
-          <SettingsItem 
-            icon="help-circle-outline" 
-            label="Help & Support" 
+          <SettingsItem
+            icon="help-circle-outline"
+            label="Help & Support"
             sublabel="Reach out for assistance"
             onPress={() => {}}
             isLast={true}
@@ -107,9 +130,9 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 15,
   },
@@ -118,7 +141,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   scrollContent: {
@@ -131,32 +154,32 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 30,
     borderWidth: 1,
-    borderColor: '#F0F0F0',
-    alignItems: 'center',
+    borderColor: "#F0F0F0",
+    alignItems: "center",
     marginBottom: 30,
   },
   profileName: {
     fontSize: 32,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
     marginBottom: 12,
   },
   addressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
   addressText: {
     fontSize: 16,
-    fontFamily: 'Outfit_500Medium',
+    fontFamily: "Outfit_500Medium",
     color: COLORS.primary,
   },
   settingsList: {
     gap: 8,
   },
   settingsItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     paddingVertical: 15,
   },
   lastSettingsItem: {
@@ -166,9 +189,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#F5F5F5",
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 15,
   },
   settingsTextContent: {
@@ -176,13 +199,13 @@ const styles = StyleSheet.create({
   },
   settingsLabel: {
     fontSize: 16,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
   },
   settingsSublabel: {
     fontSize: 13,
-    fontFamily: 'Outfit_400Regular',
-    color: '#999',
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
     marginTop: 2,
   },
 });

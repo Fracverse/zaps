@@ -1,39 +1,99 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView } from 'react-native';
-import { Ionicons, Feather } from '@expo/vector-icons';
-import { COLORS } from '../../src/constants/colors';
-import { useRouter } from 'expo-router';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  SafeAreaView,
+} from "react-native";
+import { Ionicons, Feather } from "@expo/vector-icons";
+import { COLORS } from "../../src/constants/colors";
+import { useRouter } from "expo-router";
 
 const TRANSACTION_DATA = [
-  { id: '1', type: 'received', address: '0x4A7d5cBe16...da79bB2cF9a1B', time: '14:03:23pm', date: 'Nov 12', amount: '0.00', value: '$0.00' },
-  { id: '2', type: 'transfer', address: '0x4A7d5cBe16...da79bB2cF9a1B', time: '14:03:23pm', date: 'Nov 12', amount: '0.00', value: '$0.00' },
-  { id: '3', type: 'transfer', address: '0x4A7d5cBe16...da79bB2cF9a1B', time: '14:03:23pm', date: 'Nov 12', amount: '0.00', value: '$0.00' },
-  { id: '4', type: 'received', address: '0x4A7d5cBe16...da79bB2cF9a1B', time: '14:03:23pm', date: 'Nov 12', amount: '0.00', value: '$0.00' },
-  { id: '5', type: 'received', address: '0x4A7d5cBe16...da79bB2cF9a1B', time: '14:03:23pm', date: 'Nov 12', amount: '0.00', value: '$0.00' },
+  {
+    id: "1",
+    type: "received",
+    address: "0x4A7d5cBe16...da79bB2cF9a1B",
+    time: "14:03:23pm",
+    date: "Nov 12",
+    amount: "0.00",
+    value: "$0.00",
+  },
+  {
+    id: "2",
+    type: "transfer",
+    address: "0x4A7d5cBe16...da79bB2cF9a1B",
+    time: "14:03:23pm",
+    date: "Nov 12",
+    amount: "0.00",
+    value: "$0.00",
+  },
+  {
+    id: "3",
+    type: "transfer",
+    address: "0x4A7d5cBe16...da79bB2cF9a1B",
+    time: "14:03:23pm",
+    date: "Nov 12",
+    amount: "0.00",
+    value: "$0.00",
+  },
+  {
+    id: "4",
+    type: "received",
+    address: "0x4A7d5cBe16...da79bB2cF9a1B",
+    time: "14:03:23pm",
+    date: "Nov 12",
+    amount: "0.00",
+    value: "$0.00",
+  },
+  {
+    id: "5",
+    type: "received",
+    address: "0x4A7d5cBe16...da79bB2cF9a1B",
+    time: "14:03:23pm",
+    date: "Nov 12",
+    amount: "0.00",
+    value: "$0.00",
+  },
 ];
 
 const FilterTab = ({ label, active, onPress }: any) => (
-  <TouchableOpacity 
-    style={[styles.filterTab, active && styles.filterTabActive]} 
+  <TouchableOpacity
+    style={[styles.filterTab, active && styles.filterTabActive]}
     onPress={onPress}
   >
-    <Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text>
+    <Text style={[styles.filterText, active && styles.filterTextActive]}>
+      {label}
+    </Text>
   </TouchableOpacity>
 );
 
 const TransactionItem = ({ item }: any) => (
   <View style={styles.transactionCard}>
-    <View style={[styles.statusIcon, item.type === 'received' ? styles.receivedIcon : styles.transferIcon]}>
-      <Feather 
-        name="repeat" 
-        size={16} 
-        color={item.type === 'received' ? '#4CAF50' : '#FF5252'} 
-        style={{ transform: [{ rotate: item.type === 'received' ? '180deg' : '0deg' }] }}
+    <View
+      style={[
+        styles.statusIcon,
+        item.type === "received" ? styles.receivedIcon : styles.transferIcon,
+      ]}
+    >
+      <Feather
+        name="repeat"
+        size={16}
+        color={item.type === "received" ? "#4CAF50" : "#FF5252"}
+        style={{
+          transform: [{ rotate: item.type === "received" ? "180deg" : "0deg" }],
+        }}
       />
     </View>
     <View style={styles.transactionInfo}>
-      <Text style={styles.address} numberOfLines={1}>{item.address}</Text>
-      <Text style={styles.dateTime}>{item.time}  .  {item.date}</Text>
+      <Text style={styles.address} numberOfLines={1}>
+        {item.address}
+      </Text>
+      <Text style={styles.dateTime}>
+        {item.time} . {item.date}
+      </Text>
     </View>
     <View style={styles.amountInfo}>
       <Text style={styles.amount}>{item.amount}</Text>
@@ -44,17 +104,20 @@ const TransactionItem = ({ item }: any) => (
 
 export default function HistoryScreen() {
   const router = useRouter();
-  const [activeFilter, setActiveFilter] = useState('All');
+  const [activeFilter, setActiveFilter] = useState("All");
 
-  const filteredData = TRANSACTION_DATA.filter(item => {
-    if (activeFilter === 'All') return true;
+  const filteredData = TRANSACTION_DATA.filter((item) => {
+    if (activeFilter === "All") return true;
     return item.type === activeFilter.toLowerCase();
   });
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>History</Text>
@@ -62,9 +125,21 @@ export default function HistoryScreen() {
       </View>
 
       <View style={styles.filterContainer}>
-        <FilterTab label="All" active={activeFilter === 'All'} onPress={() => setActiveFilter('All')} />
-        <FilterTab label="Transfer" active={activeFilter === 'Transfer'} onPress={() => setActiveFilter('Transfer')} />
-        <FilterTab label="Received" active={activeFilter === 'Received'} onPress={() => setActiveFilter('Received')} />
+        <FilterTab
+          label="All"
+          active={activeFilter === "All"}
+          onPress={() => setActiveFilter("All")}
+        />
+        <FilterTab
+          label="Transfer"
+          active={activeFilter === "Transfer"}
+          onPress={() => setActiveFilter("Transfer")}
+        />
+        <FilterTab
+          label="Received"
+          active={activeFilter === "Received"}
+          onPress={() => setActiveFilter("Received")}
+        />
       </View>
 
       <FlatList
@@ -89,9 +164,9 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 15,
   },
@@ -100,22 +175,22 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   filterContainer: {
-    flexDirection: 'row',
+    flexDirection: "row",
     paddingHorizontal: 20,
     gap: 12,
     marginBottom: 20,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   filterTab: {
     paddingHorizontal: 24,
     paddingVertical: 10,
     borderRadius: 100,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: "#E0E0E0",
   },
   filterTabActive: {
     backgroundColor: COLORS.white,
@@ -123,8 +198,8 @@ const styles = StyleSheet.create({
   },
   filterText: {
     fontSize: 16,
-    fontFamily: 'Outfit_500Medium',
-    color: '#666',
+    fontFamily: "Outfit_500Medium",
+    color: "#666",
   },
   filterTextActive: {
     color: COLORS.primary,
@@ -135,61 +210,61 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   transactionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: 16,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: "#FAFAFA",
     borderRadius: 100,
   },
   statusIcon: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 12,
   },
   receivedIcon: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: "#E8F5E9",
   },
   transferIcon: {
-    backgroundColor: '#FFEBEE',
+    backgroundColor: "#FFEBEE",
   },
   transactionInfo: {
     flex: 1,
   },
   address: {
     fontSize: 14,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
     marginBottom: 2,
   },
   dateTime: {
     fontSize: 12,
-    fontFamily: 'Outfit_400Regular',
-    color: '#999',
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
   },
   amountInfo: {
-    alignItems: 'flex-end',
+    alignItems: "flex-end",
   },
   amount: {
     fontSize: 14,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   value: {
     fontSize: 12,
-    fontFamily: 'Outfit_400Regular',
-    color: '#999',
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
   },
   emptyContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     marginTop: 100,
   },
   emptyText: {
-    fontFamily: 'Outfit_400Regular',
-    color: '#999',
-  }
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
+  },
 });

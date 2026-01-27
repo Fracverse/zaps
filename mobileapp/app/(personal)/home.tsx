@@ -1,16 +1,23 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '../../src/constants/colors';
+import React from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import { COLORS } from "../../src/constants/colors";
 
-import XLMLogo from '../../assets/XML-logo.svg';
-import USDTLogo from '../../assets/USDT-logo.svg';
-import USDCLogo from '../../assets/USDC-logo.svg';
-import TransferIcon from '../../assets/icon-1.svg';
-import ReceiveIcon from '../../assets/icon-2.svg';
-import ScanIcon from '../../assets/icon-3.svg';
-import TapIcon from '../../assets/icon-3.svg'; // Using icon-3 for both or placeholder if 4th is missing
+import XLMLogo from "../../assets/XML-logo.svg";
+import USDTLogo from "../../assets/USDT-logo.svg";
+import USDCLogo from "../../assets/USDC-logo.svg";
+import TransferIcon from "../../assets/icon-1.svg";
+import ReceiveIcon from "../../assets/icon-2.svg";
+import ScanIcon from "../../assets/icon-3.svg";
+import TapIcon from "../../assets/icon-3.svg"; // Using icon-3 for both or placeholder if 4th is missing
 
 const TokenItem = ({ name, symbol, balance, value, Icon }: any) => (
   <View style={styles.tokenCard}>
@@ -38,37 +45,44 @@ const ActionButton = ({ label, Icon }: any) => {
 
 export default function HomeScreen() {
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.logo}>Logo</Text>
         <TouchableOpacity style={styles.notificationBtn}>
-          <Ionicons name="notifications-outline" size={24} color={COLORS.black} />
+          <Ionicons
+            name="notifications-outline"
+            size={24}
+            color={COLORS.black}
+          />
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Wallet balance</Text>
           <Text style={styles.balanceAmount}>$15,046.12</Text>
 
           <View style={styles.tokenList}>
-            <TokenItem 
-              symbol="XLM" 
-              balance="100.00" 
-              value="125.32" 
-              Icon={XLMLogo} 
+            <TokenItem
+              symbol="XLM"
+              balance="100.00"
+              value="125.32"
+              Icon={XLMLogo}
             />
-            <TokenItem 
-              symbol="USDT" 
-              balance="100.00" 
-              value="100" 
-              Icon={USDTLogo} 
+            <TokenItem
+              symbol="USDT"
+              balance="100.00"
+              value="100"
+              Icon={USDTLogo}
             />
-            <TokenItem 
-              symbol="USDC" 
-              balance="100.00" 
-              value="100" 
-              Icon={USDCLogo} 
+            <TokenItem
+              symbol="USDC"
+              balance="100.00"
+              value="100"
+              Icon={USDCLogo}
             />
           </View>
 
@@ -100,15 +114,15 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingHorizontal: 20,
     paddingVertical: 15,
   },
   logo: {
     fontSize: 24,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   notificationBtn: {
@@ -123,9 +137,9 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 24,
     borderWidth: 1,
-    borderColor: '#F0F0F0',
+    borderColor: "#F0F0F0",
     elevation: 2,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
@@ -133,13 +147,13 @@ const styles = StyleSheet.create({
   },
   balanceLabel: {
     fontSize: 16,
-    fontFamily: 'Outfit_400Regular',
-    color: '#666',
+    fontFamily: "Outfit_400Regular",
+    color: "#666",
     marginBottom: 8,
   },
   balanceAmount: {
     fontSize: 36,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
     marginBottom: 24,
   },
@@ -148,20 +162,20 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   tokenCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: 12,
     borderRadius: 100,
     borderWidth: 1,
-    borderColor: '#F0F0F0',
+    borderColor: "#F0F0F0",
   },
   tokenIcon: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "#F5F5F5",
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 12,
   },
   tokenInfo: {
@@ -169,56 +183,56 @@ const styles = StyleSheet.create({
   },
   tokenSymbol: {
     fontSize: 16,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   tokenBalance: {
     fontSize: 14,
-    fontFamily: 'Outfit_400Regular',
-    color: '#666',
+    fontFamily: "Outfit_400Regular",
+    color: "#666",
   },
   tokenValue: {
     fontSize: 16,
-    fontFamily: 'Outfit_500Medium',
+    fontFamily: "Outfit_500Medium",
     color: COLORS.black,
   },
   zapsIdContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     paddingTop: 15,
     borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
+    borderTopColor: "#F0F0F0",
   },
   zapsIdLabel: {
     fontSize: 14,
-    fontFamily: 'Outfit_400Regular',
-    color: '#999',
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
   },
   zapsIdRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
   zapsIdValue: {
     fontSize: 14,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 15,
-    justifyContent: 'space-between',
+    justifyContent: "space-between",
   },
   actionButton: {
-    width: '47%',
+    width: "47%",
     height: 80,
     backgroundColor: COLORS.primary,
     borderRadius: 100,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
     paddingHorizontal: 15,
   },
   actionIconContainer: {
@@ -226,7 +240,7 @@ const styles = StyleSheet.create({
   },
   actionLabel: {
     fontSize: 16,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
     color: COLORS.secondary,
   },
 });

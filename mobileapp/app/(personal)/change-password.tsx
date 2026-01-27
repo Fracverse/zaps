@@ -1,34 +1,47 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, ScrollView } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { COLORS } from '../../src/constants/colors';
-import { useRouter } from 'expo-router';
-import { Input } from '../../src/components/Input';
-import { Button } from '../../src/components/Button';
+import React, { useState } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  SafeAreaView,
+  ScrollView,
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { COLORS } from "../../src/constants/colors";
+import { useRouter } from "expo-router";
+import { Input } from "../../src/components/Input";
+import { Button } from "../../src/components/Button";
 
 export default function ChangePasswordScreen() {
   const router = useRouter();
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const handleUpdate = () => {
     // Logic to update password
-    alert('Password updated successfully!');
+    alert("Password updated successfully!");
     router.back();
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color={COLORS.black} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Change Password</Text>
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.form}>
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Old Password</Text>
@@ -62,11 +75,15 @@ export default function ChangePasswordScreen() {
         </View>
 
         <View style={styles.footer}>
-          <Button 
-            title="Update Password" 
-            onPress={handleUpdate} 
+          <Button
+            title="Update Password"
+            onPress={handleUpdate}
             variant="primary"
-            disabled={!currentPassword || !newPassword || newPassword !== confirmPassword}
+            disabled={
+              !currentPassword ||
+              !newPassword ||
+              newPassword !== confirmPassword
+            }
           />
         </View>
       </ScrollView>
@@ -80,9 +97,9 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 15,
   },
@@ -91,7 +108,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 20,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.black,
   },
   scrollContent: {
@@ -109,10 +126,10 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 16,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
   },
   footer: {
     marginTop: 40,
-  }
+  },
 });
