@@ -40,7 +40,7 @@ pub enum PaymentStatus {
 }
 
 impl PaymentStatus {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s {
             "completed" => PaymentStatus::Completed,
             "processing" => PaymentStatus::Processing,
@@ -50,7 +50,7 @@ impl PaymentStatus {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string_lose(&self) -> String {
         match self {
             PaymentStatus::Pending => "pending",
             PaymentStatus::Processing => "processing",
@@ -86,7 +86,7 @@ pub enum TransferStatus {
 }
 
 impl TransferStatus {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s {
             "processing" => TransferStatus::Processing,
             "completed" => TransferStatus::Completed,
@@ -95,7 +95,7 @@ impl TransferStatus {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string_lose(&self) -> String {
         match self {
             TransferStatus::Pending => "pending",
             TransferStatus::Processing => "processing",
@@ -129,7 +129,7 @@ pub enum WithdrawalStatus {
 }
 
 impl WithdrawalStatus {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s {
             "processing" => WithdrawalStatus::Processing,
             "completed" => WithdrawalStatus::Completed,
@@ -138,7 +138,7 @@ impl WithdrawalStatus {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string_lose(&self) -> String {
         match self {
             WithdrawalStatus::Pending => "pending",
             WithdrawalStatus::Processing => "processing",
@@ -193,7 +193,7 @@ pub enum BridgeTransactionStatus {
 }
 
 impl BridgeTransactionStatus {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s {
             "confirming" => BridgeTransactionStatus::Confirming,
             "completed" => BridgeTransactionStatus::Completed,
@@ -202,7 +202,7 @@ impl BridgeTransactionStatus {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string_lose(&self) -> String {
         match self {
             BridgeTransactionStatus::Pending => "pending",
             BridgeTransactionStatus::Confirming => "confirming",
@@ -236,7 +236,7 @@ pub enum NotificationType {
 }
 
 impl NotificationType {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_string(s: &str) -> Self {
         match s {
             "SYSTEM" => NotificationType::SYSTEM,
             "ACTION" => NotificationType::ACTION,
@@ -245,7 +245,7 @@ impl NotificationType {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string_lose(&self) -> String {
         match self {
             NotificationType::SYSTEM => "SYSTEM",
             NotificationType::ACTION => "ACTION",
@@ -281,4 +281,24 @@ pub struct RateLimitConfig {
     pub window_ms: u64,
     pub max_requests: u32,
     pub scope: RateLimitScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildTransactionDto {
+    pub contract_id: String,
+    pub method: String,
+    pub args: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    PENDING,
+    CONFIRMED,
+    FAILED,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedTransactionResponse {
+    pub tx_hash: String,
+    pub status: TransactionStatus,
 }

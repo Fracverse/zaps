@@ -51,8 +51,8 @@ pub async fn create_app(
     // Identity routes
     let identity_routes = Router::new()
         .route("/users", post(identity::create_user))
-        .route("/users/:user_id", get(identity::get_user))
-        .route("/users/:user_id/wallet", get(identity::get_wallet))
+        .route("/users/me", get(identity::get_user))
+        .route("/users/me/wallet", get(identity::get_wallet))
         .route("/resolve/:user_id", get(identity::resolve_user_id));
 
     // Payments
@@ -99,16 +99,20 @@ pub async fn create_app(
     let job_routes = jobs::create_job_routes()
         .layer(middleware::from_fn(auth_middleware::authenticate));
 
-    // Protected routes
-    let protected_routes = Router::new()
-        .nest("/identity", identity_routes)
-        .nest("/payments", payment_routes)
-        .nest("/transfers", transfer_routes)
-        .nest("/withdrawals", withdrawal_routes)
-        .nest("/notifications", notification_routes)
-        .nest("/admin", admin_routes)
-        .nest("/jobs", job_routes)
-        .layer(middleware::from_fn(auth_middleware::authenticate));
+// Protected routes
+let protected_routes = Router::new()
+    .nest("/identity", identity_routes)
+    .nest("/payments", payment_routes)
+    .nest("/transfers", transfer_routes)
+    .nest("/withdrawals", withdrawal_routes)
+    .nest("/notifications", notification_routes)
+    .nest("/admin", admin_routes)
+    .nest("/jobs", job_routes)
+    .layer(middleware::from_fn_with_state(
+        services.clone(),
+        auth_middleware::authenticate,
+    ));
+
 
     // Public routes
     let public_routes = Router::new()

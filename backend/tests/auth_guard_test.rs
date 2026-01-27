@@ -10,14 +10,14 @@ mod role_tests {
 
     #[test]
     fn test_role_from_str() {
-        assert_eq!(Role::from_str("admin"), Role::Admin);
-        assert_eq!(Role::from_str("Admin"), Role::Admin);
-        assert_eq!(Role::from_str("ADMIN"), Role::Admin);
-        assert_eq!(Role::from_str("merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("Merchant"), Role::Merchant);
-        assert_eq!(Role::from_str("user"), Role::User);
-        assert_eq!(Role::from_str("unknown"), Role::User); // Default to User
-        assert_eq!(Role::from_str(""), Role::User);
+        assert_eq!(Role::from_string("admin"), Role::Admin);
+        assert_eq!(Role::from_string("Admin"), Role::Admin);
+        assert_eq!(Role::from_string("ADMIN"), Role::Admin);
+        assert_eq!(Role::from_string("merchant"), Role::Merchant);
+        assert_eq!(Role::from_string("Merchant"), Role::Merchant);
+        assert_eq!(Role::from_string("user"), Role::User);
+        assert_eq!(Role::from_string("unknown"), Role::User); // Default to User
+        assert_eq!(Role::from_string(""), Role::User);
     }
 
     #[test]
@@ -100,7 +100,7 @@ mod role_tests {
     #[test]
     fn test_role_clone() {
         let admin = Role::Admin;
-        let cloned = admin.clone();
+        let cloned = admin;
         assert_eq!(admin, cloned);
     }
 }
@@ -108,11 +108,11 @@ mod role_tests {
 #[cfg(test)]
 mod jwt_tests {
     use super::*;
-    use zaps_backend::auth::{generate_jwt, validate_jwt};
+    use zaps_backend::auth::{generate_access_token, validate_jwt};
 
     #[test]
     fn test_jwt_with_user_role() {
-        let token = generate_jwt("user123", Role::User, "test-secret", 1).unwrap();
+        let token = generate_access_token("user123", Role::User, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "user123");
@@ -121,7 +121,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_with_admin_role() {
-        let token = generate_jwt("admin123", Role::Admin, "test-secret", 1).unwrap();
+        let token = generate_access_token("admin123", Role::Admin, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "admin123");
@@ -130,7 +130,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_with_merchant_role() {
-        let token = generate_jwt("merchant123", Role::Merchant, "test-secret", 1).unwrap();
+        let token = generate_access_token("merchant123", Role::Merchant, "test-secret", 1).unwrap();
         let claims = validate_jwt(&token, "test-secret").unwrap();
 
         assert_eq!(claims.sub, "merchant123");
@@ -145,7 +145,7 @@ mod jwt_tests {
 
     #[test]
     fn test_jwt_wrong_secret() {
-        let token = generate_jwt("user123", Role::User, "secret1", 1).unwrap();
+        let token = generate_access_token("user123", Role::User, "secret1", 1).unwrap();
         let result = validate_jwt(&token, "secret2");
         assert!(result.is_err());
     }
@@ -153,7 +153,7 @@ mod jwt_tests {
     #[test]
     fn test_jwt_role_preserved_in_claims() {
         for role in [Role::User, Role::Merchant, Role::Admin] {
-            let token = generate_jwt("testuser", role, "secret", 1).unwrap();
+            let token = generate_access_token("testuser", role, "secret", 1).unwrap();
             let claims = validate_jwt(&token, "secret").unwrap();
             assert_eq!(claims.role, role, "Role should be preserved in JWT claims");
         }

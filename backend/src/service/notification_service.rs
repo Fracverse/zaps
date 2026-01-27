@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct NotificationService {
-    db_pool: Arc<Pool>,
-    config: Config,
+    pub db_pool: Arc<Pool>,
+    pub config: Config,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ impl NotificationService {
     ) -> Result<Notification, ApiError> {
         let client = self.db_pool.get().await?;
 
-        let notification_id = Uuid::new_v4().to_string();
+        let notification_id = Uuid::new_v4();
 
         let row = client
             .query_one(
@@ -42,13 +42,13 @@ impl NotificationService {
                 INSERT INTO notifications (
                     id, user_id, type, title, message, metadata, read
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES ($1, $2, $3::notification_type, $4, $5, $6, $7)
                 RETURNING id, user_id, type, title, message, metadata, read, created_at, updated_at
                 "#,
                 &[
                     &notification_id,
                     &request.user_id,
-                    &request.notification_type.to_string(),
+                    &request.notification_type.to_string_lose(),
                     &request.title,
                     &request.message,
                     &request.metadata,
@@ -58,9 +58,9 @@ impl NotificationService {
             .await?;
 
         let notification = Notification {
-            id: row.get(0),
+            id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
-            notification_type: NotificationType::from_str(row.get(2)),
+            notification_type: NotificationType::from_string(row.get(2)),
             title: row.get(3),
             message: row.get(4),
             metadata: row.get(5),
@@ -75,7 +75,10 @@ impl NotificationService {
         Ok(notification)
     }
 
-    pub async fn get_user_notifications(&self, user_id: &str) -> Result<Vec<Notification>, ApiError> {
+    pub async fn get_user_notifications(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<Notification>, ApiError> {
         let client = self.db_pool.get().await?;
 
         let rows = client
@@ -93,9 +96,9 @@ impl NotificationService {
         let notifications = rows
             .into_iter()
             .map(|row| Notification {
-                id: row.get(0),
+                id: row.get::<_, Uuid>(0).to_string(),
                 user_id: row.get(1),
-                notification_type: NotificationType::from_str(row.get(2)),
+                notification_type: NotificationType::from_string(row.get(2)),
                 title: row.get(3),
                 message: row.get(4),
                 metadata: row.get(5),
@@ -129,7 +132,7 @@ impl NotificationService {
         // MOCK EMAIL PROVIDER
         println!(
             "[MOCK EMAIL] Sending {} email to {}: {}",
-            notification.notification_type.to_string(),
+            notification.notification_type.to_string_lose(),
             notification.user_id,
             notification.title
         );
