@@ -8,5 +8,6 @@ pub fn emit_initialized(env: &Env, admin: &Address) {
 }
 
 pub fn emit_registered(env: &Env, name: &String, address: &Address) {
-    env.events().publish((REGISTER, name.clone()), address.clone());
+    env.events()
+        .publish((REGISTER, name.clone()), address.clone());
 }
