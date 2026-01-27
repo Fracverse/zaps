@@ -241,4 +241,5 @@ impl MerchantVault {
         Ok(())
     }
 }
+#[cfg(test)]
 mod test;

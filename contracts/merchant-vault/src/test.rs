@@ -1,5 +1,5 @@
 #[cfg(test)]
-
+mod test {
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _},
@@ -827,3 +827,5 @@ fn test_multiple_merchants() {
         // Should panic - wrong caller
         client.debit(&merchant, &500);
     }
+
+}
