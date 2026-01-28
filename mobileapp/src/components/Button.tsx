@@ -14,6 +14,7 @@ interface ButtonProps {
   onPress: () => void;
   variant?: "primary" | "secondary" | "outline" | "ghost";
   loading?: boolean;
+  disabled?: boolean;
   style?: ViewStyle;
   textStyle?: TextStyle;
   icon?: React.ReactNode;
@@ -24,6 +25,7 @@ export const Button = ({
   onPress,
   variant = "primary",
   loading = false,
+  disabled = false,
   style,
   textStyle,
   icon,
@@ -70,10 +72,10 @@ export const Button = ({
         { backgroundColor: getBackgroundColor() },
         getBorder(),
         style,
-        loading && styles.disabled,
+        (loading || disabled) && styles.disabled,
       ]}
       onPress={onPress}
-      disabled={loading}
+      disabled={loading || disabled}
       activeOpacity={0.8}
     >
       {loading ? (

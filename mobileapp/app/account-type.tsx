@@ -52,7 +52,9 @@ export default function AccountTypeScreen() {
   >(null);
 
   const handleContinue = () => {
-    if (selectedType) {
+    if (selectedType === "merchant") {
+      router.push("/merchant");
+    } else if (selectedType === "personal") {
       router.push("/username");
     }
   };
