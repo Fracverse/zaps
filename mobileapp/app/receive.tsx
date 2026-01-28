@@ -148,7 +148,7 @@ export default function ReceiveScreen() {
             <View style={styles.footer}>
                 {step === 0 && (
                     <Button
-                        title="Continue"
+                        title="Review"
                         onPress={handleNext}
                         disabled={!receiveType}
                     />
