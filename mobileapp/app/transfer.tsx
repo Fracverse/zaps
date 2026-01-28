@@ -200,7 +200,7 @@ export default function TransferScreen() {
             {step < 3 && (
                 <View style={styles.header}>
                     <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-                        <Ionicons name="arrow-back" size={24} color={COLORS.primary} />
+                        <Ionicons name="arrow-back" size={24} color={COLORS.black} />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>
                         {step === 2 ? "Summary & confirmation" : "Transfer"}
