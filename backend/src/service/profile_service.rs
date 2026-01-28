@@ -1,0 +1,200 @@
+use crate::{api_error::ApiError, config::Config, models::UserProfile};
+use deadpool_postgres::Pool;
+use std::sync::Arc;
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct ProfileService {
+    db_pool: Arc<Pool>,
+    _config: Config,
+}
+
+impl ProfileService {
+    pub fn new(db_pool: Arc<Pool>, config: Config) -> Self {
+        Self {
+            db_pool,
+            _config: config,
+        }
+    }
+
+    pub async fn create_profile(
+        &self,
+        user_id: Uuid,
+        display_name: String,
+        avatar_url: Option<String>,
+        bio: Option<String>,
+        country: Option<String>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<UserProfile, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        // Check if profile already exists to return a cleaner error?
+        // Or let database constraint handle it and map the error.
+        // For now, let's just run the INSERT and catch uniqueness violation if possible, or rely on calling check before.
+        // But http handler does check.
+
+        let stmt = client
+            .prepare(
+                "INSERT INTO user_profiles (user_id, display_name, avatar_url, bio, country, metadata) 
+                 VALUES ($1, $2, $3, $4, $5, $6) 
+                 RETURNING id, user_id, display_name, avatar_url, bio, country, metadata, created_at, updated_at",
+            )
+            .await?;
+
+        let row = client
+            .query_one(
+                &stmt,
+                &[
+                    &user_id,
+                    &display_name,
+                    &avatar_url,
+                    &bio,
+                    &country,
+                    &metadata,
+                ],
+            )
+            .await
+            .map_err(|e| {
+                if let Some(db_error) = e.as_db_error() {
+                    if db_error.code()
+                        == &deadpool_postgres::tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+                    {
+                        return ApiError::Conflict("Profile already exists".into());
+                    }
+                }
+                ApiError::Database(e)
+            })?;
+
+        Ok(UserProfile {
+            id: row.get::<_, Uuid>(0).to_string(),
+            user_id: row.get::<_, Uuid>(1).to_string(),
+            display_name: row.get(2),
+            avatar_url: row.get(3),
+            bio: row.get(4),
+            country: row.get(5),
+            metadata: row.get(6),
+            created_at: row.get(7),
+            updated_at: row.get(8),
+        })
+    }
+
+    pub async fn get_profile(&self, user_id: Uuid) -> Result<Option<UserProfile>, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        let stmt = client
+            .prepare("SELECT id, user_id, display_name, avatar_url, bio, country, metadata, created_at, updated_at FROM user_profiles WHERE user_id = $1")
+            .await?;
+
+        let row = client.query_opt(&stmt, &[&user_id]).await?;
+
+        match row {
+            Some(row) => Ok(Some(UserProfile {
+                id: row.get::<_, Uuid>(0).to_string(),
+                user_id: row.get::<_, Uuid>(1).to_string(),
+                display_name: row.get(2),
+                avatar_url: row.get(3),
+                bio: row.get(4),
+                country: row.get(5),
+                metadata: row.get(6),
+                created_at: row.get(7),
+                updated_at: row.get(8),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn update_profile(
+        &self,
+        user_id: Uuid,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        bio: Option<String>,
+        country: Option<String>,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<UserProfile, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        // Build dynamic query
+        let mut query = String::from("UPDATE user_profiles SET ");
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        let mut param_idx = 1;
+
+        if let Some(dn) = display_name {
+            query.push_str(&format!("display_name = ${}, ", param_idx));
+            params.push(Box::new(dn));
+            param_idx += 1;
+        }
+
+        if let Some(au) = avatar_url {
+            query.push_str(&format!("avatar_url = ${}, ", param_idx));
+            params.push(Box::new(au));
+            param_idx += 1;
+        }
+
+        if let Some(b) = bio {
+            query.push_str(&format!("bio = ${}, ", param_idx));
+            params.push(Box::new(b));
+            param_idx += 1;
+        }
+
+        if let Some(c) = country {
+            query.push_str(&format!("country = ${}, ", param_idx));
+            params.push(Box::new(c));
+            param_idx += 1;
+        }
+
+        if let Some(m) = metadata {
+            query.push_str(&format!("metadata = ${}, ", param_idx));
+            params.push(Box::new(m));
+            param_idx += 1;
+        }
+
+        // Remove trailing comma and space
+        if query.ends_with(", ") {
+            query.truncate(query.len() - 2);
+        } else {
+            // Nothing to update, just return the profile
+            return self
+                .get_profile(user_id)
+                .await?
+                .ok_or(ApiError::NotFound("Profile not found".into()));
+        }
+
+        query.push_str(&format!(" WHERE user_id = ${} RETURNING id, user_id, display_name, avatar_url, bio, country, metadata, created_at, updated_at", param_idx));
+        params.push(Box::new(user_id));
+
+        let stmt = client.prepare(&query).await?;
+
+        // Convert params to slice of references
+        let params_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let row = client
+            .query_one(&stmt, &params_refs)
+            .await
+            .map_err(ApiError::Database)?;
+
+        Ok(UserProfile {
+            id: row.get::<_, Uuid>(0).to_string(),
+            user_id: row.get::<_, Uuid>(1).to_string(),
+            display_name: row.get(2),
+            avatar_url: row.get(3),
+            bio: row.get(4),
+            country: row.get(5),
+            metadata: row.get(6),
+            created_at: row.get(7),
+            updated_at: row.get(8),
+        })
+    }
+
+    pub async fn delete_profile(&self, user_id: Uuid) -> Result<(), ApiError> {
+        let client = self.db_pool.get().await?;
+        let stmt = client
+            .prepare("DELETE FROM user_profiles WHERE user_id = $1")
+            .await?;
+        client.execute(&stmt, &[&user_id]).await?;
+        Ok(())
+    }
+}

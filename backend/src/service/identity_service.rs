@@ -26,13 +26,12 @@ impl IdentityService {
 
         // Generate a unique Stellar address (in production, this would be generated properly)
         let stellar_address = format!("G{}", Uuid::new_v4().simple().to_string().to_uppercase());
-        let user_id_db = Uuid::new_v4(); // ensure that a UUID type is used
 
         let role_str = Role::User.as_str();
         let row = client
             .query_one(
-                "INSERT INTO users (id, user_id, stellar_address, role, pin_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
-                &[&user_id_db, &user_id, &stellar_address, &role_str, &pin_hash],
+                "INSERT INTO users (user_id, stellar_address, role, pin_hash) VALUES ($1, $2, $3, $4) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
+                &[&user_id, &stellar_address, &role_str, &pin_hash],
             )
             .await?;
 

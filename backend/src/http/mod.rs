@@ -5,6 +5,7 @@ pub mod identity;
 pub mod metrics;
 pub mod notifications;
 pub mod payments;
+pub mod profiles;
 pub mod transfers;
 pub mod withdrawals;
 
@@ -15,5 +16,6 @@ pub use identity::*;
 pub use metrics::*;
 pub use notifications::*;
 pub use payments::*;
+pub use profiles::*;
 pub use transfers::*;
 pub use withdrawals::*;
