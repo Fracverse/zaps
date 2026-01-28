@@ -36,7 +36,7 @@ pub async fn list_audit_logs(
     Ok(Json(AuditLogListResponse {
         logs: log_responses,
         total,
-        limit: params.limit.min(100).max(1),
+        limit: params.limit.clamp(1, 100),
         offset: params.offset.max(0),
     }))
 }

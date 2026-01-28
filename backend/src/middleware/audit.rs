@@ -58,15 +58,15 @@ pub async fn audit_logging(
         // Log asynchronously to avoid blocking the response
         tokio::spawn(async move {
             let _ = audit_service
-                .create_audit_log(
+                .create_audit_log(crate::models::CreateAuditLogParams {
                     actor_id,
                     action,
                     resource,
                     resource_id,
-                    None, // metadata can be extended later
+                    metadata: None, // metadata can be extended later
                     ip_address,
                     user_agent,
-                )
+                })
                 .await;
         });
     }

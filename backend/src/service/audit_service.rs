@@ -1,7 +1,7 @@
 use crate::{
     api_error::ApiError,
     config::Config,
-    models::{AuditLogEntry, AuditLogQueryParams},
+    models::{AuditLogEntry, AuditLogQueryParams, CreateAuditLogParams},
 };
 use chrono::Utc;
 use deadpool_postgres::Pool;
@@ -23,13 +23,7 @@ impl AuditService {
     /// Create a new audit log entry (immutable)
     pub async fn create_audit_log(
         &self,
-        actor_id: String,
-        action: String,
-        resource: String,
-        resource_id: Option<String>,
-        metadata: Option<serde_json::Value>,
-        ip_address: Option<String>,
-        user_agent: Option<String>,
+        params: CreateAuditLogParams,
     ) -> Result<AuditLogEntry, ApiError> {
         let client = self.db_pool.get().await?;
 
@@ -41,7 +35,17 @@ impl AuditService {
                 "INSERT INTO audit_logs (id, actor_id, action, resource, resource_id, metadata, timestamp, ip_address, user_agent)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  RETURNING id, actor_id, action, resource, resource_id, metadata, timestamp, ip_address, user_agent",
-                &[&id, &actor_id, &action, &resource, &resource_id, &metadata, &timestamp, &ip_address, &user_agent],
+                &[
+                    &id,
+                    &params.actor_id,
+                    &params.action,
+                    &params.resource,
+                    &params.resource_id,
+                    &params.metadata,
+                    &timestamp,
+                    &params.ip_address,
+                    &params.user_agent,
+                ],
             )
             .await?;
 
@@ -134,7 +138,7 @@ impl AuditService {
         query.push_str(" ORDER BY timestamp DESC");
 
         // Sanitize limit and offset
-        let limit = params.limit.min(100).max(1);
+        let limit = params.limit.clamp(1, 100);
         let offset = params.offset.max(0);
 
         query.push_str(&format!(
@@ -202,7 +206,6 @@ impl AuditService {
         if let Some(ref to_date) = params.to_date {
             query.push_str(&format!(" AND timestamp <= ${}", param_index));
             params_vec.push(Box::new(*to_date));
-            param_index += 1;
         }
 
         let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params_vec

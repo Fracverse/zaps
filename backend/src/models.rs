@@ -199,6 +199,17 @@ pub struct AuditLogEntry {
     pub user_agent: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAuditLogParams {
+    pub actor_id: String,
+    pub action: String,
+    pub resource: String,
+    pub resource_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 // DTOs for Audit Log API
 #[derive(Debug, Deserialize)]
 pub struct AuditLogQueryParams {
