@@ -25,7 +25,7 @@ export default function MerchantLayout() {
       }}
     >
       <Tabs.Screen
-        name="home"
+        name="index"
         options={{
           title: "Home",
           tabBarIcon: ({ color, size }) => (
@@ -64,12 +64,6 @@ export default function MerchantLayout() {
       />
       <Tabs.Screen
         name="bank-account"
-        options={{
-          href: null, // Hide from tab bar
-        }}
-      />
-      <Tabs.Screen
-        name="index"
         options={{
           href: null, // Hide from tab bar
         }}

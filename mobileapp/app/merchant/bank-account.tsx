@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
@@ -12,6 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../../src/constants/colors";
 import { useRouter } from "expo-router";
+import { Input } from "../../src/components/Input";
 
 export default function BankAccountScreen() {
   const router = useRouter();
@@ -49,26 +49,18 @@ export default function BankAccountScreen() {
             <Ionicons name="chevron-down" size={20} color={COLORS.black} />
           </TouchableOpacity>
 
-          <View style={styles.inputField}>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your name"
-              placeholderTextColor="#999"
-              value={name}
-              onChangeText={setName}
-            />
-          </View>
+          <Input
+            placeholder="Enter your name"
+            value={name}
+            onChangeText={setName}
+          />
 
-          <View style={styles.inputField}>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter account number"
-              placeholderTextColor="#999"
-              value={accountNumber}
-              onChangeText={setAccountNumber}
-              keyboardType="numeric"
-            />
-          </View>
+          <Input
+            placeholder="Enter account number"
+            value={accountNumber}
+            onChangeText={setAccountNumber}
+            keyboardType="numeric"
+          />
         </View>
 
         <View style={styles.bottomContainer}>
@@ -129,19 +121,7 @@ const styles = StyleSheet.create({
   placeholderText: {
     color: "#999",
   },
-  inputField: {
-    paddingHorizontal: 24,
-    paddingVertical: 18,
-    borderRadius: 100,
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-    backgroundColor: COLORS.white,
-  },
-  input: {
-    fontSize: 16,
-    fontFamily: "Outfit_500Medium",
-    color: COLORS.black,
-  },
+
   bottomContainer: {
     paddingHorizontal: 20,
     paddingBottom: 30,
