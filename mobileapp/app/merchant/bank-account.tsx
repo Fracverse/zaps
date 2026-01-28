@@ -15,7 +15,7 @@ import { useRouter } from "expo-router";
 
 export default function BankAccountScreen() {
     const router = useRouter();
-    const [selectedBank, setSelectedBank] = useState("");
+    const [selectedBank] = useState("");
     const [name, setName] = useState("");
     const [accountNumber, setAccountNumber] = useState("");
 
