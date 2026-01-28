@@ -8,10 +8,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    api_error::ApiError,
-    middleware::auth::AuthenticatedUser,
-    role::Role,
-    service::ServiceContainer,
+    api_error::ApiError, middleware::auth::AuthenticatedUser, role::Role, service::ServiceContainer,
 };
 
 #[derive(Debug, Deserialize)]
@@ -51,21 +48,27 @@ pub async fn create_profile(
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
     // Resolve username to internal UUID
     let user_model = services.identity.get_user_by_id(&user.user_id).await?;
-    let user_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
     // Check if profile already exists
     if services.profile.get_profile(user_uuid).await?.is_some() {
-        return Err(ApiError::Conflict("Profile already exists for this user".into()));
+        return Err(ApiError::Conflict(
+            "Profile already exists for this user".into(),
+        ));
     }
 
-    let profile = services.profile.create_profile(
-        user_uuid,
-        request.display_name,
-        request.avatar_url,
-        request.bio,
-        request.country,
-        request.metadata,
-    ).await?;
+    let profile = services
+        .profile
+        .create_profile(
+            user_uuid,
+            request.display_name,
+            request.avatar_url,
+            request.bio,
+            request.country,
+            request.metadata,
+        )
+        .await?;
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
@@ -85,14 +88,18 @@ pub async fn get_profile(
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
     // Resolve username to internal UUID
     let user_model = services.identity.get_user_by_id(&user_id).await?;
-    let user_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
-    
-    let profile = services.profile.get_profile(user_uuid).await?
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let profile = services
+        .profile
+        .get_profile(user_uuid)
+        .await?
         .ok_or(ApiError::NotFound("Profile not found".into()))?;
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
-        user_id: user_id, // Return the username string
+        user_id, // Return the username string
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -110,25 +117,31 @@ pub async fn update_profile(
 ) -> Result<Json<UserProfileResponseDto>, ApiError> {
     // Authorization check: User can only update their own profile, unless Admin
     if user.user_id != user_id && user.role != Role::Admin {
-        return Err(ApiError::Authorization("You can only update your own profile".into()));
+        return Err(ApiError::Authorization(
+            "You can only update your own profile".into(),
+        ));
     }
 
     // Resolve username to internal UUID
     let user_model = services.identity.get_user_by_id(&user_id).await?;
-    let target_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+    let target_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
-    let profile = services.profile.update_profile(
-        target_uuid,
-        request.display_name,
-        request.avatar_url,
-        request.bio,
-        request.country,
-        request.metadata,
-    ).await?;
+    let profile = services
+        .profile
+        .update_profile(
+            target_uuid,
+            request.display_name,
+            request.avatar_url,
+            request.bio,
+            request.country,
+            request.metadata,
+        )
+        .await?;
 
     Ok(Json(UserProfileResponseDto {
         id: profile.id,
-        user_id: user_id,
+        user_id,
         display_name: profile.display_name,
         avatar_url: profile.avatar_url,
         bio: profile.bio,
@@ -145,12 +158,15 @@ pub async fn delete_profile(
 ) -> Result<StatusCode, ApiError> {
     // Authorization check: User can only delete their own profile, unless Admin
     if user.user_id != user_id && user.role != Role::Admin {
-        return Err(ApiError::Authorization("You can only delete your own profile".into()));
+        return Err(ApiError::Authorization(
+            "You can only delete your own profile".into(),
+        ));
     }
 
     // Resolve username to internal UUID
     let user_model = services.identity.get_user_by_id(&user_id).await?;
-    let target_uuid = Uuid::parse_str(&user_model.id).map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+    let target_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
 
     services.profile.delete_profile(target_uuid).await?;
 

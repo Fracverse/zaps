@@ -30,8 +30,8 @@ impl IdentityService {
         let role_str = Role::User.as_str();
         let row = client
             .query_one(
-                "INSERT INTO users (user_id, stellar_address, role) VALUES ($1, $2, $3) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
-                &[&user_id, &stellar_address, &role_str],
+                "INSERT INTO users (user_id, stellar_address, role, pin_hash) VALUES ($1, $2, $3, $4) RETURNING id, user_id, stellar_address, role, created_at, updated_at",
+                &[&user_id, &stellar_address, &role_str, &pin_hash],
             )
             .await?;
 

@@ -7,8 +7,8 @@ pub mod indexer_service;
 pub mod metrics_service;
 pub mod notification_service;
 pub mod payment_service;
-pub mod rate_limit_service;
 pub mod profile_service;
+pub mod rate_limit_service;
 pub mod soroban_service;
 
 pub use anchor_service::AnchorService;
@@ -22,8 +22,8 @@ pub use metrics_service::{
 };
 pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
-pub use rate_limit_service::RateLimitService;
 pub use profile_service::ProfileService;
+pub use rate_limit_service::RateLimitService;
 pub use soroban_service::SorobanService;
 
 use crate::config::Config;
