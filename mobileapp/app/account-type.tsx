@@ -1,49 +1,14 @@
 import React, { useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter } from "expo-router";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
+import { AccountTypeCard } from "../src/components/AccountTypeCard";
 import { Ionicons } from "@expo/vector-icons";
 
 import PersonalIcon from "../assets/peronal.svg";
 import MerchantIcon from "../assets/merchant.svg";
-
-const AccountTypeCard = ({
-  title,
-  description,
-  Icon,
-  selected,
-  onPress,
-}: {
-  title: string;
-  description: string;
-  Icon: React.FC<any>;
-  selected: boolean;
-  onPress: () => void;
-}) => {
-  return (
-    <TouchableOpacity
-      style={[styles.card, selected && styles.cardSelected]}
-      onPress={onPress}
-      activeOpacity={0.8}
-    >
-      <View style={styles.iconContainer}>
-        <Icon width={24} height={24} />
-      </View>
-      <View style={styles.textContainer}>
-        <Text style={styles.cardTitle}>{title}</Text>
-        <Text style={styles.cardDescription}>{description}</Text>
-      </View>
-    </TouchableOpacity>
-  );
-};
 
 export default function AccountTypeScreen() {
   const router = useRouter();
@@ -143,42 +108,6 @@ const styles = StyleSheet.create({
   },
   cardsContainer: {
     gap: 16,
-  },
-  card: {
-    flexDirection: "row",
-    alignItems: "center", // Align items to center vertically
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-    borderRadius: 100, // Fully rounded ends for container
-    padding: 24,
-    minHeight: 100,
-  },
-  cardSelected: {
-    borderColor: COLORS.primary,
-    borderWidth: 1.5,
-    backgroundColor: "#F0FDF4", // Very light green background on selection?
-  },
-  iconContainer: {
-    width: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 16,
-  },
-  textContainer: {
-    flex: 1,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontFamily: "Outfit_700Bold",
-    color: COLORS.darkGray,
-    marginBottom: 4,
-  },
-  cardDescription: {
-    fontSize: 14,
-    color: "#666",
-    lineHeight: 20,
-    fontFamily: "Outfit_400Regular",
   },
   footer: {
     padding: 20,

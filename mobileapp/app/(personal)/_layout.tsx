@@ -56,12 +56,6 @@ export default function PersonalLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="change-password"
-        options={{
-          href: null, // Hide from tab bar
-        }}
-      />
     </Tabs>
   );
 }

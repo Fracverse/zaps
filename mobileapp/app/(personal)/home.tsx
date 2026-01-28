@@ -8,6 +8,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 
 import XLMLogo from "../../assets/XML-logo.svg";
@@ -31,9 +32,13 @@ const TokenItem = ({ _name, symbol, balance, value, Icon }: any) => (
   </View>
 );
 
-const ActionButton = ({ label, Icon }: any) => {
+const ActionButton = ({ label, Icon, onPress }: any) => {
   return (
-    <TouchableOpacity style={styles.actionButton} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={styles.actionButton}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
       <View style={styles.actionIconContainer}>
         <Icon width={24} height={24} />
       </View>
@@ -43,6 +48,7 @@ const ActionButton = ({ label, Icon }: any) => {
 };
 
 export default function HomeScreen() {
+  const router = useRouter();
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
@@ -97,8 +103,16 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.actionsGrid}>
-          <ActionButton label="Transfer" Icon={TransferIcon} />
-          <ActionButton label="Receive" Icon={ReceiveIcon} />
+          <ActionButton
+            label="Transfer"
+            Icon={TransferIcon}
+            onPress={() => router.push("/transfer")}
+          />
+          <ActionButton
+            label="Receive"
+            Icon={ReceiveIcon}
+            onPress={() => router.push("/receive")}
+          />
           <ActionButton label="Scan to pay" Icon={ScanIcon} />
           <ActionButton label="Tap to pay" Icon={TapIcon} />
         </View>
