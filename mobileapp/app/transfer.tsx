@@ -21,6 +21,7 @@ import ZapIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
 import XLMLogo from "../assets/XML-logo.svg";
 import USDTLogo from "../assets/USDT-logo.svg";
+import BNBLogo from "../assets/bnb.svg";
 import USDCLogo from "../assets/USDC-logo.svg";
 
 if (
@@ -156,6 +157,18 @@ export default function TransferScreen() {
           keyboardType="numeric"
           style={styles.transferInput}
         />
+      </View>
+
+      <View style={styles.networkContainer}>
+        <View style={styles.networkContainerInner}>
+          <View style={styles.networkIcon}>
+            <BNBLogo width={40} height={40} />
+          </View>
+          <View>
+            <Text style={styles.tokenBalance}>Network</Text>
+            <Text style={styles.tokenSymbol}>BSC(BEP20)</Text>
+          </View>
+        </View>
       </View>
 
       <View style={styles.payWithSection}>
@@ -347,7 +360,7 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   inputsSection: {
-    marginBottom: 32,
+    marginBottom: 16,
     gap: 12,
   },
   transferInput: {
@@ -379,6 +392,15 @@ const styles = StyleSheet.create({
   tokenCardSelected: {
     borderColor: COLORS.primary,
     backgroundColor: "#F0FDF4",
+  },
+  networkContainer: {
+    marginBottom: 32,
+  },
+  networkContainerInner: {
+    flexDirection: "row",
+  },
+  networkIcon: {
+    marginRight: 12,
   },
   tokenIcon: {
     width: 48,
