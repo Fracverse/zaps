@@ -8,7 +8,7 @@ import {
   SafeAreaView,
 } from "react-native";
 import { Ionicons, Feather } from "@expo/vector-icons";
-import { COLORS } from "../../src/constants/colors";
+import { COLORS } from "../../../src/constants/colors";
 import { useRouter } from "expo-router";
 
 const TRANSACTION_DATA = [
