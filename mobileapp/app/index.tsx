@@ -67,29 +67,6 @@ export default function OnboardingScreen() {
             style={styles.continueButton}
             textStyle={styles.buttonText}
           />
-
-          {/* Test Navigation Buttons */}
-          <View style={styles.testButtons}>
-            <Text style={styles.testLabel}>Test Screens:</Text>
-            <Pressable
-              style={styles.testButton}
-              onPress={() => router.push("/merchant/withdraw-bank")}
-            >
-              <Text style={styles.testButtonText}>Withdraw</Text>
-            </Pressable>
-            <Pressable
-              style={styles.testButton}
-              onPress={() => router.push("/merchant/transfer-summary")}
-            >
-              <Text style={styles.testButtonText}>Transfer</Text>
-            </Pressable>
-            <Pressable
-              style={styles.testButton}
-              onPress={() => router.push("/merchant/success")}
-            >
-              <Text style={styles.testButtonText}>Success</Text>
-            </Pressable>
-          </View>
         </View>
       </View>
     </SafeAreaView>

@@ -11,12 +11,12 @@ export default function MerchantLayout() {
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: "#999",
         tabBarStyle: {
+          backgroundColor: "#FFFFFF",
           borderTopWidth: 1,
-          borderTopColor: "#F0F0F0",
-          height: 60,
+          borderTopColor: "#E0E0E0",
+          height: 65,
           paddingBottom: 10,
-          paddingTop: 5,
-          marginBottom: 20,
+          paddingTop: 8,
         },
         tabBarLabelStyle: {
           fontFamily: "Outfit_500Medium",
@@ -38,12 +38,7 @@ export default function MerchantLayout() {
         options={{
           title: "History",
           tabBarIcon: ({ color, size }) => (
-            <Feather
-              name="bar-chart"
-              size={size}
-              color={color}
-              style={{ transform: [{ rotate: "90deg" }] }}
-            />
+            <Feather name="list" size={size} color={color} />
           ),
         }}
       />
@@ -57,15 +52,39 @@ export default function MerchantLayout() {
         }}
       />
       <Tabs.Screen
+        name="success"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="withdraw-bank"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="transfer-summary"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="transfer-confirmation"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
         name="change-password"
         options={{
-          href: null, // Hide from tab bar
+          href: null,
         }}
       />
       <Tabs.Screen
         name="bank-account"
         options={{
-          href: null, // Hide from tab bar
+          href: null,
         }}
       />
     </Tabs>
