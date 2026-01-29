@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,9 +11,9 @@ import { useLocalSearchParams, router } from 'expo-router';
 
 const WaitingPaymentScreen = () => {
   const { amount } = useLocalSearchParams();
-  const fadeAnim = new Animated.Value(0);
-  const pulseAnim = new Animated.Value(1);
-  const slideAnim = new Animated.Value(50);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
 
   useEffect(() => {
     // Initial entrance animation
@@ -62,7 +62,7 @@ const WaitingPaymentScreen = () => {
       clearTimeout(timer);
       pulseAnimation.stop();
     };
-  }, [amount]);
+  }, [amount, fadeAnim, pulseAnim, slideAnim]);
 
   return (
     <SafeAreaView style={styles.container}>
