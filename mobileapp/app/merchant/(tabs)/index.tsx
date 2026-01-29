@@ -83,11 +83,11 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.actionsGrid}>
-          <ActionButton label="Tap-to-pay Payment" Icon={TapIcon} />
+          <ActionButton label="Tap-to-pay Payment" Icon={TapIcon} onPress={() => router.push('/merchant/accept-payment')}/>
           <ActionButton 
             label="Receive Via QR Code" 
             Icon={ScanIcon} 
-            onPress={() => router.push('/merchant/accept-payment')}
+            onPress={() => router.push('/merchant/qr-code')}
           />
           <ActionButton label="Withdraw to Bank" Icon={BankIcon} />
         </View>

@@ -24,7 +24,7 @@ const AcceptPayment = () => {
   const handleGenerateQR = () => {
     // Navigate to QR code screen with amount parameter
     if (amount) {
-      router.push(`/merchant/qr-code?amount=${amount}`);
+      router.push(`/merchant/waiting-payment?amount=${amount}`);
     }
   };
 

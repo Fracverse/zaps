@@ -68,9 +68,10 @@ const QRCodeScreen = () => {
         duration: 300,
         useNativeDriver: true,
       }),
-    ]).start(() => {
-      router.push(`/merchant/waiting-payment?amount=${amount}`);
-    });
+    ])
+    // .start(() => {
+    //   router.push(`/merchant/waiting-payment?amount=${amount}`);
+    // });
   };
 
   return (
