@@ -9,6 +9,16 @@ module.exports = {
       jsx: true,
     },
   },
+  settings: {
+    "import/resolver": {
+      typescript: {
+        alwaysTryTypes: true,
+      },
+      node: {
+        extensions: [".js", ".jsx", ".ts", ".tsx"],
+      },
+    },
+  },
   rules: {
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",

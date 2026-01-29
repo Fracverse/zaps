@@ -1,12 +1,5 @@
 import React, { useState, useEffect } from "react";
-import {
-  View,
-  StyleSheet,
-  Pressable,
-  TextInput,
-  Animated,
-  Keyboard,
-} from "react-native";
+import { View, StyleSheet, Pressable, TextInput, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -14,7 +7,7 @@ import { useRouter } from "expo-router";
 
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
-import { Spacing, BorderRadius } from "@/src/constants/theme";
+import { Spacing } from "@/src/constants/theme";
 
 const PIN_LENGTH = 4;
 
@@ -31,27 +24,7 @@ export default function TransferConfirmationScreen() {
       .map(() => new Animated.Value(1))
   ).current;
 
-  useEffect(() => {
-    if (pin.length === PIN_LENGTH) {
-      // Simulate PIN verification
-      setTimeout(() => {
-        if (pin === "1234") {
-          // Correct PIN
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          router.push("/merchant/success");
-        } else {
-          // Incorrect PIN
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          setError(true);
-          shakeAnimation();
-          setPin("");
-          setTimeout(() => setError(false), 2000);
-        }
-      }, 300);
-    }
-  }, [pin]);
-
-  const shakeAnimation = () => {
+  const shakeAnimation = React.useCallback(() => {
     Animated.sequence([
       Animated.timing(shakeAnim, {
         toValue: 10,
@@ -74,7 +47,27 @@ export default function TransferConfirmationScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  };
+  }, [shakeAnim]);
+
+  useEffect(() => {
+    if (pin.length === PIN_LENGTH) {
+      // Simulate PIN verification
+      setTimeout(() => {
+        if (pin === "1234") {
+          // Correct PIN
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          router.push("/merchant/success");
+        } else {
+          // Incorrect PIN
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          setError(true);
+          shakeAnimation();
+          setPin("");
+          setTimeout(() => setError(false), 2000);
+        }
+      }, 300);
+    }
+  }, [pin, router, shakeAnimation]);
 
   const handlePinInput = (value: string) => {
     if (error) return;
@@ -131,9 +124,7 @@ export default function TransferConfirmationScreen() {
           <ThemedText style={[styles.title, { color: theme.text }]}>
             Enter PIN Code
           </ThemedText>
-          <ThemedText
-            style={[styles.subtitle, { color: theme.textSecondary }]}
-          >
+          <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
             Please enter your 4-digit PIN to confirm
           </ThemedText>
         </View>
@@ -191,7 +182,9 @@ export default function TransferConfirmationScreen() {
             { opacity: pressed ? 0.7 : 1 },
           ]}
         >
-          <ThemedText style={[styles.cancelText, { color: theme.textSecondary }]}>
+          <ThemedText
+            style={[styles.cancelText, { color: theme.textSecondary }]}
+          >
             Cancel
           </ThemedText>
         </Pressable>

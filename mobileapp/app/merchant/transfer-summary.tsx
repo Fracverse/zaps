@@ -34,7 +34,7 @@ export default function TransferSummaryScreen() {
 
   const handleConfirm = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    
+
     // Button press animation
     Animated.sequence([
       Animated.timing(scaleAnim, {
@@ -67,7 +67,8 @@ export default function TransferSummaryScreen() {
           styles.scrollContent,
           {
             paddingTop: headerHeight + Spacing.lg,
-            paddingBottom: insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
+            paddingBottom:
+              insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
           },
         ]}
         showsVerticalScrollIndicator={false}
@@ -97,7 +98,9 @@ export default function TransferSummaryScreen() {
                 <Feather name="user" size={24} color={theme.primary} />
               </View>
               <View style={styles.recipientInfo}>
-                <ThemedText style={[styles.recipientName, { color: theme.text }]}>
+                <ThemedText
+                  style={[styles.recipientName, { color: theme.text }]}
+                >
                   {MOCK_TRANSFER.recipient}
                 </ThemedText>
                 <ThemedText
@@ -179,7 +182,9 @@ export default function TransferSummaryScreen() {
 
             {MOCK_TRANSFER.note && (
               <>
-                <View style={[styles.divider, { backgroundColor: theme.border }]} />
+                <View
+                  style={[styles.divider, { backgroundColor: theme.border }]}
+                />
                 <View style={styles.noteContainer}>
                   <ThemedText
                     style={[styles.noteLabel, { color: theme.textSecondary }]}

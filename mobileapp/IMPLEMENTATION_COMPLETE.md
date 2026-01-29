@@ -40,8 +40,9 @@
 ### 🏠 Home Screen Updated
 
 Test buttons added to [/app/index.tsx](app/index.tsx) at the bottom:
+
 - **[Withdraw]** → Opens withdraw screen
-- **[Transfer]** → Opens transfer summary  
+- **[Transfer]** → Opens transfer summary
 - **[Success]** → Opens success screen
 
 ## 🚀 How to Test
@@ -54,6 +55,7 @@ npx expo start
 ```
 
 Then:
+
 - Press `i` for iOS simulator
 - Press `a` for Android emulator
 - Scan QR code with Expo Go app on your phone
@@ -61,6 +63,7 @@ Then:
 ### Test the Flows
 
 #### Flow 1: Withdraw
+
 1. Tap **[Withdraw]** button on home
 2. Enter amount or tap **Max**
 3. Tap **Initiate Withdrawal**
@@ -68,6 +71,7 @@ Then:
 5. Tap **Done** to return home
 
 #### Flow 2: Transfer
+
 1. Tap **[Transfer]** button on home
 2. Review transfer details
 3. Tap **Confirm Transfer**
@@ -76,6 +80,7 @@ Then:
 6. Tap **Done** to return home
 
 #### Flow 3: History
+
 1. Tap **[Withdraw]** button
 2. Switch to **History** tab
 3. View transaction list with status badges
@@ -83,6 +88,7 @@ Then:
 ## 🎯 Features Implemented
 
 ### UI/UX ✅
+
 - Clean, modern design matching Figma
 - Fully responsive layouts
 - Safe area handling (notches, status bars)
@@ -92,6 +98,7 @@ Then:
 - Status indicators
 
 ### Animations ✅
+
 - **Haptic Feedback:**
   - Light impact on button press
   - Selection feedback on tab switch
@@ -107,6 +114,7 @@ Then:
   - Fade-in transitions
 
 ### Performance ✅
+
 - Built-in React Native Animated API (no heavy libraries)
 - Optimized renders
 - Smooth 60fps animations
@@ -138,6 +146,7 @@ Transactions:
 ## 🎨 Design System
 
 ### Colors
+
 ```
 Light Mode (Default):
 - Primary: #1A4B4A (Dark Green)
@@ -153,12 +162,14 @@ Light Mode (Default):
 ```
 
 ### Spacing Scale
+
 ```
 xs: 4px   md: 12px   xl: 20px   3xl: 32px   5xl: 48px
 sm: 8px   lg: 16px   2xl: 24px  4xl: 40px
 ```
 
 ### Border Radius
+
 ```
 sm: 8px   lg: 16px   full: 9999px
 md: 12px  xl: 20px
@@ -167,39 +178,46 @@ md: 12px  xl: 20px
 ## 📚 Documentation
 
 Full documentation available in:
+
 - **[MERCHANT_SCREENS_README.md](MERCHANT_SCREENS_README.md)** - Detailed guide
 - **[SCREEN_FLOW_GUIDE.js](SCREEN_FLOW_GUIDE.js)** - Quick reference
 
 ## 🔧 Customization
 
 ### Change Colors
+
 Edit `/src/constants/theme.ts`:
+
 ```typescript
 export const Colors = {
   light: {
     primary: "#YOUR_COLOR",
     // ... more colors
-  }
-}
+  },
+};
 ```
 
 ### Change Mock Data
+
 Update constants in each screen file:
+
 ```typescript
 const MOCK_BALANCE = 15046.12;
 const MOCK_BANK = { ... };
 ```
 
 ### Adjust Animations
+
 Each screen has configurable animation parameters:
+
 ```typescript
 // Example in success.tsx
 Animated.spring(scaleAnim, {
   toValue: 1,
-  tension: 50,    // ← adjust
-  friction: 7,    // ← adjust
+  tension: 50, // ← adjust
+  friction: 7, // ← adjust
   useNativeDriver: true,
-})
+});
 ```
 
 ## 📦 Dependencies
@@ -208,22 +226,24 @@ All dependencies are lightweight and built-in:
 
 ```json
 {
-  "expo-haptics": "^13.0.3",          // ✅ Installed
-  "@expo/vector-icons": "^15.0.3",    // ✅ Already installed
-  "react-native-safe-area-context": "^5.6.2",  // ✅ Already installed
-  "@react-navigation/elements": "^2.9.5"       // ✅ Already installed
+  "expo-haptics": "^13.0.3", // ✅ Installed
+  "@expo/vector-icons": "^15.0.3", // ✅ Already installed
+  "react-native-safe-area-context": "^5.6.2", // ✅ Already installed
+  "@react-navigation/elements": "^2.9.5" // ✅ Already installed
 }
 ```
 
 ## 🎯 Next Steps (Optional Enhancements)
 
 ### Backend Integration
+
 - [ ] Connect to Stellar/Soroban blockchain
 - [ ] Real-time balance updates
 - [ ] Transaction history from API
 - [ ] Actual PIN/biometric authentication
 
 ### Features
+
 - [ ] Add form validation
 - [ ] Network error handling
 - [ ] Loading states
@@ -233,6 +253,7 @@ All dependencies are lightweight and built-in:
 - [ ] Biometric authentication option
 
 ### Accessibility
+
 - [ ] Add screen reader labels
 - [ ] Keyboard navigation support
 - [ ] High contrast mode
@@ -269,13 +290,14 @@ Everything is ready to test. Just run:
 npx expo start
 ```
 
-And start testing the screens! 
+And start testing the screens!
 
 Check the test buttons on the home screen for quick navigation.
 
 ---
 
 **Questions?** Check the detailed docs:
+
 - [MERCHANT_SCREENS_README.md](MERCHANT_SCREENS_README.md)
 - [SCREEN_FLOW_GUIDE.js](SCREEN_FLOW_GUIDE.js)
 

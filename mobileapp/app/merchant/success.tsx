@@ -1,11 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import {
-  View,
-  StyleSheet,
-  Pressable,
-  Animated,
-  Easing,
-} from "react-native";
+import { View, StyleSheet, Pressable, Animated, Easing } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -28,7 +22,7 @@ export default function SuccessScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
-  
+
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const checkAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -58,7 +52,7 @@ export default function SuccessScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [scaleAnim, fadeAnim, checkAnim]);
 
   const formatCurrency = (value: number) => {
     return value.toLocaleString("en-US", {
@@ -116,9 +110,7 @@ export default function SuccessScreen() {
           <ThemedText style={[styles.title, { color: theme.text }]}>
             Transaction Successful!
           </ThemedText>
-          <ThemedText
-            style={[styles.subtitle, { color: theme.textSecondary }]}
-          >
+          <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
             Your {MOCK_TRANSACTION.type.toLowerCase()} has been processed
           </ThemedText>
         </Animated.View>
@@ -134,7 +126,9 @@ export default function SuccessScreen() {
           ]}
         >
           <View style={styles.amountSection}>
-            <ThemedText style={[styles.amountLabel, { color: theme.textSecondary }]}>
+            <ThemedText
+              style={[styles.amountLabel, { color: theme.textSecondary }]}
+            >
               Amount
             </ThemedText>
             <ThemedText style={[styles.amountValue, { color: theme.text }]}>
@@ -145,7 +139,9 @@ export default function SuccessScreen() {
           <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
           <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: theme.textSecondary }]}>
+            <ThemedText
+              style={[styles.infoLabel, { color: theme.textSecondary }]}
+            >
               To
             </ThemedText>
             <ThemedText style={[styles.infoValue, { color: theme.text }]}>
@@ -154,7 +150,9 @@ export default function SuccessScreen() {
           </View>
 
           <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: theme.textSecondary }]}>
+            <ThemedText
+              style={[styles.infoLabel, { color: theme.textSecondary }]}
+            >
               Date
             </ThemedText>
             <ThemedText style={[styles.infoValue, { color: theme.text }]}>
@@ -163,7 +161,9 @@ export default function SuccessScreen() {
           </View>
 
           <View style={styles.infoRow}>
-            <ThemedText style={[styles.infoLabel, { color: theme.textSecondary }]}>
+            <ThemedText
+              style={[styles.infoLabel, { color: theme.textSecondary }]}
+            >
               Time
             </ThemedText>
             <ThemedText style={[styles.infoValue, { color: theme.text }]}>
@@ -174,7 +174,9 @@ export default function SuccessScreen() {
           <View style={[styles.divider, { backgroundColor: theme.border }]} />
 
           <View style={styles.referenceContainer}>
-            <ThemedText style={[styles.referenceLabel, { color: theme.textSecondary }]}>
+            <ThemedText
+              style={[styles.referenceLabel, { color: theme.textSecondary }]}
+            >
               Reference Number
             </ThemedText>
             <ThemedText style={[styles.referenceValue, { color: theme.text }]}>
@@ -195,7 +197,9 @@ export default function SuccessScreen() {
             ]}
           >
             <Feather name="download" size={20} color={theme.text} />
-            <ThemedText style={[styles.secondaryButtonText, { color: theme.text }]}>
+            <ThemedText
+              style={[styles.secondaryButtonText, { color: theme.text }]}
+            >
               Download Receipt
             </ThemedText>
           </Pressable>

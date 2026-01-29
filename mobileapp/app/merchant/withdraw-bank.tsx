@@ -7,7 +7,6 @@ import {
   ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useHeaderHeight } from "@react-navigation/elements";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -59,8 +58,7 @@ const MOCK_TRANSACTIONS: Transaction[] = [
 
 export default function WithdrawScreen() {
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
-  const { theme, isDark } = useTheme();
+  const { theme } = useTheme();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabType>("withdraw");
   const [amount, setAmount] = useState("");
@@ -155,7 +153,9 @@ export default function WithdrawScreen() {
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >
-            <ThemedText style={[styles.maxButtonText, { color: theme.primary }]}>
+            <ThemedText
+              style={[styles.maxButtonText, { color: theme.primary }]}
+            >
               Max
             </ThemedText>
           </Pressable>
@@ -232,10 +232,7 @@ export default function WithdrawScreen() {
                 -${formatCurrency(transaction.amount)}
               </ThemedText>
               <ThemedText
-                style={[
-                  styles.transactionBank,
-                  { color: theme.textSecondary },
-                ]}
+                style={[styles.transactionBank, { color: theme.textSecondary }]}
               >
                 {transaction.bankName}
               </ThemedText>
@@ -288,7 +285,8 @@ export default function WithdrawScreen() {
           styles.scrollContent,
           {
             paddingTop: insets.top + Spacing.md,
-            paddingBottom: insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
+            paddingBottom:
+              insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
           },
         ]}
         showsVerticalScrollIndicator={false}
@@ -300,7 +298,10 @@ export default function WithdrawScreen() {
               styles.tab,
               activeTab === "withdraw"
                 ? [styles.tabActive, { borderColor: theme.text }]
-                : [styles.tabInactive, { backgroundColor: theme.backgroundDefault }],
+                : [
+                    styles.tabInactive,
+                    { backgroundColor: theme.backgroundDefault },
+                  ],
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >
@@ -322,7 +323,10 @@ export default function WithdrawScreen() {
               styles.tab,
               activeTab === "history"
                 ? [styles.tabActive, { borderColor: theme.text }]
-                : [styles.tabInactive, { backgroundColor: theme.backgroundDefault }],
+                : [
+                    styles.tabInactive,
+                    { backgroundColor: theme.backgroundDefault },
+                  ],
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >

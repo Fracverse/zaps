@@ -67,7 +67,7 @@ export default function OnboardingScreen() {
             style={styles.continueButton}
             textStyle={styles.buttonText}
           />
-          
+
           {/* Test Navigation Buttons */}
           <View style={styles.testButtons}>
             <Text style={styles.testLabel}>Test Screens:</Text>
