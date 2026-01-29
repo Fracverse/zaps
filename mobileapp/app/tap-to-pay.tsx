@@ -431,11 +431,7 @@ export default function TapToPayScreen() {
     }
     if (step === "success") {
       return (
-        <Button
-          title="Done"
-          onPress={goNext}
-          style={styles.primaryButton}
-        />
+        <Button title="Done" onPress={goNext} style={styles.primaryButton} />
       );
     }
     return null;
