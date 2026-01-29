@@ -31,7 +31,11 @@ const TokenItem = ({ _name, symbol, balance, value, Icon }: any) => (
 
 const ActionButton = ({ label, Icon, onPress }: any) => {
   return (
-    <TouchableOpacity style={styles.actionButton} activeOpacity={0.8} onPress={onPress}>
+    <TouchableOpacity
+      style={styles.actionButton}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
       <View style={styles.actionIconContainer}>
         <Icon width={24} height={24} />
       </View>
@@ -83,11 +87,15 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.actionsGrid}>
-          <ActionButton label="Tap-to-pay Payment" Icon={TapIcon} onPress={() => router.push('/merchant/accept-payment')}/>
-          <ActionButton 
-            label="Receive Via QR Code" 
-            Icon={ScanIcon} 
-            onPress={() => router.push('/merchant/qr-code')}
+          <ActionButton
+            label="Tap-to-pay Payment"
+            Icon={TapIcon}
+            onPress={() => router.push("/merchant/accept-payment")}
+          />
+          <ActionButton
+            label="Receive Via QR Code"
+            Icon={ScanIcon}
+            onPress={() => router.push("/merchant/qr-code")}
           />
           <ActionButton label="Withdraw to Bank" Icon={BankIcon} />
         </View>

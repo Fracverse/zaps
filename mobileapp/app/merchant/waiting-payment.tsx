@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,8 +6,8 @@ import {
   StatusBar,
   SafeAreaView,
   Animated,
-} from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
+} from "react-native";
+import { useLocalSearchParams, router } from "expo-router";
 
 const WaitingPaymentScreen = () => {
   const { amount } = useLocalSearchParams();
@@ -67,23 +67,23 @@ const WaitingPaymentScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      
-      <Animated.View 
+
+      <Animated.View
         style={[
           styles.content,
           {
             opacity: fadeAnim,
             transform: [{ translateY: slideAnim }],
-          }
+          },
         ]}
       >
         {/* Dollar Icon */}
-        <Animated.View 
+        <Animated.View
           style={[
             styles.iconContainer,
             {
               transform: [{ scale: pulseAnim }],
-            }
+            },
           ]}
         >
           <View style={styles.dollarIcon}>
@@ -99,13 +99,15 @@ const WaitingPaymentScreen = () => {
         {/* Amount Display */}
         <Animated.View style={{ opacity: fadeAnim }}>
           <View style={styles.amountContainer}>
-            <Text style={styles.amountText}>${amount || '0'}</Text>
+            <Text style={styles.amountText}>${amount || "0"}</Text>
           </View>
         </Animated.View>
 
         {/* Status Text */}
         <Animated.View style={{ opacity: fadeAnim }}>
-          <Text style={styles.statusText}>${amount || '0'} waiting to be confirmed</Text>
+          <Text style={styles.statusText}>
+            ${amount || "0"} waiting to be confirmed
+          </Text>
         </Animated.View>
       </Animated.View>
     </SafeAreaView>
@@ -115,12 +117,12 @@ const WaitingPaymentScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 20,
   },
   iconContainer: {
@@ -131,26 +133,26 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 3,
-    borderColor: '#1A4B4A',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    borderColor: "#1A4B4A",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#fff",
   },
   dollarSymbol: {
     fontSize: 36,
-    fontWeight: 'bold',
-    color: '#1A4B4A',
+    fontWeight: "bold",
+    color: "#1A4B4A",
   },
   waitingText: {
     fontSize: 24,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: "600",
+    color: "#000",
     marginBottom: 40,
-    textAlign: 'center',
+    textAlign: "center",
   },
   amountContainer: {
     borderWidth: 2,
-    borderColor: '#000',
+    borderColor: "#000",
     borderRadius: 25,
     paddingHorizontal: 30,
     paddingVertical: 15,
@@ -158,13 +160,13 @@ const styles = StyleSheet.create({
   },
   amountText: {
     fontSize: 32,
-    fontWeight: 'bold',
-    color: '#000',
+    fontWeight: "bold",
+    color: "#000",
   },
   statusText: {
     fontSize: 16,
-    color: '#999',
-    textAlign: 'center',
+    color: "#999",
+    textAlign: "center",
   },
 });
 

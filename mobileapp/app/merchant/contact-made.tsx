@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -8,8 +8,8 @@ import {
   SafeAreaView,
   Image,
   Animated,
-} from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+} from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
 
 const ContactMadeScreen = () => {
   const { amount } = useLocalSearchParams();
@@ -62,33 +62,33 @@ const ContactMadeScreen = () => {
 
   const handleScanInstead = () => {
     // Navigate back to accept payment or handle scan functionality
-    router.push('/merchant/accept-payment');
+    router.push("/merchant/accept-payment");
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      
-      <Animated.View 
+
+      <Animated.View
         style={[
           styles.content,
           {
             opacity: fadeAnim,
             transform: [{ translateY: slideAnim }],
-          }
+          },
         ]}
       >
         {/* Contact Icon */}
-        <Animated.View 
+        <Animated.View
           style={[
             styles.iconContainer,
             {
               transform: [{ scale: scaleAnim }],
-            }
+            },
           ]}
         >
-          <Image 
-            source={require('../../assets/Cardholder.png')} 
+          <Image
+            source={require("../../assets/Cardholder.png")}
             style={styles.cardholderImage}
             resizeMode="contain"
           />
@@ -119,12 +119,12 @@ const ContactMadeScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 20,
   },
   iconContainer: {
@@ -136,39 +136,39 @@ const styles = StyleSheet.create({
   },
   contactText: {
     fontSize: 24,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: "600",
+    color: "#000",
     marginBottom: 20,
-    textAlign: 'center',
+    textAlign: "center",
   },
   statusText: {
     fontSize: 16,
-    color: '#999',
-    textAlign: 'center',
+    color: "#999",
+    textAlign: "center",
   },
   bottomContainer: {
     paddingHorizontal: 20,
     paddingBottom: 30,
-    alignItems: 'center',
+    alignItems: "center",
   },
   acceptPaymentText: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: "600",
+    color: "#000",
     marginBottom: 15,
   },
   scanButton: {
-    backgroundColor: '#1A4B4A',
+    backgroundColor: "#1A4B4A",
     borderRadius: 30,
     paddingVertical: 20,
     paddingHorizontal: 40,
-    width: '100%',
-    alignItems: 'center',
+    width: "100%",
+    alignItems: "center",
   },
   scanButtonText: {
-    color: '#80FA98',
+    color: "#80FA98",
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
 });

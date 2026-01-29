@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -7,9 +7,9 @@ import {
   StatusBar,
   SafeAreaView,
   Animated,
-} from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+} from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 
 const PaymentReceivedScreen = () => {
   const { amount } = useLocalSearchParams();
@@ -65,29 +65,29 @@ const PaymentReceivedScreen = () => {
         useNativeDriver: true,
       }),
     ]).start(() => {
-      router.push('/merchant');
+      router.push("/merchant");
     });
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      
-      <Animated.View 
+
+      <Animated.View
         style={[
           styles.content,
           {
             opacity: fadeAnim,
-          }
+          },
         ]}
       >
         {/* Success Icon */}
-        <Animated.View 
+        <Animated.View
           style={[
             styles.iconContainer,
             {
               transform: [{ scale: scaleAnim }],
-            }
+            },
           ]}
         >
           <View style={styles.successIcon}>
@@ -96,7 +96,7 @@ const PaymentReceivedScreen = () => {
         </Animated.View>
 
         {/* Payment Received Text */}
-        <Animated.View 
+        <Animated.View
           style={{
             opacity: fadeAnim,
             transform: [{ scale: bounceAnim }, { translateY: slideAnim }],
@@ -106,19 +106,19 @@ const PaymentReceivedScreen = () => {
         </Animated.View>
 
         {/* Amount Display */}
-        <Animated.View 
+        <Animated.View
           style={{
             opacity: fadeAnim,
             transform: [{ scale: bounceAnim }, { translateY: slideAnim }],
           }}
         >
           <View style={styles.amountContainer}>
-            <Text style={styles.amountText}>${amount || '0'}</Text>
+            <Text style={styles.amountText}>${amount || "0"}</Text>
           </View>
         </Animated.View>
 
         {/* Status Text */}
-        <Animated.View 
+        <Animated.View
           style={{
             opacity: fadeAnim,
             transform: [{ translateY: slideAnim }],
@@ -141,12 +141,12 @@ const PaymentReceivedScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   content: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 20,
   },
   iconContainer: {
@@ -157,21 +157,21 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 40,
     borderWidth: 3,
-    borderColor: '#1A4B4A',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    borderColor: "#1A4B4A",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#fff",
   },
   receivedText: {
     fontSize: 24,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: "600",
+    color: "#000",
     marginBottom: 40,
-    textAlign: 'center',
+    textAlign: "center",
   },
   amountContainer: {
     borderWidth: 2,
-    borderColor: '#000',
+    borderColor: "#000",
     borderRadius: 25,
     paddingHorizontal: 30,
     paddingVertical: 15,
@@ -179,28 +179,28 @@ const styles = StyleSheet.create({
   },
   amountText: {
     fontSize: 32,
-    fontWeight: 'bold',
-    color: '#000',
+    fontWeight: "bold",
+    color: "#000",
   },
   statusText: {
     fontSize: 16,
-    color: '#999',
-    textAlign: 'center',
+    color: "#999",
+    textAlign: "center",
   },
   bottomContainer: {
     paddingHorizontal: 20,
     paddingBottom: 30,
   },
   doneButton: {
-    backgroundColor: '#1A4B4A',
+    backgroundColor: "#1A4B4A",
     borderRadius: 30,
     paddingVertical: 20,
-    alignItems: 'center',
+    alignItems: "center",
   },
   doneButtonText: {
-    color: '#80FA98',
+    color: "#80FA98",
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
 });

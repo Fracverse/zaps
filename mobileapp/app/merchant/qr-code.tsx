@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -7,23 +7,23 @@ import {
   StatusBar,
   SafeAreaView,
   Animated,
-} from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import QRCode from 'react-native-qrcode-svg';
+} from "react-native";
+import { router, useLocalSearchParams } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import QRCode from "react-native-qrcode-svg";
 
 const QRCodeScreen = () => {
   const { amount } = useLocalSearchParams();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
-  
+
   // Create payment data for QR code
   const paymentData = JSON.stringify({
-    amount: amount || '0',
-    merchant: 'Ejembiii.zaps',
+    amount: amount || "0",
+    merchant: "Ejembiii.zaps",
     timestamp: new Date().toISOString(),
-    currency: 'USD'
+    currency: "USD",
   });
 
   useEffect(() => {
@@ -52,7 +52,7 @@ const QRCodeScreen = () => {
 
   const handleShare = () => {
     // Handle share functionality
-    console.log('Share QR code');
+    console.log("Share QR code");
   };
 
   const handleContinue = () => {
@@ -68,7 +68,7 @@ const QRCodeScreen = () => {
         duration: 300,
         useNativeDriver: true,
       }),
-    ])
+    ]);
     // .start(() => {
     //   router.push(`/merchant/waiting-payment?amount=${amount}`);
     // });
@@ -77,32 +77,35 @@ const QRCodeScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      
+
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Accept Payment</Text>
         <View style={styles.placeholder} />
       </View>
 
-      <Animated.View 
+      <Animated.View
         style={[
           styles.content,
           {
             opacity: fadeAnim,
             transform: [{ translateY: slideAnim }],
-          }
+          },
         ]}
       >
         {/* QR Code Container */}
-        <Animated.View 
+        <Animated.View
           style={[
             styles.qrContainer,
             {
               transform: [{ scale: scaleAnim }],
-            }
+            },
           ]}
         >
           <View style={styles.qrCode}>
@@ -126,7 +129,10 @@ const QRCodeScreen = () => {
 
       {/* Continue Button */}
       <View style={styles.bottomContainer}>
-        <TouchableOpacity style={styles.continueButton} onPress={handleContinue}>
+        <TouchableOpacity
+          style={styles.continueButton}
+          onPress={handleContinue}
+        >
           <Text style={styles.continueButtonText}>Continue</Text>
         </TouchableOpacity>
       </View>
@@ -137,25 +143,25 @@ const QRCodeScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingVertical: 15,
     paddingTop: 40,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: "#f0f0f0",
   },
   backButton: {
     padding: 5,
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#000',
+    fontWeight: "600",
+    color: "#000",
   },
   placeholder: {
     width: 34,
@@ -164,10 +170,10 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 40,
-    alignItems: 'center',
+    alignItems: "center",
   },
   qrContainer: {
-    backgroundColor: '#f8f8f8',
+    backgroundColor: "#f8f8f8",
     borderRadius: 20,
     padding: 30,
     marginBottom: 40,
@@ -175,16 +181,16 @@ const styles = StyleSheet.create({
   qrCode: {
     width: 280,
     height: 280,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderRadius: 12,
     padding: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
   shareButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f0f0f0",
     paddingHorizontal: 30,
     paddingVertical: 15,
     borderRadius: 25,
@@ -192,23 +198,23 @@ const styles = StyleSheet.create({
   },
   shareButtonText: {
     fontSize: 16,
-    color: '#666',
-    fontWeight: '500',
+    color: "#666",
+    fontWeight: "500",
   },
   bottomContainer: {
     paddingHorizontal: 20,
     paddingBottom: 30,
   },
   continueButton: {
-    backgroundColor: '#1A4B4A',
+    backgroundColor: "#1A4B4A",
     borderRadius: 30,
     paddingVertical: 20,
-    alignItems: 'center',
+    alignItems: "center",
   },
   continueButtonText: {
-    color: '#80FA98',
+    color: "#80FA98",
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
 });
