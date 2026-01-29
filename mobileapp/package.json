@@ -21,6 +21,7 @@
     "expo": "~54.0.32",
     "expo-constants": "^18.0.13",
     "expo-font": "~14.0.11",
+    "expo-haptics": "^15.0.8",
     "expo-linking": "^8.0.11",
     "expo-router": "^6.0.22",
     "expo-status-bar": "~3.0.9",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "@types/react-native": "^0.73.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",

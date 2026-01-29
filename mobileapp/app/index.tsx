@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, StyleSheet, Image } from "react-native";
+import { View, Text, StyleSheet, Image, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
@@ -67,6 +67,29 @@ export default function OnboardingScreen() {
             style={styles.continueButton}
             textStyle={styles.buttonText}
           />
+          
+          {/* Test Navigation Buttons */}
+          <View style={styles.testButtons}>
+            <Text style={styles.testLabel}>Test Screens:</Text>
+            <Pressable
+              style={styles.testButton}
+              onPress={() => router.push("/merchant/withdraw-bank")}
+            >
+              <Text style={styles.testButtonText}>Withdraw</Text>
+            </Pressable>
+            <Pressable
+              style={styles.testButton}
+              onPress={() => router.push("/merchant/transfer-summary")}
+            >
+              <Text style={styles.testButtonText}>Transfer</Text>
+            </Pressable>
+            <Pressable
+              style={styles.testButton}
+              onPress={() => router.push("/merchant/success")}
+            >
+              <Text style={styles.testButtonText}>Success</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -175,5 +198,30 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 18,
     fontFamily: "Outfit_500Medium",
+  },
+  testButtons: {
+    marginTop: 20,
+    gap: 10,
+  },
+  testLabel: {
+    fontSize: 14,
+    color: COLORS.primary,
+    fontFamily: "Outfit_600SemiBold",
+    textAlign: "center",
+    marginBottom: 5,
+  },
+  testButton: {
+    backgroundColor: "rgba(26, 75, 74, 0.1)",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  testButtonText: {
+    color: COLORS.primary,
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    textAlign: "center",
   },
 });
