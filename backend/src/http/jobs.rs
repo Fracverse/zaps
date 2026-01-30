@@ -1,4 +1,4 @@
-use axum::{extract::State, http::StatusCode, response::Json, routing::get, Router};
+use axum::{extract::State, http::StatusCode, response::Json, routing::{get, post}, Router};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ async fn get_queue_stats(
     _user: AuthenticatedUser,
 ) -> Result<Json<Value>, ApiError> {
     let stats = worker.get_queue_stats().await
-        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        .map_err(|e| ApiError::InternalServerError)?;
 
     Ok(Json(json!({
         "main_queue_size": stats.main_queue_size,
@@ -54,7 +54,7 @@ async fn enqueue_email(
         .to_string();
 
     crate::job_worker::enqueue_email_job(worker, to, subject, body).await
-        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        .map_err(|e| ApiError::InternalServerError)?;
 
     Ok((StatusCode::ACCEPTED, Json(json!({
         "message": "Email job enqueued successfully",
@@ -83,7 +83,7 @@ async fn enqueue_notification(
         .to_string();
 
     crate::job_worker::enqueue_notification_job(worker, user_id, message, notification_type).await
-        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        .map_err(|e| ApiError::InternalServerError)?;
 
     Ok((StatusCode::ACCEPTED, Json(json!({
         "message": "Notification job enqueued successfully",
@@ -109,7 +109,7 @@ async fn enqueue_sync(
     }
 
     crate::job_worker::enqueue_sync_job(worker, sync_type, data).await
-        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        .map_err(|e| ApiError::InternalServerError)?;
 
     Ok((StatusCode::ACCEPTED, Json(json!({
         "message": "Sync job enqueued successfully",
@@ -142,7 +142,7 @@ async fn enqueue_blockchain_tx(
         .map(|s| s.to_string());
 
     crate::job_worker::enqueue_blockchain_tx_job(worker, from_address, to_address, amount, network).await
-        .map_err(|e| ApiError::InternalServerError(e.to_string()))?;
+        .map_err(|e| ApiError::InternalServerError)?;
 
     Ok((StatusCode::ACCEPTED, Json(json!({
         "message": "Blockchain transaction job enqueued successfully",

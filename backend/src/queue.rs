@@ -66,7 +66,7 @@ impl JobQueue {
             .unwrap_or_else(|| Utc::now())
             .timestamp();
 
-        conn.zadd(DEFAULT_QUEUE, &job_json, score)
+        conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
             .await
             .context("Failed to enqueue job")?;
 
@@ -81,8 +81,6 @@ impl JobQueue {
         let now = Utc::now().timestamp();
         let jobs: Vec<String> = conn
             .zrangebyscore(DEFAULT_QUEUE, "-inf", now)
-            .limit(1)
-            .collect::<Vec<String>>()
             .await
             .context("Failed to fetch jobs from queue")?;
 
@@ -95,15 +93,14 @@ impl JobQueue {
             .context("Failed to deserialize job")?;
 
         // Move job to processing queue
-        let _: () = conn
-            .zrem(DEFAULT_QUEUE, job_json)
+        conn.zrem::<_, _, ()>(DEFAULT_QUEUE, job_json)
             .await
             .context("Failed to remove job from main queue")?;
 
         let processing_score = (Utc::now() + chrono::Duration::from_std(self.config.visibility_timeout)
             .unwrap()).timestamp();
         
-        conn.zadd(PROCESSING_QUEUE, job_json, processing_score)
+        conn.zadd::<_, _, _, ()>(PROCESSING_QUEUE, job_json, processing_score)
             .await
             .context("Failed to add job to processing queue")?;
 
@@ -117,7 +114,6 @@ impl JobQueue {
         // Remove from processing queue
         let jobs: Vec<String> = conn
             .zrange(PROCESSING_QUEUE, 0, -1)
-            .collect::<Vec<String>>()
             .await
             .context("Failed to fetch processing jobs")?;
 
@@ -126,7 +122,7 @@ impl JobQueue {
                 .context("Failed to deserialize processing job")?;
             
             if job.id == job_id {
-                conn.zrem(PROCESSING_QUEUE, &job_json)
+                conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &job_json)
                     .await
                     .context("Failed to remove completed job from processing queue")?;
 
@@ -152,8 +148,8 @@ impl JobQueue {
         let backoff_delay = self.calculate_backoff_delay(current_attempt);
         let retry_job = JobPayload {
             id: job.id,
-            job_type: job.job_type,
-            payload: job.payload,
+            job_type: job.job_type.clone(),
+            payload: job.payload.clone(),
             retries: Some(current_attempt),
             created_at: job.created_at,
             scheduled_at: Some(Utc::now() + backoff_delay),
@@ -164,14 +160,14 @@ impl JobQueue {
             .context("Failed to serialize retry job")?;
 
         let score = retry_job.scheduled_at.unwrap().timestamp();
-        conn.zadd(RETRY_QUEUE, &job_json, score)
+        conn.zadd::<_, _, _, ()>(RETRY_QUEUE, &job_json, score)
             .await
             .context("Failed to add job to retry queue")?;
 
         // Remove from processing queue
         let original_json = serde_json::to_string(&job)
             .context("Failed to serialize original job")?;
-        conn.zrem(PROCESSING_QUEUE, &original_json)
+        conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &original_json)
             .await
             .context("Failed to remove job from processing queue")?;
 
@@ -187,7 +183,6 @@ impl JobQueue {
         let now = Utc::now().timestamp();
         let retry_jobs: Vec<String> = conn
             .zrangebyscore(RETRY_QUEUE, "-inf", now)
-            .collect::<Vec<String>>()
             .await
             .context("Failed to fetch retry jobs")?;
 
@@ -196,12 +191,12 @@ impl JobQueue {
                 .context("Failed to deserialize retry job")?;
 
             // Move back to main queue
-            conn.zrem(RETRY_QUEUE, &job_json)
+            conn.zrem::<_, _, ()>(RETRY_QUEUE, &job_json)
                 .await
                 .context("Failed to remove job from retry queue")?;
 
             let score = job.scheduled_at.unwrap().timestamp();
-            conn.zadd(DEFAULT_QUEUE, &job_json, score)
+            conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
                 .await
                 .context("Failed to move job back to main queue")?;
 
@@ -235,14 +230,14 @@ impl JobQueue {
                 .context("Failed to remove oldest dead letter job")?;
         }
 
-        conn.rpush(DEAD_LETTER_QUEUE, &dlq_json)
+        conn.rpush::<_, _, ()>(DEAD_LETTER_QUEUE, &dlq_json)
             .await
             .context("Failed to add job to dead letter queue")?;
 
         // Remove from processing queue
         let original_json = serde_json::to_string(&job)
             .context("Failed to serialize original job")?;
-        conn.zrem(PROCESSING_QUEUE, &original_json)
+        conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &original_json)
             .await
             .context("Failed to remove job from processing queue")?;
 
@@ -292,7 +287,6 @@ impl JobQueue {
         let now = Utc::now().timestamp();
         let stalled_jobs: Vec<String> = conn
             .zrangebyscore(PROCESSING_QUEUE, "-inf", now)
-            .collect::<Vec<String>>()
             .await
             .context("Failed to fetch stalled jobs")?;
 
@@ -303,13 +297,13 @@ impl JobQueue {
                 .context("Failed to deserialize stalled job")?;
 
             // Remove from processing queue
-            conn.zrem(PROCESSING_QUEUE, &job_json)
+            conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &job_json)
                 .await
                 .context("Failed to remove stalled job from processing queue")?;
 
             // Add back to main queue
             let score = job.scheduled_at.unwrap_or_else(|| Utc::now()).timestamp();
-            conn.zadd(DEFAULT_QUEUE, &job_json, score)
+            conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
                 .await
                 .context("Failed to requeue stalled job")?;
 

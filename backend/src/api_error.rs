@@ -18,6 +18,9 @@ pub enum ApiError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 
@@ -62,6 +65,7 @@ impl IntoResponse for ApiError {
             ApiError::Authentication(_) => (StatusCode::UNAUTHORIZED, "AUTHENTICATION_FAILED"),
             ApiError::Authorization(_) => (StatusCode::FORBIDDEN, "AUTHORIZATION_FAILED"),
             ApiError::Validation(_) => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
+            ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::InternalServerError => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
@@ -86,6 +90,12 @@ impl IntoResponse for ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(_err: anyhow::Error) -> Self {
+        ApiError::InternalServerError
+    }
+}
+
+impl ApiError {
+    pub fn InternalServerError(_message: String) -> Self {
         ApiError::InternalServerError
     }
 }

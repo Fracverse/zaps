@@ -120,23 +120,24 @@ pub async fn create_app(
     // -------------------- Jobs --------------------
     let job_routes = jobs::create_job_routes();
 
-    // -------------------- Protected Routes --------------------
+    // -------------------- Protected routes (require authentication)
     let protected_routes = Router::new()
         .nest("/identity", identity_routes)
         .nest("/payments", payment_routes)
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
-        .nest("/notifications", notification_routes)
         .nest("/admin", admin_routes)
-        .nest("/jobs", job_routes)
-        .merge(audit_routes)
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            auth_middleware::authenticate,
+        ))
         .layer(middleware::from_fn_with_state(
             services.clone(),
             audit_logging,
         ))
         .layer(middleware::from_fn_with_state(
             services.clone(),
-            auth_middleware::authenticate,
+            rate_limit::rate_limit,
         ));
 
     // -------------------- Public Routes --------------------
@@ -149,15 +150,11 @@ pub async fn create_app(
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
-        .layer(middleware::from_fn_with_state(
-            services.clone(),
-            rate_limit::rate_limit,
-        ))
+        .with_state(services)
         .layer(middleware::from_fn(request_id::request_id))
         .layer(middleware::from_fn(metrics::track_metrics))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
-        .with_state(services);
+        .layer(CorsLayer::permissive());
 
     Ok(app)
 }

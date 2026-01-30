@@ -184,6 +184,7 @@ impl Default for Config {
                 dead_letter_max_size: 10000,
                 worker_count: 4,
                 reclaim_interval_seconds: 60,
+            },
             rate_limit: RateLimitConfig {
                 window_ms: 60000, // 1 minute
                 max_requests: 100,
