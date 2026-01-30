@@ -1,8 +1,8 @@
 // use std::thread;
 // use std::time::Duration;
-// use BLINKS_backend::config::Config;
-// use BLINKS_backend::models::{RateLimitConfig, RateLimitScope};
-// use BLINKS_backend::service::RateLimitService;
+// use blinks_backend::config::Config;
+// use blinks_backend::models::{RateLimitConfig, RateLimitScope};
+// use blinks_backend::service::RateLimitService;
 
 // #[test]
 // fn test_rate_limit_enforcement() {
