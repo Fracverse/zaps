@@ -10,17 +10,12 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, health, identity, jobs, metrics as metrics_http,
-        notifications, payments, profiles, transfers, withdrawals,
+        admin, audit, auth, health, identity, jobs, metrics as metrics_http, notifications,
+        payments, profiles, transfers, withdrawals,
     },
     job_worker::JobWorker,
     middleware::{
-        audit_logging,
-        auth as auth_middleware,
-        metrics,
-        rate_limit,
-        request_id,
-        role_guard,
+        audit_logging, auth as auth_middleware, metrics, rate_limit, request_id, role_guard,
     },
     role::Role,
     service::{MetricsService, ServiceContainer},
@@ -86,7 +81,10 @@ pub async fn create_app(
     let withdrawal_routes = Router::new()
         .route("/withdrawals", post(withdrawals::create_withdrawal))
         .route("/withdrawals/:id", get(withdrawals::get_withdrawal))
-        .route("/withdrawals/:id/status", get(withdrawals::get_withdrawal_status));
+        .route(
+            "/withdrawals/:id/status",
+            get(withdrawals::get_withdrawal_status),
+        );
 
     // -------------------- Notifications --------------------
     let notification_routes = Router::new()

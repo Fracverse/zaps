@@ -1,4 +1,4 @@
-use crate::job_types::{JobPayload, JobResult, DeadLetterJob};
+use crate::job_types::{DeadLetterJob, JobPayload, JobResult};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
@@ -59,12 +59,9 @@ impl JobQueue {
 
     pub async fn enqueue(&self, job: JobPayload) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        let job_json = serde_json::to_string(&job)
-            .context("Failed to serialize job")?;
+        let job_json = serde_json::to_string(&job).context("Failed to serialize job")?;
 
-        let score = job.scheduled_at
-            .unwrap_or_else(|| Utc::now())
-            .timestamp();
+        let score = job.scheduled_at.unwrap_or_else(|| Utc::now()).timestamp();
 
         conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
             .await
@@ -76,7 +73,7 @@ impl JobQueue {
 
     pub async fn dequeue(&self) -> Result<Option<JobPayload>> {
         let mut conn = self.pool.get().await?;
-        
+
         // Get the earliest ready job
         let now = Utc::now().timestamp();
         let jobs: Vec<String> = conn
@@ -89,17 +86,18 @@ impl JobQueue {
         }
 
         let job_json = &jobs[0];
-        let job: JobPayload = serde_json::from_str(job_json)
-            .context("Failed to deserialize job")?;
+        let job: JobPayload =
+            serde_json::from_str(job_json).context("Failed to deserialize job")?;
 
         // Move job to processing queue
         conn.zrem::<_, _, ()>(DEFAULT_QUEUE, job_json)
             .await
             .context("Failed to remove job from main queue")?;
 
-        let processing_score = (Utc::now() + chrono::Duration::from_std(self.config.visibility_timeout)
-            .unwrap()).timestamp();
-        
+        let processing_score = (Utc::now()
+            + chrono::Duration::from_std(self.config.visibility_timeout).unwrap())
+        .timestamp();
+
         conn.zadd::<_, _, _, ()>(PROCESSING_QUEUE, job_json, processing_score)
             .await
             .context("Failed to add job to processing queue")?;
@@ -110,7 +108,7 @@ impl JobQueue {
 
     pub async fn complete_job(&self, job_id: Uuid, result: JobResult) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        
+
         // Remove from processing queue
         let jobs: Vec<String> = conn
             .zrange(PROCESSING_QUEUE, 0, -1)
@@ -118,9 +116,9 @@ impl JobQueue {
             .context("Failed to fetch processing jobs")?;
 
         for job_json in jobs {
-            let job: JobPayload = serde_json::from_str(&job_json)
-                .context("Failed to deserialize processing job")?;
-            
+            let job: JobPayload =
+                serde_json::from_str(&job_json).context("Failed to deserialize processing job")?;
+
             if job.id == job_id {
                 conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &job_json)
                     .await
@@ -140,7 +138,7 @@ impl JobQueue {
 
     pub async fn retry_job(&self, job: JobPayload, error: String) -> Result<()> {
         let current_attempt = job.retries.unwrap_or(0) + 1;
-        
+
         if current_attempt >= self.config.max_retries {
             return self.send_to_dead_letter(job, error, current_attempt).await;
         }
@@ -156,8 +154,8 @@ impl JobQueue {
         };
 
         let mut conn = self.pool.get().await?;
-        let job_json = serde_json::to_string(&retry_job)
-            .context("Failed to serialize retry job")?;
+        let job_json =
+            serde_json::to_string(&retry_job).context("Failed to serialize retry job")?;
 
         let score = retry_job.scheduled_at.unwrap().timestamp();
         conn.zadd::<_, _, _, ()>(RETRY_QUEUE, &job_json, score)
@@ -165,21 +163,23 @@ impl JobQueue {
             .context("Failed to add job to retry queue")?;
 
         // Remove from processing queue
-        let original_json = serde_json::to_string(&job)
-            .context("Failed to serialize original job")?;
+        let original_json =
+            serde_json::to_string(&job).context("Failed to serialize original job")?;
         conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &original_json)
             .await
             .context("Failed to remove job from processing queue")?;
 
-        warn!("Retrying job {} (attempt {}/{}) in {:?}", 
-              job.id, current_attempt, self.config.max_retries, backoff_delay);
-        
+        warn!(
+            "Retrying job {} (attempt {}/{}) in {:?}",
+            job.id, current_attempt, self.config.max_retries, backoff_delay
+        );
+
         Ok(())
     }
 
     pub async fn process_retry_queue(&self) -> Result<()> {
         let mut conn = self.pool.get().await?;
-        
+
         let now = Utc::now().timestamp();
         let retry_jobs: Vec<String> = conn
             .zrangebyscore(RETRY_QUEUE, "-inf", now)
@@ -187,8 +187,8 @@ impl JobQueue {
             .context("Failed to fetch retry jobs")?;
 
         for job_json in retry_jobs {
-            let job: JobPayload = serde_json::from_str(&job_json)
-                .context("Failed to deserialize retry job")?;
+            let job: JobPayload =
+                serde_json::from_str(&job_json).context("Failed to deserialize retry job")?;
 
             // Move back to main queue
             conn.zrem::<_, _, ()>(RETRY_QUEUE, &job_json)
@@ -206,7 +206,12 @@ impl JobQueue {
         Ok(())
     }
 
-    async fn send_to_dead_letter(&self, job: JobPayload, error: String, total_attempts: u32) -> Result<()> {
+    async fn send_to_dead_letter(
+        &self,
+        job: JobPayload,
+        error: String,
+        total_attempts: u32,
+    ) -> Result<()> {
         let dead_letter_job = DeadLetterJob {
             original_job: job.clone(),
             error,
@@ -219,13 +224,15 @@ impl JobQueue {
             .context("Failed to serialize dead letter job")?;
 
         // Check dead letter queue size
-        let current_size: usize = conn.llen(DEAD_LETTER_QUEUE)
+        let current_size: usize = conn
+            .llen(DEAD_LETTER_QUEUE)
             .await
             .context("Failed to check dead letter queue size")?;
 
         if current_size >= self.config.dead_letter_max_size {
             // Remove oldest job if queue is full
-            let _: () = conn.lpop(DEAD_LETTER_QUEUE, None)
+            let _: () = conn
+                .lpop(DEAD_LETTER_QUEUE, None)
                 .await
                 .context("Failed to remove oldest dead letter job")?;
         }
@@ -235,13 +242,16 @@ impl JobQueue {
             .context("Failed to add job to dead letter queue")?;
 
         // Remove from processing queue
-        let original_json = serde_json::to_string(&job)
-            .context("Failed to serialize original job")?;
+        let original_json =
+            serde_json::to_string(&job).context("Failed to serialize original job")?;
         conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &original_json)
             .await
             .context("Failed to remove job from processing queue")?;
 
-        error!("Job {} sent to dead letter queue after {} attempts", job.id, total_attempts);
+        error!(
+            "Job {} sent to dead letter queue after {} attempts",
+            job.id, total_attempts
+        );
         Ok(())
     }
 
@@ -249,27 +259,31 @@ impl JobQueue {
         let base_delay = Duration::from_secs(1);
         let multiplier = self.config.backoff_multiplier.powi(attempt as i32);
         let delay = base_delay * multiplier as u32;
-        
+
         let max_delay = std::cmp::min(delay, self.config.max_backoff);
         chrono::Duration::from_std(max_delay).unwrap()
     }
 
     pub async fn get_queue_stats(&self) -> Result<QueueStats> {
         let mut conn = self.pool.get().await?;
-        
-        let main_queue_size: usize = conn.zcard(DEFAULT_QUEUE)
+
+        let main_queue_size: usize = conn
+            .zcard(DEFAULT_QUEUE)
             .await
             .context("Failed to get main queue size")?;
-        
-        let processing_size: usize = conn.zcard(PROCESSING_QUEUE)
+
+        let processing_size: usize = conn
+            .zcard(PROCESSING_QUEUE)
             .await
             .context("Failed to get processing queue size")?;
-        
-        let retry_size: usize = conn.zcard(RETRY_QUEUE)
+
+        let retry_size: usize = conn
+            .zcard(RETRY_QUEUE)
             .await
             .context("Failed to get retry queue size")?;
-        
-        let dead_letter_size: usize = conn.llen(DEAD_LETTER_QUEUE)
+
+        let dead_letter_size: usize = conn
+            .llen(DEAD_LETTER_QUEUE)
             .await
             .context("Failed to get dead letter queue size")?;
 
@@ -283,7 +297,7 @@ impl JobQueue {
 
     pub async fn reclaim_stalled_jobs(&self) -> Result<usize> {
         let mut conn = self.pool.get().await?;
-        
+
         let now = Utc::now().timestamp();
         let stalled_jobs: Vec<String> = conn
             .zrangebyscore(PROCESSING_QUEUE, "-inf", now)
@@ -293,8 +307,8 @@ impl JobQueue {
         let mut reclaimed_count = 0;
 
         for job_json in stalled_jobs {
-            let job: JobPayload = serde_json::from_str(&job_json)
-                .context("Failed to deserialize stalled job")?;
+            let job: JobPayload =
+                serde_json::from_str(&job_json).context("Failed to deserialize stalled job")?;
 
             // Remove from processing queue
             conn.zrem::<_, _, ()>(PROCESSING_QUEUE, &job_json)

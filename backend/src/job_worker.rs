@@ -41,19 +41,22 @@ impl JobWorker {
     }
 
     pub async fn start_workers(&self) -> Result<()> {
-        info!("Starting {} job workers", self.config.queue_config.worker_count);
-        
+        info!(
+            "Starting {} job workers",
+            self.config.queue_config.worker_count
+        );
+
         let mut handles = vec![];
-        
+
         // Spawn worker tasks
         for i in 0..self.config.queue_config.worker_count {
             let queue = Arc::clone(&self.queue);
             let processor_registry = Arc::clone(&self.processor_registry);
-            
+
             let handle = tokio::spawn(async move {
                 let worker_id = i + 1;
                 info!("Job worker {} started", worker_id);
-                
+
                 loop {
                     match Self::process_next_job(&queue, &processor_registry).await {
                         Ok(Some(())) => {
@@ -70,7 +73,7 @@ impl JobWorker {
                     }
                 }
             });
-            
+
             handles.push(handle);
         }
 
@@ -79,7 +82,7 @@ impl JobWorker {
         let retry_handle = tokio::spawn(async move {
             info!("Retry queue processor started");
             let mut interval = interval(Duration::from_secs(30)); // Check every 30 seconds
-            
+
             loop {
                 interval.tick().await;
                 if let Err(e) = retry_queue.process_retry_queue().await {
@@ -91,11 +94,12 @@ impl JobWorker {
 
         // Spawn stalled job reclaimer
         let reclaim_queue = Arc::clone(&self.queue);
-        let reclaim_interval = Duration::from_secs(self.config.queue_config.reclaim_interval_seconds);
+        let reclaim_interval =
+            Duration::from_secs(self.config.queue_config.reclaim_interval_seconds);
         let reclaim_handle = tokio::spawn(async move {
             info!("Stalled job reclaimer started");
             let mut interval = interval(reclaim_interval);
-            
+
             loop {
                 interval.tick().await;
                 match reclaim_queue.reclaim_stalled_jobs().await {
@@ -131,7 +135,7 @@ impl JobWorker {
         };
 
         debug!("Processing job {} of type {:?}", job.id, job.job_type);
-        
+
         let processor = match processor_registry.get_processor(&job.job_type) {
             Some(processor) => processor,
             None => {
@@ -162,7 +166,11 @@ impl JobWorker {
         Ok(Some(()))
     }
 
-    pub async fn enqueue_job(&self, job_type: JobType, payload: HashMap<String, serde_json::Value>) -> Result<()> {
+    pub async fn enqueue_job(
+        &self,
+        job_type: JobType,
+        payload: HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
         let job = JobPayload::new(job_type, payload, None);
         self.queue.enqueue(job).await?;
         Ok(())
@@ -195,7 +203,7 @@ pub async fn enqueue_email_job(
     payload.insert("to".to_string(), serde_json::Value::String(to));
     payload.insert("subject".to_string(), serde_json::Value::String(subject));
     payload.insert("body".to_string(), serde_json::Value::String(body));
-    
+
     worker.enqueue_job(JobType::Email, payload).await
 }
 
@@ -208,8 +216,11 @@ pub async fn enqueue_notification_job(
     let mut payload = HashMap::new();
     payload.insert("user_id".to_string(), serde_json::Value::String(user_id));
     payload.insert("message".to_string(), serde_json::Value::String(message));
-    payload.insert("type".to_string(), serde_json::Value::String(notification_type));
-    
+    payload.insert(
+        "type".to_string(),
+        serde_json::Value::String(notification_type),
+    );
+
     worker.enqueue_job(JobType::Notification, payload).await
 }
 
@@ -219,9 +230,12 @@ pub async fn enqueue_sync_job(
     data: HashMap<String, serde_json::Value>,
 ) -> Result<()> {
     let mut payload = HashMap::new();
-    payload.insert("sync_type".to_string(), serde_json::Value::String(sync_type));
+    payload.insert(
+        "sync_type".to_string(),
+        serde_json::Value::String(sync_type),
+    );
     payload.extend(data);
-    
+
     worker.enqueue_job(JobType::Sync, payload).await
 }
 
@@ -233,13 +247,19 @@ pub async fn enqueue_blockchain_tx_job(
     network: Option<String>,
 ) -> Result<()> {
     let mut payload = HashMap::new();
-    payload.insert("from_address".to_string(), serde_json::Value::String(from_address));
-    payload.insert("to_address".to_string(), serde_json::Value::String(to_address));
+    payload.insert(
+        "from_address".to_string(),
+        serde_json::Value::String(from_address),
+    );
+    payload.insert(
+        "to_address".to_string(),
+        serde_json::Value::String(to_address),
+    );
     payload.insert("amount".to_string(), serde_json::Value::String(amount));
-    
+
     if let Some(network) = network {
         payload.insert("network".to_string(), serde_json::Value::String(network));
     }
-    
+
     worker.enqueue_job(JobType::BlockchainTx, payload).await
 }

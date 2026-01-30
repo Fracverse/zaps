@@ -20,10 +20,10 @@ impl EmailProcessor {
 
     async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<()> {
         debug!("Sending email to: {} | Subject: {}", to, subject);
-        
+
         // Simulate email sending
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         // Example: SendGrid API call
         /*
         let response = self.http_client
@@ -60,15 +60,21 @@ impl EmailProcessor {
 #[async_trait]
 impl JobProcessor for EmailProcessor {
     async fn process(&self, job: &JobPayload) -> Result<JobResult> {
-        let to = job.payload.get("to")
+        let to = job
+            .payload
+            .get("to")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to' field in email job payload"))?;
-        
-        let subject = job.payload.get("subject")
+
+        let subject = job
+            .payload
+            .get("subject")
             .and_then(|v| v.as_str())
             .unwrap_or("No Subject");
-        
-        let body = job.payload.get("body")
+
+        let body = job
+            .payload
+            .get("body")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -108,9 +114,17 @@ impl NotificationProcessor {
         }
     }
 
-    async fn send_notification(&self, user_id: &str, message: &str, notification_type: &str) -> Result<()> {
-        debug!("Sending notification to user: {} | Type: {}", user_id, notification_type);
-        
+    async fn send_notification(
+        &self,
+        user_id: &str,
+        message: &str,
+        notification_type: &str,
+    ) -> Result<()> {
+        debug!(
+            "Sending notification to user: {} | Type: {}",
+            user_id, notification_type
+        );
+
         // Simulate notification sending
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -122,19 +136,30 @@ impl NotificationProcessor {
 #[async_trait]
 impl JobProcessor for NotificationProcessor {
     async fn process(&self, job: &JobPayload) -> Result<JobResult> {
-        let user_id = job.payload.get("user_id")
+        let user_id = job
+            .payload
+            .get("user_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Missing 'user_id' field in notification job payload"))?;
-        
-        let message = job.payload.get("message")
+            .ok_or_else(|| {
+                anyhow::anyhow!("Missing 'user_id' field in notification job payload")
+            })?;
+
+        let message = job
+            .payload
+            .get("message")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        
-        let notification_type = job.payload.get("type")
+
+        let notification_type = job
+            .payload
+            .get("type")
             .and_then(|v| v.as_str())
             .unwrap_or("info");
 
-        match self.send_notification(user_id, message, notification_type).await {
+        match self
+            .send_notification(user_id, message, notification_type)
+            .await
+        {
             Ok(_) => {
                 info!("Notification job {} completed successfully", job.id);
                 Ok(JobResult {
@@ -172,16 +197,17 @@ impl SyncProcessor {
 
     async fn perform_sync(&self, sync_type: &str, data: &HashMap<String, Value>) -> Result<()> {
         debug!("Performing sync operation: {}", sync_type);
-        
+
         // Simulate sync operation
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         match sync_type {
             "user_data" => {
-                let user_id = data.get("user_id")
+                let user_id = data
+                    .get("user_id")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("Missing user_id in sync data"))?;
-                
+
                 debug!("Syncing user data for: {}", user_id);
             }
             "analytics" => {
@@ -203,7 +229,9 @@ impl SyncProcessor {
 #[async_trait]
 impl JobProcessor for SyncProcessor {
     async fn process(&self, job: &JobPayload) -> Result<JobResult> {
-        let sync_type = job.payload.get("sync_type")
+        let sync_type = job
+            .payload
+            .get("sync_type")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'sync_type' field in sync job payload"))?;
 
@@ -251,32 +279,41 @@ impl BlockchainTxProcessor {
     }
 
     async fn process_transaction(&self, tx_data: &HashMap<String, Value>) -> Result<String> {
-        let network = tx_data.get("network")
+        let network = tx_data
+            .get("network")
             .and_then(|v| v.as_str())
             .unwrap_or("stellar");
 
-        let from_address = tx_data.get("from_address")
+        let from_address = tx_data
+            .get("from_address")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'from_address' in transaction data"))?;
 
-        let to_address = tx_data.get("to_address")
+        let to_address = tx_data
+            .get("to_address")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'to_address' in transaction data"))?;
 
-        let amount = tx_data.get("amount")
+        let amount = tx_data
+            .get("amount")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing 'amount' in transaction data"))?;
 
-        debug!("Processing {} transaction from {} to {} for amount {}", 
-               network, from_address, to_address, amount);
+        debug!(
+            "Processing {} transaction from {} to {} for amount {}",
+            network, from_address, to_address, amount
+        );
 
         // Simulate blockchain transaction
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // For demo purposes, return a mock transaction hash
         let tx_hash = format!("tx_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
-        
-        info!("Blockchain transaction processed successfully. Hash: {}", tx_hash);
+
+        info!(
+            "Blockchain transaction processed successfully. Hash: {}",
+            tx_hash
+        );
         Ok(tx_hash)
     }
 }
@@ -291,7 +328,10 @@ impl JobProcessor for BlockchainTxProcessor {
 
         match self.process_transaction(&tx_data).await {
             Ok(tx_hash) => {
-                info!("Blockchain transaction job {} completed successfully. Hash: {}", job.id, tx_hash);
+                info!(
+                    "Blockchain transaction job {} completed successfully. Hash: {}",
+                    job.id, tx_hash
+                );
                 Ok(JobResult {
                     job_id: job.id,
                     success: true,
@@ -321,11 +361,17 @@ pub struct JobProcessorRegistry {
 impl JobProcessorRegistry {
     pub fn new() -> Self {
         let mut processors: HashMap<JobType, Box<dyn JobProcessor>> = HashMap::new();
-        
+
         processors.insert(JobType::Email, Box::new(EmailProcessor::new()));
-        processors.insert(JobType::Notification, Box::new(NotificationProcessor::new()));
+        processors.insert(
+            JobType::Notification,
+            Box::new(NotificationProcessor::new()),
+        );
         processors.insert(JobType::Sync, Box::new(SyncProcessor::new()));
-        processors.insert(JobType::BlockchainTx, Box::new(BlockchainTxProcessor::new()));
+        processors.insert(
+            JobType::BlockchainTx,
+            Box::new(BlockchainTxProcessor::new()),
+        );
 
         Self { processors }
     }

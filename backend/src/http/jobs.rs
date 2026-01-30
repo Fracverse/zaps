@@ -1,12 +1,14 @@
-use axum::{extract::State, http::StatusCode, response::Json, routing::{get, post}, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::Json,
+    routing::{get, post},
+    Router,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::{
-    job_worker::JobWorker,
-    middleware::auth::AuthenticatedUser,
-    ApiError,
-};
+use crate::{job_worker::JobWorker, middleware::auth::AuthenticatedUser, ApiError};
 
 pub fn create_job_routes() -> Router<Arc<JobWorker>> {
     Router::new()
@@ -21,7 +23,9 @@ async fn get_queue_stats(
     State(worker): State<Arc<JobWorker>>,
     _user: AuthenticatedUser,
 ) -> Result<Json<Value>, ApiError> {
-    let stats = worker.get_queue_stats().await
+    let stats = worker
+        .get_queue_stats()
+        .await
         .map_err(|e| ApiError::InternalServerError)?;
 
     Ok(Json(json!({
@@ -38,28 +42,35 @@ async fn enqueue_email(
     _user: AuthenticatedUser,
     Json(payload): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let to = payload.get("to")
+    let to = payload
+        .get("to")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'to' field".to_string()))?
         .to_string();
 
-    let subject = payload.get("subject")
+    let subject = payload
+        .get("subject")
         .and_then(|v| v.as_str())
         .unwrap_or("No Subject")
         .to_string();
 
-    let body = payload.get("body")
+    let body = payload
+        .get("body")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    crate::job_worker::enqueue_email_job(worker, to, subject, body).await
+    crate::job_worker::enqueue_email_job(worker, to, subject, body)
+        .await
         .map_err(|e| ApiError::InternalServerError)?;
 
-    Ok((StatusCode::ACCEPTED, Json(json!({
-        "message": "Email job enqueued successfully",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "message": "Email job enqueued successfully",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        })),
+    ))
 }
 
 async fn enqueue_notification(
@@ -67,28 +78,35 @@ async fn enqueue_notification(
     _user: AuthenticatedUser,
     Json(payload): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let user_id = payload.get("user_id")
+    let user_id = payload
+        .get("user_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'user_id' field".to_string()))?
         .to_string();
 
-    let message = payload.get("message")
+    let message = payload
+        .get("message")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    let notification_type = payload.get("type")
+    let notification_type = payload
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("info")
         .to_string();
 
-    crate::job_worker::enqueue_notification_job(worker, user_id, message, notification_type).await
+    crate::job_worker::enqueue_notification_job(worker, user_id, message, notification_type)
+        .await
         .map_err(|e| ApiError::InternalServerError)?;
 
-    Ok((StatusCode::ACCEPTED, Json(json!({
-        "message": "Notification job enqueued successfully",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "message": "Notification job enqueued successfully",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        })),
+    ))
 }
 
 async fn enqueue_sync(
@@ -96,7 +114,8 @@ async fn enqueue_sync(
     _user: AuthenticatedUser,
     Json(payload): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let sync_type = payload.get("sync_type")
+    let sync_type = payload
+        .get("sync_type")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'sync_type' field".to_string()))?
         .to_string();
@@ -108,13 +127,17 @@ async fn enqueue_sync(
         }
     }
 
-    crate::job_worker::enqueue_sync_job(worker, sync_type, data).await
+    crate::job_worker::enqueue_sync_job(worker, sync_type, data)
+        .await
         .map_err(|e| ApiError::InternalServerError)?;
 
-    Ok((StatusCode::ACCEPTED, Json(json!({
-        "message": "Sync job enqueued successfully",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "message": "Sync job enqueued successfully",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        })),
+    ))
 }
 
 async fn enqueue_blockchain_tx(
@@ -122,30 +145,38 @@ async fn enqueue_blockchain_tx(
     _user: AuthenticatedUser,
     Json(payload): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let from_address = payload.get("from_address")
+    let from_address = payload
+        .get("from_address")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'from_address' field".to_string()))?
         .to_string();
 
-    let to_address = payload.get("to_address")
+    let to_address = payload
+        .get("to_address")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'to_address' field".to_string()))?
         .to_string();
 
-    let amount = payload.get("amount")
+    let amount = payload
+        .get("amount")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("Missing 'amount' field".to_string()))?
         .to_string();
 
-    let network = payload.get("network")
+    let network = payload
+        .get("network")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    crate::job_worker::enqueue_blockchain_tx_job(worker, from_address, to_address, amount, network).await
+    crate::job_worker::enqueue_blockchain_tx_job(worker, from_address, to_address, amount, network)
+        .await
         .map_err(|e| ApiError::InternalServerError)?;
 
-    Ok((StatusCode::ACCEPTED, Json(json!({
-        "message": "Blockchain transaction job enqueued successfully",
-        "timestamp": chrono::Utc::now().to_rfc3339()
-    }))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "message": "Blockchain transaction job enqueued successfully",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        })),
+    ))
 }
