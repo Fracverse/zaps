@@ -22,7 +22,8 @@ pub trait StorageAdapter: Send + Sync {
         mime_type: &str,
     ) -> Result<StoredFile, Box<dyn std::error::Error + Send + Sync>>;
 
-    fn get(&self, id: &str) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>>;
+    fn get(&self, id: &str)
+        -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>>;
 
     fn delete(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
@@ -73,11 +74,19 @@ impl StorageAdapter for LocalStorageAdapter {
             original_name: original_name.to_string(),
             mime_type: mime_type.to_string(),
             size: data.len() as u64,
-            url: self.url_for_id(path.file_name().unwrap_or_default().to_string_lossy().as_ref()),
+            url: self.url_for_id(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .as_ref(),
+            ),
         })
     }
 
-    fn get(&self, id: &str) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
+    fn get(
+        &self,
+        id: &str,
+    ) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
         let path = self.path_for_id(id);
         if !Path::new(&path).exists() {
             return Ok(None);
@@ -119,7 +128,10 @@ impl StorageAdapter for S3StorageAdapter {
         Err("S3 adapter not implemented".into())
     }
 
-    fn get(&self, _id: &str) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
+    fn get(
+        &self,
+        _id: &str,
+    ) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
         Err("S3 adapter not implemented".into())
     }
 
@@ -145,7 +157,10 @@ impl StorageAdapter for IpfsStorageAdapter {
         Err("IPFS adapter not implemented".into())
     }
 
-    fn get(&self, _id: &str) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
+    fn get(
+        &self,
+        _id: &str,
+    ) -> Result<Option<StoredFile>, Box<dyn std::error::Error + Send + Sync>> {
         Err("IPFS adapter not implemented".into())
     }
 

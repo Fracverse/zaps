@@ -7,11 +7,7 @@ use axum::{
     Json,
 };
 
-use crate::{
-    api_error::ApiError,
-    models::FileUploadResponseDto,
-    service::ServiceContainer,
-};
+use crate::{api_error::ApiError, models::FileUploadResponseDto, service::ServiceContainer};
 
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 const ALLOWED_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "application/pdf"];
@@ -55,10 +51,10 @@ pub async fn upload_file(
         }
     }
 
-    let file_name = file_name
-        .ok_or_else(|| ApiError::Validation("file field is required".to_string()))?;
-    let mime_type = content_type
-        .ok_or_else(|| ApiError::Validation("Missing content type".to_string()))?;
+    let file_name =
+        file_name.ok_or_else(|| ApiError::Validation("file field is required".to_string()))?;
+    let mime_type =
+        content_type.ok_or_else(|| ApiError::Validation("Missing content type".to_string()))?;
 
     if !ALLOWED_MIME_TYPES.contains(&mime_type.as_str()) {
         return Err(ApiError::Validation("Unsupported file type".to_string()));
@@ -118,11 +114,8 @@ pub async fn get_file(
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
-        header::HeaderValue::from_str(&format!(
-            "inline; filename=\"{}\"",
-            stored.original_name
-        ))
-        .unwrap_or_else(|_| header::HeaderValue::from_static("inline")),
+        header::HeaderValue::from_str(&format!("inline; filename=\"{}\"", stored.original_name))
+            .unwrap_or_else(|_| header::HeaderValue::from_static("inline")),
     );
 
     Ok((headers, Body::from(bytes)))

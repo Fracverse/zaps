@@ -19,7 +19,10 @@ impl StorageService {
                     .clone()
                     .unwrap_or_else(|| "./uploads".to_string());
                 let public_base_url = "/files".to_string();
-                Arc::new(LocalStorageAdapter::new(PathBuf::from(base_path), public_base_url))
+                Arc::new(LocalStorageAdapter::new(
+                    PathBuf::from(base_path),
+                    public_base_url,
+                ))
             }
             StorageBackend::S3 => Arc::new(S3StorageAdapter::new()),
             StorageBackend::Ipfs => Arc::new(IpfsStorageAdapter::new()),

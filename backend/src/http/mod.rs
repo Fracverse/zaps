@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod audit;
 pub mod auth;
+pub mod files;
 pub mod health;
 pub mod identity;
 pub mod metrics;
@@ -9,11 +10,11 @@ pub mod payments;
 pub mod profiles;
 pub mod transfers;
 pub mod withdrawals;
-pub mod files;
 
 pub use admin::*;
 pub use audit::*;
 pub use auth::*;
+pub use files::*;
 pub use health::*;
 pub use identity::*;
 pub use metrics::*;
@@ -22,4 +23,3 @@ pub use payments::*;
 pub use profiles::*;
 pub use transfers::*;
 pub use withdrawals::*;
-pub use files::*;
