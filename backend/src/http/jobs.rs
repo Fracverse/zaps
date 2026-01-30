@@ -26,7 +26,7 @@ async fn get_queue_stats(
     let stats = worker
         .get_queue_stats()
         .await
-        .map_err(|e| ApiError::InternalServerError)?;
+        .map_err(|_e| ApiError::internal_server_error("".to_string()))?;
 
     Ok(Json(json!({
         "main_queue_size": stats.main_queue_size,
@@ -62,7 +62,7 @@ async fn enqueue_email(
 
     crate::job_worker::enqueue_email_job(worker, to, subject, body)
         .await
-        .map_err(|e| ApiError::InternalServerError)?;
+        .map_err(|_e| ApiError::internal_server_error("".to_string()))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -98,7 +98,7 @@ async fn enqueue_notification(
 
     crate::job_worker::enqueue_notification_job(worker, user_id, message, notification_type)
         .await
-        .map_err(|e| ApiError::InternalServerError)?;
+        .map_err(|_e| ApiError::internal_server_error("".to_string()))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -129,7 +129,7 @@ async fn enqueue_sync(
 
     crate::job_worker::enqueue_sync_job(worker, sync_type, data)
         .await
-        .map_err(|e| ApiError::InternalServerError)?;
+        .map_err(|_e| ApiError::internal_server_error("".to_string()))?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -170,7 +170,7 @@ async fn enqueue_blockchain_tx(
 
     crate::job_worker::enqueue_blockchain_tx_job(worker, from_address, to_address, amount, network)
         .await
-        .map_err(|e| ApiError::InternalServerError)?;
+        .map_err(|_e| ApiError::internal_server_error("".to_string()))?;
 
     Ok((
         StatusCode::ACCEPTED,

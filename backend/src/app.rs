@@ -117,7 +117,7 @@ pub async fn create_app(
         .layer(middleware::from_fn(role_guard::admin_only()));
 
     // -------------------- Jobs --------------------
-    let job_routes = jobs::create_job_routes();
+    let _job_routes = jobs::create_job_routes();
 
     // -------------------- Protected Routes --------------------
     let protected_routes = Router::new()

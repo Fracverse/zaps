@@ -95,7 +95,7 @@ impl From<anyhow::Error> for ApiError {
 }
 
 impl ApiError {
-    pub fn InternalServerError(_message: String) -> Self {
+    pub fn internal_server_error(_message: String) -> Self {
         ApiError::InternalServerError
     }
 }

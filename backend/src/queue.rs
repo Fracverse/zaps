@@ -2,7 +2,7 @@ use crate::job_types::{DeadLetterJob, JobPayload, JobResult};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bb8_redis::{bb8::Pool, redis::AsyncCommands, RedisConnectionManager};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde_json;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -61,7 +61,7 @@ impl JobQueue {
         let mut conn = self.pool.get().await?;
         let job_json = serde_json::to_string(&job).context("Failed to serialize job")?;
 
-        let score = job.scheduled_at.unwrap_or_else(|| Utc::now()).timestamp();
+        let score = job.scheduled_at.unwrap_or_else(Utc::now).timestamp();
 
         conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
             .await
@@ -316,7 +316,7 @@ impl JobQueue {
                 .context("Failed to remove stalled job from processing queue")?;
 
             // Add back to main queue
-            let score = job.scheduled_at.unwrap_or_else(|| Utc::now()).timestamp();
+            let score = job.scheduled_at.unwrap_or_else(Utc::now).timestamp();
             conn.zadd::<_, _, _, ()>(DEFAULT_QUEUE, &job_json, score)
                 .await
                 .context("Failed to requeue stalled job")?;

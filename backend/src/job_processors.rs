@@ -1,6 +1,6 @@
 use crate::job_types::{JobPayload, JobResult, JobType};
 use crate::queue::JobProcessor;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::Value;
@@ -8,7 +8,14 @@ use std::collections::HashMap;
 use tracing::{debug, error, info};
 
 pub struct EmailProcessor {
+    #[allow(dead_code)]
     http_client: Client,
+}
+
+impl Default for EmailProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EmailProcessor {
@@ -18,7 +25,7 @@ impl EmailProcessor {
         }
     }
 
-    async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<()> {
+    async fn send_email(&self, to: &str, subject: &str, _body: &str) -> Result<()> {
         debug!("Sending email to: {} | Subject: {}", to, subject);
 
         // Simulate email sending
@@ -104,7 +111,14 @@ impl JobProcessor for EmailProcessor {
 }
 
 pub struct NotificationProcessor {
+    #[allow(dead_code)]
     http_client: Client,
+}
+
+impl Default for NotificationProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NotificationProcessor {
@@ -117,7 +131,7 @@ impl NotificationProcessor {
     async fn send_notification(
         &self,
         user_id: &str,
-        message: &str,
+        _message: &str,
         notification_type: &str,
     ) -> Result<()> {
         debug!(
@@ -185,7 +199,14 @@ impl JobProcessor for NotificationProcessor {
 }
 
 pub struct SyncProcessor {
+    #[allow(dead_code)]
     http_client: Client,
+}
+
+impl Default for SyncProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SyncProcessor {
@@ -268,7 +289,14 @@ impl JobProcessor for SyncProcessor {
 }
 
 pub struct BlockchainTxProcessor {
+    #[allow(dead_code)]
     http_client: Client,
+}
+
+impl Default for BlockchainTxProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BlockchainTxProcessor {
