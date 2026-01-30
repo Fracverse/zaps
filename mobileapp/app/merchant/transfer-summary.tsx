@@ -15,8 +15,6 @@ import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
 
-
-
 export default function TransferSummaryScreen() {
   const insets = useSafeAreaInsets();
 
@@ -54,10 +52,15 @@ export default function TransferSummaryScreen() {
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundRoot }]}>
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        <Pressable onPress={() => router.back()} style={styles.headerBackButton}>
+        <Pressable
+          onPress={() => router.back()}
+          style={styles.headerBackButton}
+        >
           <Feather name="arrow-left" size={24} color={theme.text} />
         </Pressable>
-        <ThemedText style={styles.headerTitle}>Summary & confirmation</ThemedText>
+        <ThemedText style={styles.headerTitle}>
+          Summary & confirmation
+        </ThemedText>
         <View style={{ width: 40 }} />
       </View>
 
@@ -88,8 +91,12 @@ export default function TransferSummaryScreen() {
               <Feather name="home" size={20} color="#333" />
             </View>
             <View style={styles.recipientDetails}>
-              <ThemedText style={styles.recipientLabel}>Recipient bank account</ThemedText>
-              <ThemedText style={styles.recipientNumber}>91235704180</ThemedText>
+              <ThemedText style={styles.recipientLabel}>
+                Recipient bank account
+              </ThemedText>
+              <ThemedText style={styles.recipientNumber}>
+                91235704180
+              </ThemedText>
             </View>
           </View>
 
@@ -97,7 +104,9 @@ export default function TransferSummaryScreen() {
 
           <View style={styles.dateRow}>
             <ThemedText style={styles.dateLabel}>Date</ThemedText>
-            <ThemedText style={styles.dateValue}>Nov 12 2025, 8.12 AM</ThemedText>
+            <ThemedText style={styles.dateValue}>
+              Nov 12 2025, 8.12 AM
+            </ThemedText>
           </View>
         </View>
       </ScrollView>
@@ -110,7 +119,9 @@ export default function TransferSummaryScreen() {
           },
         ]}
       >
-        <Animated.View style={{ transform: [{ scale: scaleAnim }], gap: Spacing.md }}>
+        <Animated.View
+          style={{ transform: [{ scale: scaleAnim }], gap: Spacing.md }}
+        >
           <Pressable
             onPress={handleConfirm}
             style={({ pressed }) => [
@@ -136,9 +147,7 @@ export default function TransferSummaryScreen() {
               },
             ]}
           >
-            <ThemedText style={styles.cancelButtonText}>
-              Cancel
-            </ThemedText>
+            <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
           </Pressable>
         </Animated.View>
       </View>

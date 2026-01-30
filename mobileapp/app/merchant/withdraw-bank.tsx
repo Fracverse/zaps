@@ -142,9 +142,7 @@ export default function WithdrawScreen() {
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >
-            <ThemedText
-              style={[styles.maxButtonText, { color: theme.text }]}
-            >
+            <ThemedText style={[styles.maxButtonText, { color: theme.text }]}>
               Max
             </ThemedText>
           </Pressable>
@@ -216,7 +214,7 @@ export default function WithdrawScreen() {
             <View style={styles.historyIconCircle}>
               <Feather name="check" size={18} color="#1A4B4A" />
             </View>
-            
+
             <View style={styles.historyMainInfo}>
               <ThemedText style={styles.historyAccountNumber}>
                 91235704180
@@ -231,7 +229,10 @@ export default function WithdrawScreen() {
                 ${formatCurrency(transaction.amount)}
               </ThemedText>
               <ThemedText style={styles.historyNgnAmount}>
-                ₦{(transaction.amount * 1500).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+                ₦
+                {(transaction.amount * 1500).toLocaleString("en-NG", {
+                  minimumFractionDigits: 2,
+                })}
               </ThemedText>
             </View>
           </View>
@@ -252,7 +253,10 @@ export default function WithdrawScreen() {
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundRoot }]}>
       <View style={[styles.header, { paddingTop: insets.top }]}>
-        <Pressable onPress={() => router.back()} style={styles.headerBackButton}>
+        <Pressable
+          onPress={() => router.back()}
+          style={styles.headerBackButton}
+        >
           <Feather name="arrow-left" size={24} color={theme.text} />
         </Pressable>
         <ThemedText style={styles.headerTitle}>Withdraw to Bank</ThemedText>
@@ -277,9 +281,7 @@ export default function WithdrawScreen() {
               styles.tab,
               activeTab === "withdraw"
                 ? [styles.tabActive, { borderColor: theme.text }]
-                : [
-                    styles.tabInactive,
-                  ],
+                : [styles.tabInactive],
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >
@@ -301,9 +303,7 @@ export default function WithdrawScreen() {
               styles.tab,
               activeTab === "history"
                 ? [styles.tabActive, { borderColor: theme.text }]
-                : [
-                    styles.tabInactive,
-                  ],
+                : [styles.tabInactive],
               { opacity: pressed ? 0.7 : 1 },
             ]}
           >

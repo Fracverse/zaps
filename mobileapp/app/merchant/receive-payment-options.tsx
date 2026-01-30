@@ -18,9 +18,9 @@ import ScanIconBlack from "../../assets/QrCode-black.svg";
 
 export default function ReceivePaymentOptionsScreen() {
   const router = useRouter();
-  const [selectedMethod, setSelectedMethod] = useState<
-    "tap" | "qr" | null
-  >(null);
+  const [selectedMethod, setSelectedMethod] = useState<"tap" | "qr" | null>(
+    null
+  );
 
   const handleContinue = () => {
     if (selectedMethod === "tap") {
@@ -119,6 +119,6 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   buttonText: {
-      color: COLORS.white,
-  }
+    color: COLORS.white,
+  },
 });

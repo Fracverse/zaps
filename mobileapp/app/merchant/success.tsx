@@ -9,8 +9,6 @@ import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
 
-
-
 export default function SuccessScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
@@ -59,8 +57,6 @@ export default function SuccessScreen() {
     router.push("/");
   };
 
-
-
   const checkScale = checkAnim.interpolate({
     inputRange: [0, 0.5, 1],
     outputRange: [0, 1.2, 1],
@@ -100,7 +96,7 @@ export default function SuccessScreen() {
 
           <Animated.View style={[styles.textSection, { opacity: fadeAnim }]}>
             <ThemedText style={styles.title}>Withdrawal Successful</ThemedText>
-            
+
             <View style={styles.amountCapsule}>
               <ThemedText style={styles.amountText}>
                 ${formatCurrency(15046.12)}

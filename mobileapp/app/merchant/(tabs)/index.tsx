@@ -99,7 +99,11 @@ export default function HomeScreen() {
             Icon={ScanIcon}
             onPress={() => router.push("/merchant/make-transfer")}
           />
-          <ActionButton onPress={() => router.push("/merchant/withdraw-bank")} label="Withdraw to Bank" Icon={BankIcon} />
+          <ActionButton
+            onPress={() => router.push("/merchant/withdraw-bank")}
+            label="Withdraw to Bank"
+            Icon={BankIcon}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
