@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod health;
 pub mod identity;
@@ -9,6 +10,7 @@ pub mod transfers;
 pub mod withdrawals;
 
 pub use admin::*;
+pub use audit::*;
 pub use auth::*;
 pub use health::*;
 pub use identity::*;

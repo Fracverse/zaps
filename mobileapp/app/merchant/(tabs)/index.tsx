@@ -8,12 +8,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { COLORS } from "../../src/constants/colors";
+import { router } from "expo-router";
+import { COLORS } from "../../../src/constants/colors";
 
-import ScanIcon from "../../assets/QrCode.svg";
-import TapIcon from "../../assets/icon-3.svg";
-import TrendUpIcon from "../../assets/TrendUp.svg";
-import BankIcon from "../../assets/Bank.svg";
+import ScanIcon from "../../../assets/QrCode.svg";
+import TapIcon from "../../../assets/icon-3.svg";
+import TrendUpIcon from "../../../assets/TrendUp.svg";
+import BankIcon from "../../../assets/Bank.svg";
 
 const TokenItem = ({ _name, symbol, balance, value, Icon }: any) => (
   <View style={styles.tokenCard}>
@@ -28,9 +29,13 @@ const TokenItem = ({ _name, symbol, balance, value, Icon }: any) => (
   </View>
 );
 
-const ActionButton = ({ label, Icon }: any) => {
+const ActionButton = ({ label, Icon, onPress }: any) => {
   return (
-    <TouchableOpacity style={styles.actionButton} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={styles.actionButton}
+      activeOpacity={0.8}
+      onPress={onPress}
+    >
       <View style={styles.actionIconContainer}>
         <Icon width={24} height={24} />
       </View>
@@ -82,8 +87,16 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.actionsGrid}>
-          <ActionButton label="Tap-to-pay Payment" Icon={TapIcon} />
-          <ActionButton label="Receive Via QR Code" Icon={ScanIcon} />
+          <ActionButton
+            label="Tap-to-pay Payment"
+            Icon={TapIcon}
+            onPress={() => router.push("/merchant/accept-payment")}
+          />
+          <ActionButton
+            label="Receive Via QR Code"
+            Icon={ScanIcon}
+            onPress={() => router.push("/merchant/qr-code")}
+          />
           <ActionButton label="Withdraw to Bank" Icon={BankIcon} />
         </View>
       </ScrollView>

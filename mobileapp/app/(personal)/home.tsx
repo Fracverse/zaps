@@ -113,8 +113,16 @@ export default function HomeScreen() {
             Icon={ReceiveIcon}
             onPress={() => router.push("/receive")}
           />
-          <ActionButton label="Scan to pay" Icon={ScanIcon} />
-          <ActionButton label="Tap to pay" Icon={TapIcon} />
+          <ActionButton
+            label="Scan to pay"
+            Icon={ScanIcon}
+            onPress={() => router.push("/scan")}
+          />
+          <ActionButton
+            label="Tap to pay"
+            Icon={TapIcon}
+            onPress={() => router.push("/tap-to-pay")}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
