@@ -58,6 +58,36 @@ export default function MerchantLayout() {
         }}
       />
       <Tabs.Screen
+        name="accept-payment"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="qr-code"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="waiting-payment"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="contact-made"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
+        name="payment-received"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
         name="withdraw-bank"
         options={{
           href: null,
