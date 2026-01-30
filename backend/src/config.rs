@@ -16,8 +16,12 @@ pub struct Config {
     pub bridge_config: BridgeConfig,
     #[serde(rename = "compliance")]
     pub compliance_config: ComplianceConfig,
+    #[serde(rename = "queue")]
+    pub queue_config: QueueConfig,
     pub environment: EnvironmentType,
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +97,43 @@ pub struct RiskThresholds {
     pub suspicious_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueConfig {
+    pub redis_url: String,
+    pub max_retries: u32,
+    pub visibility_timeout_seconds: u64,
+    pub backoff_multiplier: f64,
+    pub max_backoff_seconds: u64,
+    pub dead_letter_max_size: usize,
+    pub worker_count: usize,
+    pub reclaim_interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    #[serde(default)]
+    pub backend: StorageBackend,
+    pub local_path: Option<String>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            backend: StorageBackend::Local,
+            local_path: Some("./uploads".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    #[default]
+    Local,
+    S3,
+    Ipfs,
+}
+
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
         let mut builder = ConfigBuilder::builder()
@@ -161,11 +202,22 @@ impl Default for Config {
                 },
             },
             environment: EnvironmentType::Development,
+            queue_config: QueueConfig {
+                redis_url: "redis://localhost:6379".to_string(),
+                max_retries: 3,
+                visibility_timeout_seconds: 300,
+                backoff_multiplier: 2.0,
+                max_backoff_seconds: 3600,
+                dead_letter_max_size: 10000,
+                worker_count: 4,
+                reclaim_interval_seconds: 60,
+            },
             rate_limit: RateLimitConfig {
                 window_ms: 60000, // 1 minute
                 max_requests: 100,
                 scope: RateLimitScope::Ip,
             },
+            storage: StorageConfig::default(),
         }
     }
 }
