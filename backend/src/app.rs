@@ -1,7 +1,6 @@
-
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use deadpool_postgres::Pool;
@@ -12,7 +11,7 @@ use crate::{
     config::Config,
     http::{
         admin, audit, auth, health, identity, jobs, metrics as metrics_http,
-        notifications, payments, transfers, withdrawals,
+        notifications, payments, profiles, transfers, withdrawals,
     },
     job_worker::JobWorker,
     middleware::{
@@ -31,10 +30,8 @@ pub async fn create_app(
     db_pool: Pool,
     config: Config,
 ) -> Result<Router, Box<dyn std::error::Error>> {
-    // Initialize metrics service
     MetricsService::init();
 
-    // Create service container (Axum state)
     let services = Arc::new(ServiceContainer::new(db_pool, config.clone()).await?);
 
     // Start background job workers
@@ -89,10 +86,7 @@ pub async fn create_app(
     let withdrawal_routes = Router::new()
         .route("/withdrawals", post(withdrawals::create_withdrawal))
         .route("/withdrawals/:id", get(withdrawals::get_withdrawal))
-        .route(
-            "/withdrawals/:id/status",
-            get(withdrawals::get_withdrawal_status),
-        );
+        .route("/withdrawals/:id/status", get(withdrawals::get_withdrawal_status));
 
     // -------------------- Notifications --------------------
     let notification_routes = Router::new()
@@ -100,8 +94,15 @@ pub async fn create_app(
         .route("/notifications", get(notifications::get_notifications))
         .route(
             "/notifications/:id/read",
-            axum::routing::patch(notifications::mark_notification_read),
+            patch(notifications::mark_notification_read),
         );
+
+    // -------------------- Profiles --------------------
+    let profile_routes = Router::new()
+        .route("/", post(profiles::create_profile))
+        .route("/:user_id", get(profiles::get_profile))
+        .route("/:user_id", patch(profiles::update_profile))
+        .route("/:user_id", delete(profiles::delete_profile));
 
     // -------------------- Admin --------------------
     let admin_routes = Router::new()
@@ -111,7 +112,7 @@ pub async fn create_app(
         .route("/system/health", get(admin::get_system_health))
         .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
-    // -------------------- Audit (Admin-only) --------------------
+    // -------------------- Audit --------------------
     let audit_routes = Router::new()
         .route("/audit-logs", get(audit::list_audit_logs))
         .route("/audit-logs/:id", get(audit::get_audit_log))
@@ -120,13 +121,17 @@ pub async fn create_app(
     // -------------------- Jobs --------------------
     let job_routes = jobs::create_job_routes();
 
-    // -------------------- Protected routes (require authentication)
+    // -------------------- Protected Routes --------------------
     let protected_routes = Router::new()
         .nest("/identity", identity_routes)
         .nest("/payments", payment_routes)
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
+        .nest("/notifications", notification_routes)
+        .nest("/profiles", profile_routes)
+        .nest("/jobs", job_routes)
         .nest("/admin", admin_routes)
+        .nest("/audit", audit_routes)
         .layer(middleware::from_fn_with_state(
             services.clone(),
             auth_middleware::authenticate,
@@ -146,7 +151,6 @@ pub async fn create_app(
         .nest("/health", health_routes)
         .merge(metrics_routes);
 
-    // -------------------- App --------------------
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)

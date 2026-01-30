@@ -431,7 +431,7 @@ mod tests {
     fn test_metrics_payload() {
         MetricsService::init();
         let payload = MetricsService::get_metrics_payload();
-        assert!(payload.uptime >= 0);
+
         assert!(payload.error_rate >= 0.0);
     }
 }

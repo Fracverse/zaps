@@ -7,6 +7,7 @@ pub mod indexer_service;
 pub mod metrics_service;
 pub mod notification_service;
 pub mod payment_service;
+pub mod profile_service;
 pub mod rate_limit_service;
 pub mod soroban_service;
 
@@ -21,6 +22,7 @@ pub use metrics_service::{
 };
 pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
+pub use profile_service::ProfileService;
 pub use rate_limit_service::RateLimitService;
 pub use soroban_service::SorobanService;
 
@@ -39,6 +41,7 @@ pub struct ServiceContainer {
     pub indexer: IndexerService,
     pub notification: NotificationService,
     pub rate_limit: RateLimitService,
+    pub profile: ProfileService,
     pub soroban: SorobanService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
@@ -57,6 +60,7 @@ impl ServiceContainer {
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
         let notification = NotificationService::new(db_pool.clone(), config.clone());
         let rate_limit = RateLimitService::new(config.clone());
+        let profile = ProfileService::new(db_pool.clone(), config.clone());
         let soroban = SorobanService::new(config.clone());
 
         Ok(Self {
@@ -69,6 +73,7 @@ impl ServiceContainer {
             indexer,
             notification,
             rate_limit,
+            profile,
             soroban,
             config,
             db_pool,
