@@ -2,8 +2,8 @@
 //!
 //! These tests verify role-based access control functionality.
 
-use std::str::FromStr;
 use blinks_backend::role::Role;
+use std::str::FromStr;
 
 #[cfg(test)]
 mod role_tests {

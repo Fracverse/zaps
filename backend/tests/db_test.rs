@@ -1,6 +1,6 @@
-use sqlx::PgPool;
 use blinks_backend::config::Config;
 use blinks_backend::db;
+use sqlx::PgPool;
 
 // Note: This test requires a running database using the config.
 // We will write a simple test that tries to connect and check migrations.

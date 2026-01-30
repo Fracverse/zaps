@@ -1,6 +1,6 @@
+use blinks_backend::{app::create_app, config::Config, db, telemetry};
 use std::net::SocketAddr;
 use tracing::info;
-use blinks_backend::{app::create_app, config::Config, db, telemetry};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

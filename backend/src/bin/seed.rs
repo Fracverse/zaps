@@ -1,5 +1,5 @@
-use sqlx::postgres::PgPoolOptions;
 use blinks_backend::config::Config;
+use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
