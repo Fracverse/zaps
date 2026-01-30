@@ -1,8 +1,6 @@
-#[allow(unused_imports)]
-use soroban_sdk::IntoVal;
-
-#[cfg(test)]
+#![cfg(test)]
 use super::*;
+use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal};
 
 #[test]
 fn test_initialization() {
@@ -10,9 +8,9 @@ fn test_initialization() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -30,10 +28,10 @@ fn test_merchant_initialization() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -50,10 +48,10 @@ fn test_credit_flow() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -77,10 +75,10 @@ fn test_debit_flow() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -100,10 +98,10 @@ fn test_over_debit_rejection() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -122,10 +120,10 @@ fn test_negative_amount_rejection() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -147,10 +145,10 @@ fn test_uninitialized_merchant_rejection() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -173,10 +171,10 @@ fn test_balance_correctness_over_time() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -209,11 +207,11 @@ fn test_multiple_merchants() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant1 = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant2 = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant1 = Address::generate(&env);
+    let merchant2 = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -239,10 +237,10 @@ fn test_zero_amount_operations() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -269,10 +267,10 @@ fn test_exact_balance_debit() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -292,10 +290,10 @@ fn test_debit_by_one_more_than_balance() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -317,10 +315,10 @@ fn test_debit_from_zero_balance() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -339,10 +337,10 @@ fn test_balance_overflow() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -362,10 +360,10 @@ fn test_large_amounts() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -401,10 +399,10 @@ fn test_double_merchant_initialization() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -422,11 +420,11 @@ fn test_unauthorized_credit_attempt() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let attacker = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let attacker = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -455,11 +453,11 @@ fn test_unauthorized_debit_attempt() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let attacker = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let attacker = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -487,10 +485,10 @@ fn test_rapid_credit_debit_sequence() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -519,11 +517,11 @@ fn test_update_authorized_addresses() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let new_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let new_payout = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let new_router = Address::generate(&env);
+    let new_payout = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -545,12 +543,12 @@ fn test_merchant_isolation() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant1 = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant2 = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant3 = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant1 = Address::generate(&env);
+    let merchant2 = Address::generate(&env);
+    let merchant3 = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -586,7 +584,7 @@ fn test_operations_before_initialization() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -604,10 +602,10 @@ fn test_concurrent_operations_same_merchant() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     env.mock_all_auths();
 
@@ -632,10 +630,10 @@ fn test_panic_on_credit_without_auth() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     // Initialize with proper auth
     env.mock_all_auths();
@@ -656,10 +654,10 @@ fn test_panic_on_debit_without_auth() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     // Initialize with proper auth
     env.mock_all_auths();
@@ -681,10 +679,10 @@ fn test_panic_on_init_merchant_without_admin_auth() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
 
     // Initialize contract
     env.mock_all_auths();
@@ -704,10 +702,10 @@ fn test_panic_on_update_router_without_admin() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let new_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let new_router = Address::generate(&env);
 
     // Initialize
     env.mock_all_auths();
@@ -727,10 +725,10 @@ fn test_panic_on_update_payout_without_admin() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let new_payout = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let new_payout = Address::generate(&env);
 
     // Initialize
     env.mock_all_auths();
@@ -750,9 +748,9 @@ fn test_panic_on_initialize_without_admin_auth() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
 
     // Don't mock auth - try to initialize without admin signature
     env.mock_auths(&[]);
@@ -768,11 +766,11 @@ fn test_panic_on_credit_wrong_caller() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let wrong_caller = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let wrong_caller = Address::generate(&env);
 
     env.mock_all_auths();
     client.initialize(&admin, &payment_router, &payout_contract);
@@ -800,11 +798,11 @@ fn test_panic_on_debit_wrong_caller() {
     let contract_id = env.register_contract(None, MerchantVault);
     let client = MerchantVaultClient::new(&env, &contract_id);
 
-    let admin = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payment_router = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let payout_contract = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let merchant = <Address as soroban_sdk::testutils::Address>::generate(&env);
-    let wrong_caller = <Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin = Address::generate(&env);
+    let payment_router = Address::generate(&env);
+    let payout_contract = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let wrong_caller = Address::generate(&env);
 
     env.mock_all_auths();
     client.initialize(&admin, &payment_router, &payout_contract);

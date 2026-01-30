@@ -1,18 +1,22 @@
 pub mod admin;
+pub mod audit;
 pub mod auth;
 pub mod health;
 pub mod identity;
 pub mod jobs;
+pub mod metrics;
 pub mod notifications;
 pub mod payments;
 pub mod transfers;
 pub mod withdrawals;
 
 pub use admin::*;
+pub use audit::*;
 pub use auth::*;
 pub use health::*;
 pub use identity::*;
 pub use jobs::*;
+pub use metrics::*;
 pub use notifications::*;
 pub use payments::*;
 pub use transfers::*;

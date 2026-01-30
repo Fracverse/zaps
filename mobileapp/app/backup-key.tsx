@@ -26,9 +26,8 @@ export default function BackupKeyScreen() {
 
   const handleContinue = () => {
     if (hasBackedUp) {
-      // Navigate to main app (e.g., tabs) or completion screen
-      // For now, let's just go back to root or a placeholder
-      router.push("/");
+      // Navigate to the personal dashboard
+      router.replace("/(personal)/home");
       alert("Wallet Setup Complete!");
     }
   };

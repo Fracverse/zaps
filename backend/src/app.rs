@@ -1,3 +1,4 @@
+
 use axum::{
     middleware,
     routing::{get, post},
@@ -10,25 +11,33 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, auth, health, identity, jobs, notifications, payments, transfers,
-        withdrawals,
+        admin, audit, auth, health, identity, jobs, metrics as metrics_http,
+        notifications, payments, transfers, withdrawals,
     },
     job_worker::JobWorker,
     middleware::{
-        auth as auth_middleware, metrics, rate_limit, request_id, role_guard,
+        audit_logging,
+        auth as auth_middleware,
+        metrics,
+        rate_limit,
+        request_id,
+        role_guard,
     },
     role::Role,
-    service::ServiceContainer,
+    service::{MetricsService, ServiceContainer},
 };
 
 pub async fn create_app(
     db_pool: Pool,
     config: Config,
 ) -> Result<Router, Box<dyn std::error::Error>> {
-    // Create service container (main Axum state)
+    // Initialize metrics service
+    MetricsService::init();
+
+    // Create service container (Axum state)
     let services = Arc::new(ServiceContainer::new(db_pool, config.clone()).await?);
 
-    // Create and start job worker (background only)
+    // Start background job workers
     let job_worker = Arc::new(JobWorker::new(config.clone()).await?);
     let worker_clone = Arc::clone(&job_worker);
     tokio::spawn(async move {
@@ -37,25 +46,32 @@ pub async fn create_app(
         }
     });
 
-    // Health routes
+    // -------------------- Health --------------------
     let health_routes = Router::new()
         .route("/health", get(health::health_check))
-        .route("/ready", get(health::readiness_check));
+        .route("/ready", get(health::readiness_check))
+        .route("/live", get(health::liveness_check));
 
-    // Auth routes
+    // -------------------- Metrics --------------------
+    let metrics_routes = Router::new()
+        .route("/metrics", get(metrics_http::prometheus_metrics))
+        .route("/metrics/json", get(metrics_http::json_metrics))
+        .route("/metrics/alerts", get(metrics_http::check_alerts));
+
+    // -------------------- Auth --------------------
     let auth_routes = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
         .route("/refresh", post(auth::refresh_token));
 
-    // Identity routes
+    // -------------------- Identity --------------------
     let identity_routes = Router::new()
         .route("/users", post(identity::create_user))
         .route("/users/me", get(identity::get_user))
         .route("/users/me/wallet", get(identity::get_wallet))
         .route("/resolve/:user_id", get(identity::resolve_user_id));
 
-    // Payments
+    // -------------------- Payments --------------------
     let payment_routes = Router::new()
         .route("/payments", post(payments::create_payment))
         .route("/payments/:id", get(payments::get_payment))
@@ -63,13 +79,13 @@ pub async fn create_app(
         .route("/qr/generate", post(payments::generate_qr))
         .route("/nfc/validate", post(payments::validate_nfc));
 
-    // Transfers
+    // -------------------- Transfers --------------------
     let transfer_routes = Router::new()
         .route("/transfers", post(transfers::create_transfer))
         .route("/transfers/:id", get(transfers::get_transfer))
         .route("/transfers/:id/status", get(transfers::get_transfer_status));
 
-    // Withdrawals
+    // -------------------- Withdrawals --------------------
     let withdrawal_routes = Router::new()
         .route("/withdrawals", post(withdrawals::create_withdrawal))
         .route("/withdrawals/:id", get(withdrawals::get_withdrawal))
@@ -78,7 +94,7 @@ pub async fn create_app(
             get(withdrawals::get_withdrawal_status),
         );
 
-    // Notifications
+    // -------------------- Notifications --------------------
     let notification_routes = Router::new()
         .route("/notifications", post(notifications::create_notification))
         .route("/notifications", get(notifications::get_notifications))
@@ -87,7 +103,7 @@ pub async fn create_app(
             axum::routing::patch(notifications::mark_notification_read),
         );
 
-    // Admin (role-protected)
+    // -------------------- Admin --------------------
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
         .route("/transactions", get(admin::get_transactions))
@@ -95,31 +111,41 @@ pub async fn create_app(
         .route("/system/health", get(admin::get_system_health))
         .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
-    // Job management routes
-    let job_routes = jobs::create_job_routes()
-        .layer(middleware::from_fn(auth_middleware::authenticate));
+    // -------------------- Audit (Admin-only) --------------------
+    let audit_routes = Router::new()
+        .route("/audit-logs", get(audit::list_audit_logs))
+        .route("/audit-logs/:id", get(audit::get_audit_log))
+        .layer(middleware::from_fn(role_guard::admin_only()));
 
-// Protected routes
-let protected_routes = Router::new()
-    .nest("/identity", identity_routes)
-    .nest("/payments", payment_routes)
-    .nest("/transfers", transfer_routes)
-    .nest("/withdrawals", withdrawal_routes)
-    .nest("/notifications", notification_routes)
-    .nest("/admin", admin_routes)
-    .nest("/jobs", job_routes)
-    .layer(middleware::from_fn_with_state(
-        services.clone(),
-        auth_middleware::authenticate,
-    ));
+    // -------------------- Jobs --------------------
+    let job_routes = jobs::create_job_routes();
 
+    // -------------------- Protected Routes --------------------
+    let protected_routes = Router::new()
+        .nest("/identity", identity_routes)
+        .nest("/payments", payment_routes)
+        .nest("/transfers", transfer_routes)
+        .nest("/withdrawals", withdrawal_routes)
+        .nest("/notifications", notification_routes)
+        .nest("/admin", admin_routes)
+        .nest("/jobs", job_routes)
+        .merge(audit_routes)
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            audit_logging,
+        ))
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            auth_middleware::authenticate,
+        ));
 
-    // Public routes
+    // -------------------- Public Routes --------------------
     let public_routes = Router::new()
         .nest("/auth", auth_routes)
-        .nest("/health", health_routes);
+        .nest("/health", health_routes)
+        .merge(metrics_routes);
 
-    // App
+    // -------------------- App --------------------
     let app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
