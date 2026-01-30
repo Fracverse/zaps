@@ -1,5 +1,5 @@
 [package]
-name = "BLINKS-backend"
+name = "blinks-backend"
 version = "0.1.0"
 edition = "2021"
 

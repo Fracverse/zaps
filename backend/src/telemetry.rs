@@ -4,7 +4,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 pub struct TelemetryConfig {
     /// Enable JSON logging format (for production/log aggregation)
     pub json_format: bool,
-    /// Log level filter (e.g., "info", "debug", "BLINKS_backend=debug,tower_http=info")
+    /// Log level filter (e.g., "info", "debug", "blinks_backend=debug,tower_http=info")
     pub log_filter: Option<String>,
 }
 
@@ -35,7 +35,7 @@ pub fn init_tracing_with_config(config: TelemetryConfig) -> Result<(), Box<dyn s
     let env_filter = match config.log_filter {
         Some(filter) => EnvFilter::try_new(filter)?,
         None => EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("BLINKS_backend=info,tower_http=info")),
+            .unwrap_or_else(|_| EnvFilter::new("blinks_backend=info,tower_http=info")),
     };
 
     if config.json_format {
@@ -55,7 +55,7 @@ pub fn init_tracing_with_config(config: TelemetryConfig) -> Result<(), Box<dyn s
             .init();
 
         tracing::info!(
-            service.name = "BLINKS-backend",
+            service.name = "blinks-backend",
             service.version = env!("CARGO_PKG_VERSION"),
             log.format = "json",
             "Telemetry initialized with JSON structured logging"
@@ -74,7 +74,7 @@ pub fn init_tracing_with_config(config: TelemetryConfig) -> Result<(), Box<dyn s
             .init();
 
         tracing::info!(
-            service.name = "BLINKS-backend",
+            service.name = "blinks-backend",
             service.version = env!("CARGO_PKG_VERSION"),
             log.format = "compact",
             "Telemetry initialized with compact logging"
