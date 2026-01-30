@@ -111,18 +111,13 @@ impl Default for StorageConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageBackend {
+    #[default]
     Local,
     S3,
     Ipfs,
-}
-
-impl Default for StorageBackend {
-    fn default() -> Self {
-        StorageBackend::Local
-    }
 }
 
 impl Config {

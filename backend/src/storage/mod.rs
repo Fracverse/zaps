@@ -118,6 +118,13 @@ impl S3StorageAdapter {
         Self
     }
 }
+
+impl Default for S3StorageAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StorageAdapter for S3StorageAdapter {
     fn upload(
         &self,
@@ -147,6 +154,13 @@ impl IpfsStorageAdapter {
         Self
     }
 }
+
+impl Default for IpfsStorageAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StorageAdapter for IpfsStorageAdapter {
     fn upload(
         &self,
