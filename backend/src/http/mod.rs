@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod audit;
 pub mod auth;
+pub mod files;
 pub mod health;
 pub mod identity;
 pub mod jobs;
@@ -14,6 +15,7 @@ pub mod withdrawals;
 pub use admin::*;
 pub use audit::*;
 pub use auth::*;
+pub use files::*;
 pub use health::*;
 pub use identity::*;
 pub use jobs::*;

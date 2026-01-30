@@ -385,3 +385,12 @@ pub struct SignedTransactionResponse {
     pub tx_hash: String,
     pub status: TransactionStatus,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileUploadResponseDto {
+    pub file_id: String,
+    pub original_name: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub url: String,
+}

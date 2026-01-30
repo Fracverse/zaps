@@ -176,4 +176,29 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: "Outfit_500Medium",
   },
+  testButtons: {
+    marginTop: 20,
+    gap: 10,
+  },
+  testLabel: {
+    fontSize: 14,
+    color: COLORS.primary,
+    fontFamily: "Outfit_600SemiBold",
+    textAlign: "center",
+    marginBottom: 5,
+  },
+  testButton: {
+    backgroundColor: "rgba(26, 75, 74, 0.1)",
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 100,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  testButtonText: {
+    color: COLORS.primary,
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    textAlign: "center",
+  },
 });
