@@ -10,6 +10,7 @@ pub mod payment_service;
 pub mod profile_service;
 pub mod rate_limit_service;
 pub mod soroban_service;
+pub mod storage_service;
 
 pub use anchor_service::AnchorService;
 pub use audit_service::AuditService;
@@ -25,6 +26,7 @@ pub use payment_service::PaymentService;
 pub use profile_service::ProfileService;
 pub use rate_limit_service::RateLimitService;
 pub use soroban_service::SorobanService;
+pub use storage_service::StorageService;
 
 use crate::config::Config;
 use deadpool_postgres::Pool;
@@ -43,6 +45,7 @@ pub struct ServiceContainer {
     pub rate_limit: RateLimitService,
     pub profile: ProfileService,
     pub soroban: SorobanService,
+    pub storage: StorageService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
@@ -62,6 +65,7 @@ impl ServiceContainer {
         let rate_limit = RateLimitService::new(config.clone());
         let profile = ProfileService::new(db_pool.clone(), config.clone());
         let soroban = SorobanService::new(config.clone());
+        let storage = StorageService::new(config.clone());
 
         Ok(Self {
             identity,
@@ -75,6 +79,7 @@ impl ServiceContainer {
             rate_limit,
             profile,
             soroban,
+            storage,
             config,
             db_pool,
         })

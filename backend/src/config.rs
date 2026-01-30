@@ -18,6 +18,8 @@ pub struct Config {
     pub compliance_config: ComplianceConfig,
     pub environment: EnvironmentType,
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,36 @@ pub struct RiskThresholds {
     pub suspicious_patterns: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageConfig {
+    #[serde(default)]
+    pub backend: StorageBackend,
+    pub local_path: Option<String>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            backend: StorageBackend::Local,
+            local_path: Some("./uploads".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    Local,
+    S3,
+    Ipfs,
+}
+
+impl Default for StorageBackend {
+    fn default() -> Self {
+        StorageBackend::Local
+    }
+}
+
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
         let mut builder = ConfigBuilder::builder()
@@ -166,6 +198,7 @@ impl Default for Config {
                 max_requests: 100,
                 scope: RateLimitScope::Ip,
             },
+            storage: StorageConfig::default(),
         }
     }
 }

@@ -9,6 +9,7 @@ pub mod models;
 pub mod role;
 // pub mod realtime; // TODO: Implement when needed
 pub mod service;
+pub mod storage;
 pub mod telemetry;
 
 pub use api_error::ApiError;

@@ -9,6 +9,7 @@ pub mod payments;
 pub mod profiles;
 pub mod transfers;
 pub mod withdrawals;
+pub mod files;
 
 pub use admin::*;
 pub use audit::*;
@@ -21,3 +22,4 @@ pub use payments::*;
 pub use profiles::*;
 pub use transfers::*;
 pub use withdrawals::*;
+pub use files::*;

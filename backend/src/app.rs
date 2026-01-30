@@ -10,8 +10,8 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, health, identity, metrics as metrics_http, notifications, payments,
-        profiles, transfers, withdrawals,
+        admin, audit, auth, files, health, identity, metrics as metrics_http, notifications,
+        payments, profiles, transfers, withdrawals,
     },
     middleware::{
         audit_logging, auth as auth_middleware, metrics, rate_limit, request_id, role_guard,
@@ -94,6 +94,13 @@ pub async fn create_app(
         .route("/:user_id", patch(profiles::update_profile))
         .route("/:user_id", delete(profiles::delete_profile));
 
+    // Files routes
+    let files_routes = Router::new()
+        .route("/upload", post(files::upload_file))
+        .route("/:id", get(files::get_file))
+        .route("/:id/meta", get(files::get_file_metadata))
+        .route("/:id", delete(files::delete_file));
+
     // Admin routes (protected)
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
@@ -116,6 +123,7 @@ pub async fn create_app(
         .nest("/withdrawals", withdrawal_routes)
         .nest("/notifications", notification_routes)
         .nest("/profiles", profile_routes)
+        .nest("/files", files_routes)
         .nest("/admin", admin_routes)
         .merge(audit_routes) // Audit routes at root level under /audit-logs
         .layer(middleware::from_fn_with_state(
