@@ -45,7 +45,7 @@ export default function RecoveryStatusScreen() {
     }
 
     return () => clearTimeout(timer);
-  }, [status]);
+  }, [status, pulseAnim]);
 
   const handleContinue = () => {
     router.replace("/returning-user/password-setup");

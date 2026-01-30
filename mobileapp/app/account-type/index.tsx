@@ -26,7 +26,7 @@ export default function AccountTypeScreen() {
     if (selectedType === "merchant") {
       router.push("/merchant");
     } else if (selectedType === "personal") {
-      router.push("/username");
+      router.push("/home");
     }
   };
 
