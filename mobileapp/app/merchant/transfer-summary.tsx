@@ -7,7 +7,6 @@ import {
   Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useHeaderHeight } from "@react-navigation/elements";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -16,18 +15,11 @@ import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
 
-const MOCK_TRANSFER = {
-  recipient: "John Doe",
-  recipientId: "@johndoe",
-  amount: 250.0,
-  fee: 2.5,
-  total: 252.5,
-  note: "Payment for services",
-};
+
 
 export default function TransferSummaryScreen() {
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+
   const { theme } = useTheme();
   const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;

@@ -9,14 +9,7 @@ import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
 
-const MOCK_TRANSACTION = {
-  type: "Withdrawal",
-  amount: 15000.0,
-  recipient: "Opay Bank",
-  date: "Jan 29, 2026",
-  time: "9:41 AM",
-  reference: "ZAP-2026-0129-001",
-};
+
 
 export default function SuccessScreen() {
   const insets = useSafeAreaInsets();
@@ -66,10 +59,7 @@ export default function SuccessScreen() {
     router.push("/");
   };
 
-  const handleViewReceipt = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    // Navigate to receipt screen
-  };
+
 
   const checkScale = checkAnim.interpolate({
     inputRange: [0, 0.5, 1],

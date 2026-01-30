@@ -13,7 +13,7 @@ import { useRouter } from "expo-router";
 
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
-import { Spacing, BorderRadius, Colors } from "@/src/constants/theme";
+import { Spacing, BorderRadius } from "@/src/constants/theme";
 
 const MOCK_BALANCE = 15046.12;
 const MOCK_BANK = {
@@ -84,17 +84,6 @@ export default function WithdrawScreen() {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-  };
-
-  const getStatusColor = (status: Transaction["status"]) => {
-    switch (status) {
-      case "completed":
-        return Colors.light.success;
-      case "pending":
-        return Colors.light.warning;
-      case "failed":
-        return Colors.light.error;
-    }
   };
 
   const renderWithdrawTab = () => (
