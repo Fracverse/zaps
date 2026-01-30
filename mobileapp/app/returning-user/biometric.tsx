@@ -2,8 +2,8 @@ import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter } from "expo-router";
-import { COLORS } from "../src/constants/colors";
-import { Button } from "../src/components/Button";
+import { COLORS } from "../../src/constants/colors";
+import { Button } from "../../src/components/Button";
 import { Ionicons } from "@expo/vector-icons";
 
 export default function BiometricScreen() {
@@ -12,12 +12,12 @@ export default function BiometricScreen() {
   const handleContinue = () => {
     // Logic to enable biometric would go here
     console.log("Biometric enabled");
-    router.push("/create-wallet");
+    router.replace("/(personal)/home");
   };
 
   const handleSkip = () => {
     // Navigate to the personal dashboard
-       router.push("/create-wallet");
+       router.replace("/(personal)/home");
     // alert("Setup Complete!");
   };
 
@@ -39,7 +39,7 @@ export default function BiometricScreen() {
       <View style={styles.content}>
         <View style={styles.iconContainer}>
           <Image
-            source={require("../assets/fingerprint.png")}
+            source={require("../../assets/fingerprint.png")}
             style={styles.fingerprint}
             resizeMode="contain"
           />
@@ -140,8 +140,13 @@ const styles = StyleSheet.create({
   },
   mainButton: {
     marginBottom: 0,
+    backgroundColor: "#1A4B4A",
+    borderRadius: 100,
+    height: 60,
   },
   skipButton: {
     backgroundColor: COLORS.secondary,
+    borderRadius: 100,
+    height: 60,
   },
 });

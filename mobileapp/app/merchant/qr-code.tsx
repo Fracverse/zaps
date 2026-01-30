@@ -21,7 +21,7 @@ const QRCodeScreen = () => {
   // Create payment data for QR code
   const paymentData = JSON.stringify({
     amount: amount || "0",
-    merchant: "Ejembiii.zaps",
+    merchant: "Ejembiii.BLINKS",
     timestamp: new Date().toISOString(),
     currency: "USD",
   });

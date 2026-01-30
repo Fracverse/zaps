@@ -2,7 +2,7 @@
 // ========================
 
 /*
-  📱 ZAPS MERCHANT SCREENS
+  📱 BLINKS MERCHANT SCREENS
   
   Quick Reference Guide
   ---------------------

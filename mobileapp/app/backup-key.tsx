@@ -26,9 +26,9 @@ export default function BackupKeyScreen() {
 
   const handleContinue = () => {
     if (hasBackedUp) {
-      // Navigate to the personal dashboard
-      router.replace("/(personal)/home");
-      alert("Wallet Setup Complete!");
+      // Navigate to the account type selection
+      router.replace("/account-type");
+      // alert("Wallet Setup Complete!");
     }
   };
 
