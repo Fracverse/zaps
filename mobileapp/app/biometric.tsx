@@ -1,24 +1,31 @@
 import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Image } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Ionicons } from "@expo/vector-icons";
 
 export default function BiometricScreen() {
   const router = useRouter();
+  const { type } = useLocalSearchParams();
 
   const handleContinue = () => {
     // Logic to enable biometric would go here
     console.log("Biometric enabled");
-    router.push("/create-wallet");
+    if (type === "returning") {
+      router.replace("/account-type");
+    } else {
+      router.push("/create-wallet");
+    }
   };
 
   const handleSkip = () => {
-    // Navigate to the personal dashboard
-    router.push("/create-wallet");
-    // alert("Setup Complete!");
+    if (type === "returning") {
+      router.replace("/account-type");
+    } else {
+      router.push("/create-wallet");
+    }
   };
 
   return (
@@ -140,8 +147,13 @@ const styles = StyleSheet.create({
   },
   mainButton: {
     marginBottom: 0,
+    backgroundColor: "#1A4B4A",
+    borderRadius: 100,
+    height: 60,
   },
   skipButton: {
     backgroundColor: COLORS.secondary,
+    borderRadius: 100,
+    height: 60,
   },
 });

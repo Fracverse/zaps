@@ -75,8 +75,8 @@ export default function WithdrawScreen() {
 
   const handleWithdraw = () => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    // Navigate to success screen
-    router.push("/merchant/success");
+    // Navigate to summary/confirmation screen
+    router.push("/merchant/transfer-summary");
   };
 
   const formatCurrency = (value: number) => {
@@ -154,7 +154,7 @@ export default function WithdrawScreen() {
             ]}
           >
             <ThemedText
-              style={[styles.maxButtonText, { color: theme.primary }]}
+              style={[styles.maxButtonText, { color: theme.text }]}
             >
               Max
             </ThemedText>
@@ -166,8 +166,8 @@ export default function WithdrawScreen() {
         style={[
           styles.bankDetailsCard,
           {
-            backgroundColor: theme.backgroundDefault,
-            borderColor: theme.border,
+            backgroundColor: "#F2F2F2",
+            borderWidth: 0,
           },
         ]}
       >
@@ -181,7 +181,7 @@ export default function WithdrawScreen() {
           >
             Account name
           </ThemedText>
-          <ThemedText style={[styles.bankDetailValue, { color: theme.text }]}>
+          <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
             {MOCK_BANK.accountName}
           </ThemedText>
         </View>
@@ -192,7 +192,7 @@ export default function WithdrawScreen() {
           >
             Account number
           </ThemedText>
-          <ThemedText style={[styles.bankDetailValue, { color: theme.text }]}>
+          <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
             {MOCK_BANK.accountNumber}
           </ThemedText>
         </View>
@@ -203,7 +203,7 @@ export default function WithdrawScreen() {
           >
             Bank name
           </ThemedText>
-          <ThemedText style={[styles.bankDetailValue, { color: theme.text }]}>
+          <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
             {MOCK_BANK.bankName}
           </ThemedText>
         </View>
@@ -218,49 +218,32 @@ export default function WithdrawScreen() {
           <View
             key={transaction.id}
             style={[
-              styles.transactionCard,
+              styles.historyCard,
               {
-                backgroundColor: theme.backgroundRoot,
-                borderColor: theme.border,
+                backgroundColor: "#F9F9F9",
               },
             ]}
           >
-            <View style={styles.transactionLeft}>
-              <ThemedText
-                style={[styles.transactionAmount, { color: theme.text }]}
-              >
-                -${formatCurrency(transaction.amount)}
+            <View style={styles.historyIconCircle}>
+              <Feather name="check" size={18} color="#1A4B4A" />
+            </View>
+            
+            <View style={styles.historyMainInfo}>
+              <ThemedText style={styles.historyAccountNumber}>
+                91235704180
               </ThemedText>
-              <ThemedText
-                style={[styles.transactionBank, { color: theme.textSecondary }]}
-              >
-                {transaction.bankName}
+              <ThemedText style={styles.historyDateTime}>
+                14:03:23pm , Nov 12
               </ThemedText>
             </View>
-            <View style={styles.transactionRight}>
-              <ThemedText
-                style={[styles.transactionDate, { color: theme.textSecondary }]}
-              >
-                {transaction.date}
+
+            <View style={styles.historyAmountInfo}>
+              <ThemedText style={styles.historyUsdAmount}>
+                ${formatCurrency(transaction.amount)}
               </ThemedText>
-              <View
-                style={[
-                  styles.statusBadge,
-                  {
-                    backgroundColor: `${getStatusColor(transaction.status)}15`,
-                  },
-                ]}
-              >
-                <ThemedText
-                  style={[
-                    styles.statusText,
-                    { color: getStatusColor(transaction.status) },
-                  ]}
-                >
-                  {transaction.status.charAt(0).toUpperCase() +
-                    transaction.status.slice(1)}
-                </ThemedText>
-              </View>
+              <ThemedText style={styles.historyNgnAmount}>
+                ₦{(transaction.amount * 1500).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+              </ThemedText>
             </View>
           </View>
         ))
@@ -279,12 +262,19 @@ export default function WithdrawScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundRoot }]}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
+        <Pressable onPress={() => router.back()} style={styles.headerBackButton}>
+          <Feather name="arrow-left" size={24} color={theme.text} />
+        </Pressable>
+        <ThemedText style={styles.headerTitle}>Withdraw to Bank</ThemedText>
+        <View style={{ width: 40 }} />
+      </View>
+
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingTop: insets.top + Spacing.md,
             paddingBottom:
               insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
           },
@@ -300,7 +290,6 @@ export default function WithdrawScreen() {
                 ? [styles.tabActive, { borderColor: theme.text }]
                 : [
                     styles.tabInactive,
-                    { backgroundColor: theme.backgroundDefault },
                   ],
               { opacity: pressed ? 0.7 : 1 },
             ]}
@@ -325,7 +314,6 @@ export default function WithdrawScreen() {
                 ? [styles.tabActive, { borderColor: theme.text }]
                 : [
                     styles.tabInactive,
-                    { backgroundColor: theme.backgroundDefault },
                   ],
               { opacity: pressed ? 0.7 : 1 },
             ]}
@@ -385,45 +373,70 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+  },
+  headerBackButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontFamily: "Outfit_700Bold",
+    flex: 1,
+    textAlign: "center",
+    marginRight: 40,
   },
   tabContainer: {
     flexDirection: "row",
     gap: Spacing.md,
-    marginBottom: Spacing["2xl"],
+    marginBottom: Spacing["3xl"],
   },
   tab: {
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
     paddingVertical: Spacing.sm,
     borderRadius: BorderRadius.full,
+    minWidth: 100,
+    alignItems: "center",
   },
   tabActive: {
-    borderWidth: 1,
+    borderWidth: 1.5,
   },
   tabInactive: {},
   tabText: {
-    fontSize: 14,
-    fontWeight: "500",
+    fontSize: 15,
+    fontFamily: "Outfit_500Medium",
   },
   tabContent: {
-    gap: Spacing.lg,
+    gap: Spacing.xl,
   },
   balanceCard: {
-    padding: Spacing.xl,
-    borderRadius: BorderRadius.md,
+    padding: Spacing["2xl"],
+    borderRadius: BorderRadius.xl,
     borderWidth: 1,
+    borderColor: "#F0F0F0",
   },
   balanceLabel: {
-    fontSize: 14,
+    fontSize: 15,
+    fontFamily: "Outfit_400Regular",
     marginBottom: Spacing.xs,
   },
   balanceAmount: {
-    fontSize: 36,
-    fontWeight: "700",
+    fontSize: 38,
+    fontFamily: "Outfit_700Bold",
     letterSpacing: -1,
   },
   amountInputCard: {
-    borderRadius: BorderRadius.md,
+    borderRadius: BorderRadius.xl,
     borderWidth: 1,
+    borderColor: "#F0F0F0",
     overflow: "hidden",
   },
   amountInputRow: {
@@ -453,14 +466,13 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   bankDetailsCard: {
-    padding: Spacing.xl,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    gap: Spacing.md,
+    padding: Spacing["2xl"],
+    borderRadius: BorderRadius.xl,
+    gap: Spacing.lg,
   },
   bankDetailsTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+    fontSize: 18,
+    fontFamily: "Outfit_600SemiBold",
     marginBottom: Spacing.xs,
   },
   bankDetailRow: {
@@ -469,44 +481,55 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   bankDetailLabel: {
-    fontSize: 14,
+    fontSize: 15,
+    fontFamily: "Outfit_400Regular",
   },
   bankDetailValue: {
-    fontSize: 14,
-    fontWeight: "500",
+    fontSize: 15,
+    fontFamily: "Outfit_500Medium",
   },
-  transactionCard: {
+  historyCard: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    padding: Spacing.lg,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
+    alignItems: "center",
+    padding: Spacing.xl,
+    borderRadius: BorderRadius.xl,
+    gap: Spacing.md,
   },
-  transactionLeft: {
-    gap: Spacing.xs,
+  historyIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#D1F7D6",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  transactionAmount: {
+  historyMainInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  historyAccountNumber: {
     fontSize: 16,
-    fontWeight: "600",
+    fontFamily: "Outfit_600SemiBold",
+    color: "#333",
   },
-  transactionBank: {
-    fontSize: 14,
+  historyDateTime: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
   },
-  transactionRight: {
+  historyAmountInfo: {
     alignItems: "flex-end",
-    gap: Spacing.xs,
+    gap: 4,
   },
-  transactionDate: {
-    fontSize: 12,
+  historyUsdAmount: {
+    fontSize: 16,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#333",
   },
-  statusBadge: {
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: Spacing.xs,
-    borderRadius: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: "500",
+  historyNgnAmount: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
   },
   emptyState: {
     alignItems: "center",

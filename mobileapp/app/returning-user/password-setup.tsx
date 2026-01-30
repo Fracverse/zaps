@@ -14,8 +14,7 @@ export default function PasswordSetupScreen() {
 
   const handleContinue = () => {
     if (password && password === confirmPassword) {
-      // Proceed to biometric setup
-      router.push("/returning-user/biometric");
+      router.push("/biometric?type=returning");
     }
   };
 

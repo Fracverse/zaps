@@ -1,8 +1,8 @@
-# ZAPS Backend Default Configuration
+# BLINKS Backend Default Configuration
 environment = "development"
 
 [database]
-url = "postgres://localhost/zaps"
+url = "postgres://localhost/BLINKS"
 
 [server]
 port = 3000

@@ -1,7 +1,7 @@
-# ZAPS  
+# BLINKS  
 **Tap-to-Pay & Scan-to-Pay Crypto Payments on Stellar**
 
-ZAPS is a Stellar-native payment application that enables users to pay **directly with crypto** using **tap-to-pay (NFC)** or **scan-to-pay (QR)**, while merchants receive **instant USD settlement via Stellar Anchors**.
+BLINKS is a Stellar-native payment application that enables users to pay **directly with crypto** using **tap-to-pay (NFC)** or **scan-to-pay (QR)**, while merchants receive **instant USD settlement via Stellar Anchors**.
 
 No Apple Pay.  
 No Google Pay.  
@@ -29,10 +29,10 @@ Meanwhile, crypto users still cannot easily spend their assets in the real world
 
 ## 💡 Solution
 
-ZAPS removes Big Tech wallets entirely.
+BLINKS removes Big Tech wallets entirely.
 
 Users:
-- Transfer crypto directly into the ZAPS app  
+- Transfer crypto directly into the BLINKS app  
 - Pay in-store or online using **tap** or **scan**  
 - Settle payments directly on the Stellar blockchain  
 
@@ -42,7 +42,7 @@ Merchants:
 - Receive USD instantly via Stellar Anchors  
 - Withdraw to local bank accounts  
 
-ZAPS turns Stellar into a **global, open payment network**.
+BLINKS turns Stellar into a **global, open payment network**.
 
 ---
 
@@ -119,7 +119,7 @@ If user pays in XLM:
 
 ## 🏦 Stellar Anchors
 
-ZAPS relies on Stellar Anchors for:
+BLINKS relies on Stellar Anchors for:
 - Fiat custody
 - Stablecoin issuance
 - Compliance (KYB / AML)
@@ -184,7 +184,7 @@ ZAPS relies on Stellar Anchors for:
 ## 🤝 Contributing
 
 Contributions are welcome and encouraged 🚀
-To contribute to ZAPS, please use the **fork-and-pull-request** workflow.
+To contribute to BLINKS, please use the **fork-and-pull-request** workflow.
 
 ### 1️⃣ Fork the Repository
 
@@ -195,7 +195,7 @@ Click the **Fork** button at the top right of this repository to create your own
 ### 2️⃣ Clone Your Fork
 
 ```bash
-git clone https://github.com/<your-username>/zaps.git
+git clone https://github.com/<your-username>/BLINKS.git
 ```
 
 ---
@@ -203,7 +203,7 @@ git clone https://github.com/<your-username>/zaps.git
 ### 3️⃣ Navigate Into the Project
 
 ```bash
-cd zaps
+cd BLINKS
 ```
 
 ---
@@ -213,7 +213,7 @@ cd zaps
 This keeps your fork in sync with the main project.
 
 ```bash
-git remote add upstream https://github.com/Fracverse/zaps.git
+git remote add upstream https://github.com/Fracverse/BLINKS.git
 ```
 
 Verify remotes:
@@ -279,7 +279,7 @@ git push origin feature/your-feature-name
 
 1. Go to your fork on GitHub
 2. Click **New Pull Request**
-3. Ensure the base repository is `Fracverse/zaps`
+3. Ensure the base repository is `Fracverse/BLINKS`
 4. Describe **what you changed** and **why**
 
 ## 📜 License
@@ -290,11 +290,11 @@ MIT License.
 
 ## 🚀 One-Line Pitch
 
-**ZAPS lets users pay directly with crypto — tap or scan — while merchants receive USD instantly via Stellar Anchors.**
+**BLINKS lets users pay directly with crypto — tap or scan — while merchants receive USD instantly via Stellar Anchors.**
 
 ---
 
 ## 🌍 Built on Stellar
 
-ZAPS is built to strengthen the Stellar ecosystem by making crypto payments practical, open, and globally accessible.
+BLINKS is built to strengthen the Stellar ecosystem by making crypto payments practical, open, and globally accessible.
 

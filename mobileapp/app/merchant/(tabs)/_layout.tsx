@@ -16,7 +16,7 @@ export default function MerchantTabsLayout() {
           height: 60,
           paddingBottom: 10,
           paddingTop: 5,
-          marginBottom: 20,
+          marginBottom: 10,
         },
         tabBarLabelStyle: {
           fontFamily: "Outfit_500Medium",

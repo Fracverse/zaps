@@ -78,9 +78,9 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.BLINKSIdContainer}>
-            <Text style={styles.BLINKSIdLabel}>Zap ID</Text>
+            <Text style={styles.BLINKSIdLabel}>Blinks ID</Text>
             <View style={styles.BLINKSIdRow}>
-              <Text style={styles.BLINKSIdValue}>Ejembiii.zap</Text>
+              <Text style={styles.BLINKSIdValue}>Ebubeone.blinks</Text>
               <TouchableOpacity>
                 <Ionicons name="copy-outline" size={16} color={COLORS.black} />
               </TouchableOpacity>
@@ -90,16 +90,16 @@ export default function HomeScreen() {
 
         <View style={styles.actionsGrid}>
           <ActionButton
-            label="Tap-to-pay Payment"
+            label="Receive Payment"
             Icon={TapIcon}
-            onPress={() => router.push("/merchant/accept-payment")}
+            onPress={() => router.push("/merchant/receive-payment-options")}
           />
           <ActionButton
-            label="Receive Via QR Code"
+            label="Make Transfer"
             Icon={ScanIcon}
-            onPress={() => router.push("/merchant/qr-code")}
+            onPress={() => router.push("/merchant/make-transfer")}
           />
-          <ActionButton label="Withdraw to Bank" Icon={BankIcon} />
+          <ActionButton onPress={() => router.push("/merchant/withdraw-bank")} label="Withdraw to Bank" Icon={BankIcon} />
         </View>
       </ScrollView>
     </SafeAreaView>

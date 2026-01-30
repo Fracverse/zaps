@@ -3,7 +3,7 @@
 //! These tests verify role-based access control functionality.
 
 use std::str::FromStr;
-use zaps_backend::role::Role;
+use BLINKS_backend::role::Role;
 
 #[cfg(test)]
 mod role_tests {
@@ -109,7 +109,7 @@ mod role_tests {
 #[cfg(test)]
 mod jwt_tests {
     use super::*;
-    use zaps_backend::auth::{generate_access_token, validate_jwt};
+    use BLINKS_backend::auth::{generate_access_token, validate_jwt};
 
     #[test]
     fn test_jwt_with_user_role() {
@@ -164,7 +164,7 @@ mod jwt_tests {
 #[cfg(test)]
 mod authenticated_user_tests {
     use super::*;
-    use zaps_backend::middleware::auth::AuthenticatedUser;
+    use BLINKS_backend::middleware::auth::AuthenticatedUser;
 
     #[test]
     fn test_authenticated_user_creation() {

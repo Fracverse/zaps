@@ -82,128 +82,44 @@ export default function SuccessScreen() {
         style={[
           styles.content,
           {
-            paddingTop: insets.top + Spacing["5xl"],
-            paddingBottom: insets.bottom + Spacing["2xl"],
+            paddingTop: insets.top,
+            paddingBottom: insets.bottom + Spacing.lg,
           },
         ]}
       >
-        <Animated.View
-          style={[
-            styles.successIconContainer,
-            {
-              backgroundColor: theme.primary + "15",
-              transform: [{ scale: scaleAnim }],
-              opacity: fadeAnim,
-            },
-          ]}
-        >
+        <View style={styles.topSection}>
           <Animated.View
-            style={{
-              transform: [{ scale: checkScale }],
-            }}
-          >
-            <Feather name="check" size={48} color={theme.primary} />
-          </Animated.View>
-        </Animated.View>
-
-        <Animated.View style={[styles.textContainer, { opacity: fadeAnim }]}>
-          <ThemedText style={[styles.title, { color: theme.text }]}>
-            Transaction Successful!
-          </ThemedText>
-          <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Your {MOCK_TRANSACTION.type.toLowerCase()} has been processed
-          </ThemedText>
-        </Animated.View>
-
-        <Animated.View
-          style={[
-            styles.detailsCard,
-            {
-              backgroundColor: theme.backgroundDefault,
-              borderColor: theme.border,
-              opacity: fadeAnim,
-            },
-          ]}
-        >
-          <View style={styles.amountSection}>
-            <ThemedText
-              style={[styles.amountLabel, { color: theme.textSecondary }]}
-            >
-              Amount
-            </ThemedText>
-            <ThemedText style={[styles.amountValue, { color: theme.text }]}>
-              ${formatCurrency(MOCK_TRANSACTION.amount)}
-            </ThemedText>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.border }]} />
-
-          <View style={styles.infoRow}>
-            <ThemedText
-              style={[styles.infoLabel, { color: theme.textSecondary }]}
-            >
-              To
-            </ThemedText>
-            <ThemedText style={[styles.infoValue, { color: theme.text }]}>
-              {MOCK_TRANSACTION.recipient}
-            </ThemedText>
-          </View>
-
-          <View style={styles.infoRow}>
-            <ThemedText
-              style={[styles.infoLabel, { color: theme.textSecondary }]}
-            >
-              Date
-            </ThemedText>
-            <ThemedText style={[styles.infoValue, { color: theme.text }]}>
-              {MOCK_TRANSACTION.date}
-            </ThemedText>
-          </View>
-
-          <View style={styles.infoRow}>
-            <ThemedText
-              style={[styles.infoLabel, { color: theme.textSecondary }]}
-            >
-              Time
-            </ThemedText>
-            <ThemedText style={[styles.infoValue, { color: theme.text }]}>
-              {MOCK_TRANSACTION.time}
-            </ThemedText>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.border }]} />
-
-          <View style={styles.referenceContainer}>
-            <ThemedText
-              style={[styles.referenceLabel, { color: theme.textSecondary }]}
-            >
-              Reference Number
-            </ThemedText>
-            <ThemedText style={[styles.referenceValue, { color: theme.text }]}>
-              {MOCK_TRANSACTION.reference}
-            </ThemedText>
-          </View>
-        </Animated.View>
-
-        <Animated.View style={[styles.buttonContainer, { opacity: fadeAnim }]}>
-          <Pressable
-            onPress={handleViewReceipt}
-            style={({ pressed }) => [
-              styles.secondaryButton,
+            style={[
+              styles.successIconOuter,
               {
-                borderColor: theme.border,
-                opacity: pressed ? 0.7 : 1,
+                transform: [{ scale: scaleAnim }],
+                opacity: fadeAnim,
               },
             ]}
           >
-            <Feather name="download" size={20} color={theme.text} />
-            <ThemedText
-              style={[styles.secondaryButtonText, { color: theme.text }]}
-            >
-              Download Receipt
-            </ThemedText>
-          </Pressable>
+            <View style={styles.successIconInner}>
+              <Animated.View
+                style={{
+                  transform: [{ scale: checkScale }],
+                }}
+              >
+                <Feather name="check" size={60} color="#1A4B4A" />
+              </Animated.View>
+            </View>
+          </Animated.View>
 
+          <Animated.View style={[styles.textSection, { opacity: fadeAnim }]}>
+            <ThemedText style={styles.title}>Withdrawal Successful</ThemedText>
+            
+            <View style={styles.amountCapsule}>
+              <ThemedText style={styles.amountText}>
+                ${formatCurrency(15046.12)}
+              </ThemedText>
+            </View>
+          </Animated.View>
+        </View>
+
+        <Animated.View style={[styles.buttonContainer, { opacity: fadeAnim }]}>
           <Pressable
             onPress={handleDone}
             style={({ pressed }) => [
@@ -229,84 +145,54 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: Spacing.lg,
+    justifyContent: "space-between",
+  },
+  topSection: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing["4xl"],
+  },
+  successIconOuter: {
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
     alignItems: "center",
     justifyContent: "center",
   },
-  successIconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+  successIconInner: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 2,
+    borderColor: "#1A4B4A",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: Spacing["2xl"],
   },
-  textContainer: {
+  textSection: {
     alignItems: "center",
-    marginBottom: Spacing["4xl"],
+    gap: Spacing.xl,
   },
   title: {
-    fontSize: 28,
-    fontWeight: "700",
-    marginBottom: Spacing.sm,
+    fontSize: 22,
+    fontFamily: "Outfit_700Bold",
     textAlign: "center",
   },
-  subtitle: {
-    fontSize: 16,
-    textAlign: "center",
-  },
-  detailsCard: {
-    width: "100%",
-    padding: Spacing.xl,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    marginBottom: Spacing["4xl"],
-  },
-  amountSection: {
-    alignItems: "center",
+  amountCapsule: {
+    paddingHorizontal: Spacing["4xl"],
     paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: "#000000",
   },
-  amountLabel: {
-    fontSize: 14,
-    marginBottom: Spacing.xs,
-  },
-  amountValue: {
-    fontSize: 42,
-    fontWeight: "700",
-    letterSpacing: -1,
-  },
-  divider: {
-    height: 1,
-    marginVertical: Spacing.lg,
-  },
-  infoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: Spacing.sm,
-  },
-  infoLabel: {
-    fontSize: 14,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  referenceContainer: {
-    alignItems: "center",
-    paddingTop: Spacing.sm,
-  },
-  referenceLabel: {
-    fontSize: 12,
-    marginBottom: Spacing.xs,
-  },
-  referenceValue: {
-    fontSize: 12,
-    fontWeight: "600",
-    letterSpacing: 0.5,
+  amountText: {
+    fontSize: 34,
+    fontFamily: "Outfit_700Bold",
   },
   buttonContainer: {
     width: "100%",
-    gap: Spacing.md,
   },
   primaryButton: {
     height: Spacing.buttonHeight,
@@ -315,21 +201,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   primaryButtonText: {
-    color: "#FFFFFF",
+    color: "#8CF79C",
     fontSize: 16,
-    fontWeight: "600",
-  },
-  secondaryButton: {
-    height: Spacing.buttonHeight,
-    borderRadius: BorderRadius.full,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: Spacing.sm,
-    borderWidth: 1,
-  },
-  secondaryButtonText: {
-    fontSize: 16,
-    fontWeight: "500",
+    fontFamily: "Outfit_600SemiBold",
   },
 });

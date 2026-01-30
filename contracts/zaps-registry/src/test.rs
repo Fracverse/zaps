@@ -9,8 +9,8 @@ fn test_user_registration() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, ZapsRegistry);
-    let client = ZapsRegistryClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, BLINKSRegistry);
+    let client = BLINKSRegistryClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     client.initialize(&admin);
@@ -49,8 +49,8 @@ fn test_merchant_registration_and_resolution() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, ZapsRegistry);
-    let client = ZapsRegistryClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, BLINKSRegistry);
+    let client = BLINKSRegistryClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     client.initialize(&admin);
@@ -77,8 +77,8 @@ fn test_access_control() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, ZapsRegistry);
-    let client = ZapsRegistryClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, BLINKSRegistry);
+    let client = BLINKSRegistryClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     client.initialize(&admin);
@@ -98,8 +98,8 @@ fn test_access_control() {
 #[should_panic(expected = "HostError: Error(Contract, #1)")]
 fn test_already_initialized() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, ZapsRegistry);
-    let client = ZapsRegistryClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, BLINKSRegistry);
+    let client = BLINKSRegistryClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     client.initialize(&admin);
@@ -109,8 +109,8 @@ fn test_already_initialized() {
 #[test]
 fn test_not_registered_resolutions() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, ZapsRegistry);
-    let client = ZapsRegistryClient::new(&env, &contract_id);
+    let contract_id = env.register_contract(None, BLINKSRegistry);
+    let client = BLINKSRegistryClient::new(&env, &contract_id);
 
     let user_id = Bytes::from_slice(&env, b"unknown_user");
     let result_user = client.try_resolve_user(&user_id);

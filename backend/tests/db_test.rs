@@ -1,6 +1,6 @@
 use sqlx::PgPool;
-use zaps_backend::config::Config;
-use zaps_backend::db;
+use BLINKS_backend::config::Config;
+use BLINKS_backend::db;
 
 // Note: This test requires a running database using the config.
 // We will write a simple test that tries to connect and check migrations.

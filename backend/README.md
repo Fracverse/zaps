@@ -1,10 +1,10 @@
-# ZAPS Backend
+# BLINKS Backend
 
-A Rust-based backend for the ZAPS payment system, built on Stellar network with Soroban smart contracts.
+A Rust-based backend for the BLINKS payment system, built on Stellar network with Soroban smart contracts.
 
 ## Architecture
 
-The ZAPS backend provides the following services:
+The BLINKS backend provides the following services:
 
 - **Identity & Wallet Service**: User management and Stellar address resolution
 - **Payment Orchestrator**: QR/NFC payment processing and validation
@@ -38,7 +38,7 @@ The ZAPS backend provides the following services:
 3. **Database setup:**
    ```bash
    # Create PostgreSQL database
-   createdb zaps
+   createdb BLINKS
 
    # Set environment variables
    cp env.example .env
@@ -62,7 +62,7 @@ The server will start on `http://localhost:3000`.
 Configuration is loaded from:
 1. `config/default.toml` - Default configuration
 2. `config/{RUN_ENV}.toml` - Environment-specific overrides
-3. Environment variables with `ZAPS_` prefix
+3. Environment variables with `BLINKS_` prefix
 
 ### API Endpoints
 
@@ -145,7 +145,7 @@ The backend is designed to be deployed as a single binary:
 
 ```bash
 cargo build --release
-./target/release/zaps-backend
+./target/release/BLINKS-backend
 ```
 
 Use environment variables or config files to configure for different environments.
@@ -190,4 +190,4 @@ The PostgreSQL database contains the following main tables:
 
 ## License
 
-This project is part of the ZAPS ecosystem.
+This project is part of the BLINKS ecosystem.
