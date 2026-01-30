@@ -10,7 +10,7 @@ import BlinkLogo from "../../assets/blinkLogo.svg";
 export default function RecoveryStatusScreen() {
   const router = useRouter();
   const [status, setStatus] = useState<"loading" | "found">("loading");
-  
+
   // Animation values
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -60,16 +60,16 @@ export default function RecoveryStatusScreen() {
           {status === "loading" ? (
             <>
               <View style={styles.spinnerContainer}>
-                 <Animated.View
+                <Animated.View
                   style={[
                     {
                       transform: [{ scale: pulseAnim }],
                     },
                   ]}
                 >
-                   <View style={styles.logoWrapper}>
-                      <BlinkLogo width={60} height={28} />
-                   </View>
+                  <View style={styles.logoWrapper}>
+                    <BlinkLogo width={60} height={28} />
+                  </View>
                 </Animated.View>
               </View>
               <Text style={styles.title}>Recovering Account...</Text>
@@ -105,7 +105,7 @@ export default function RecoveryStatusScreen() {
 
       <View style={styles.footer}>
         {status === "loading" ? (
-           <Button
+          <Button
             title="Scan instead"
             onPress={() => {}} // Placeholder
             variant="primary"
@@ -138,18 +138,18 @@ const styles = StyleSheet.create({
   },
   centerContainer: {
     alignItems: "center",
-    marginBottom: 0, 
+    marginBottom: 0,
   },
   spinnerContainer: {
     marginBottom: 104,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     height: 100, // Enough space for animation
   },
-  
+
   logoWrapper: {
     // Ensure logo stays visual even if container scales
-  }, 
+  },
   successOuter: {
     width: 250,
     height: 250,

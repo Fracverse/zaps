@@ -15,25 +15,25 @@ export default function AccountTypeScreen() {
 
       <View style={styles.content}>
         <View style={styles.logoContainer}>
-            {/* Using logo.png as per existing patterns, assuming it's the correct logo asset */}
-             <BlinkLogo width={216} height={103} style={styles.splashLogo} />
-            <Text style={styles.splashText}>BLINK</Text>
+          {/* Using logo.png as per existing patterns, assuming it's the correct logo asset */}
+          <BlinkLogo width={216} height={103} style={styles.splashLogo} />
+          <Text style={styles.splashText}>BLINK</Text>
         </View>
-        
+
         <View style={styles.buttonContainer}>
-            <Button
-                title="New Account"
-                onPress={() => router.push("/username")}
-                variant="primary"
-                style={styles.button}
-            />
-            <View style={styles.spacer} />
-            <Button
-                title="Returning User"
-                onPress={() => router.push("/returning-user")}
-                variant="secondary" // Using secondary/outline for specific visual hierarchy if available, otherwise primary
-                style={styles.buttonTwo}
-            />
+          <Button
+            title="New Account"
+            onPress={() => router.push("/username")}
+            variant="primary"
+            style={styles.button}
+          />
+          <View style={styles.spacer} />
+          <Button
+            title="Returning User"
+            onPress={() => router.push("/returning-user")}
+            variant="secondary" // Using secondary/outline for specific visual hierarchy if available, otherwise primary
+            style={styles.buttonTwo}
+          />
         </View>
       </View>
     </SafeAreaView>
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-    splashText: {
+  splashText: {
     fontSize: 80, // Increased to 80px
     fontFamily: "Anton_400Regular",
     color: COLORS.primary,
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     backgroundColor: "#6FD784",
   },
-    splashLogo: {
+  splashLogo: {
     // width/height handled by SVG props
     marginBottom: 0, // Reset margin since using gap
   },

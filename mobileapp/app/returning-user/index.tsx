@@ -84,7 +84,7 @@ export default function ReturningUserScreen() {
             textAlignVertical="top"
             autoCapitalize="none"
             autoCorrect={false}
-            returnKeyType="default" 
+            returnKeyType="default"
             blurOnSubmit={false} // Needed for multiline to not submit on return
           />
         </View>

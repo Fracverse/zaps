@@ -17,7 +17,7 @@ export default function BiometricScreen() {
 
   const handleSkip = () => {
     // Navigate to the personal dashboard
-       router.replace("/(personal)/home");
+    router.replace("/(personal)/home");
     // alert("Setup Complete!");
   };
 

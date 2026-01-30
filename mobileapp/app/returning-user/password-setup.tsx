@@ -46,7 +46,7 @@ export default function PasswordSetupScreen() {
             onChangeText={setPassword}
             secureTextEntry
           />
-          <View style={{height: 16}} />
+          <View style={{ height: 16 }} />
           <Input
             placeholder="Confirm password"
             value={confirmPassword}

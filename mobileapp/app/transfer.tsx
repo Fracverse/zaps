@@ -85,9 +85,9 @@ const TokenSelectCard = ({
 export default function TransferScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [transferType, setTransferType] = useState<"BLINKS" | "external" | null>(
-    null
-  );
+  const [transferType, setTransferType] = useState<
+    "BLINKS" | "external" | null
+  >(null);
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [selectedToken, setSelectedToken] = useState(TOKENS[0].id);

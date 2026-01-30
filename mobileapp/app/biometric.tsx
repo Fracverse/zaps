@@ -17,7 +17,7 @@ export default function BiometricScreen() {
 
   const handleSkip = () => {
     // Navigate to the personal dashboard
-       router.push("/create-wallet");
+    router.push("/create-wallet");
     // alert("Setup Complete!");
   };
 
