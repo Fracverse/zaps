@@ -129,7 +129,6 @@ pub async fn create_app(
         .nest("/withdrawals", withdrawal_routes)
         .nest("/notifications", notification_routes)
         .nest("/profiles", profile_routes)
-        .nest("/jobs", job_routes)
         .nest("/admin", admin_routes)
         .nest("/audit", audit_routes)
         .layer(middleware::from_fn_with_state(
