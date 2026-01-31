@@ -11,6 +11,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { COLORS } from "../../../src/constants/colors";
 
+import BlinkLogo from "../../../assets/blinkLogo.svg";
+
 import ScanIcon from "../../../assets/QrCode.svg";
 import TapIcon from "../../../assets/icon-3.svg";
 import TrendUpIcon from "../../../assets/TrendUp.svg";
@@ -48,7 +50,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.logo}>Logo</Text>
+        <BlinkLogo width={80} height={38} />
         <TouchableOpacity style={styles.notificationBtn}>
           <Ionicons
             name="notifications-outline"
@@ -75,10 +77,10 @@ export default function HomeScreen() {
             />
           </View>
 
-          <View style={styles.zapsIdContainer}>
-            <Text style={styles.zapsIdLabel}>Zaps ID</Text>
-            <View style={styles.zapsIdRow}>
-              <Text style={styles.zapsIdValue}>Ejembiii.zaps</Text>
+          <View style={styles.BLINKSIdContainer}>
+            <Text style={styles.BLINKSIdLabel}>Blinks ID</Text>
+            <View style={styles.BLINKSIdRow}>
+              <Text style={styles.BLINKSIdValue}>Ebubeone.blinks</Text>
               <TouchableOpacity>
                 <Ionicons name="copy-outline" size={16} color={COLORS.black} />
               </TouchableOpacity>
@@ -88,16 +90,20 @@ export default function HomeScreen() {
 
         <View style={styles.actionsGrid}>
           <ActionButton
-            label="Tap-to-pay Payment"
+            label="Receive Payment"
             Icon={TapIcon}
-            onPress={() => router.push("/merchant/accept-payment")}
+            onPress={() => router.push("/merchant/receive-payment-options")}
           />
           <ActionButton
-            label="Receive Via QR Code"
+            label="Make Transfer"
             Icon={ScanIcon}
-            onPress={() => router.push("/merchant/qr-code")}
+            onPress={() => router.push("/merchant/make-transfer")}
           />
-          <ActionButton label="Withdraw to Bank" Icon={BankIcon} />
+          <ActionButton
+            onPress={() => router.push("/merchant/withdraw-bank")}
+            label="Withdraw to Bank"
+            Icon={BankIcon}
+          />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -192,7 +198,7 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     color: COLORS.black,
   },
-  zapsIdContainer: {
+  BLINKSIdContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -200,17 +206,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#F0F0F0",
   },
-  zapsIdLabel: {
+  BLINKSIdLabel: {
     fontSize: 14,
     fontFamily: "Outfit_400Regular",
     color: "#999",
   },
-  zapsIdRow: {
+  BLINKSIdRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-  zapsIdValue: {
+  BLINKSIdValue: {
     fontSize: 14,
     fontFamily: "Outfit_700Bold",
     color: COLORS.black,

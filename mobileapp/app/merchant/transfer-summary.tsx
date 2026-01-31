@@ -7,7 +7,6 @@ import {
   Animated,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useHeaderHeight } from "@react-navigation/elements";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
@@ -16,18 +15,9 @@ import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
 
-const MOCK_TRANSFER = {
-  recipient: "John Doe",
-  recipientId: "@johndoe",
-  amount: 250.0,
-  fee: 2.5,
-  total: 252.5,
-  note: "Payment for services",
-};
-
 export default function TransferSummaryScreen() {
   const insets = useSafeAreaInsets();
-  const headerHeight = useHeaderHeight();
+
   const { theme } = useTheme();
   const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
@@ -48,7 +38,7 @@ export default function TransferSummaryScreen() {
         useNativeDriver: true,
       }),
     ]).start(() => {
-      router.push("/merchant/transfer-confirmation");
+      router.push("/merchant/success");
     });
   };
 
@@ -61,142 +51,62 @@ export default function TransferSummaryScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundRoot }]}>
+      <View style={[styles.header, { paddingTop: insets.top }]}>
+        <Pressable
+          onPress={() => router.back()}
+          style={styles.headerBackButton}
+        >
+          <Feather name="arrow-left" size={24} color={theme.text} />
+        </Pressable>
+        <ThemedText style={styles.headerTitle}>
+          Summary & confirmation
+        </ThemedText>
+        <View style={{ width: 40 }} />
+      </View>
+
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingTop: headerHeight + Spacing.lg,
             paddingBottom:
-              insets.bottom + Spacing["5xl"] + Spacing.buttonHeight,
+              insets.bottom + Spacing["5xl"] + Spacing.buttonHeight * 2,
           },
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <ThemedText style={[styles.title, { color: theme.text }]}>
-          Transfer Summary
-        </ThemedText>
-
-        <View style={styles.content}>
-          {/* Recipient Card */}
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: theme.backgroundDefault,
-                borderColor: theme.border,
-              },
-            ]}
-          >
-            <View style={styles.recipientHeader}>
-              <View
-                style={[
-                  styles.avatarCircle,
-                  { backgroundColor: theme.primary + "20" },
-                ]}
-              >
-                <Feather name="user" size={24} color={theme.primary} />
-              </View>
-              <View style={styles.recipientInfo}>
-                <ThemedText
-                  style={[styles.recipientName, { color: theme.text }]}
-                >
-                  {MOCK_TRANSFER.recipient}
-                </ThemedText>
-                <ThemedText
-                  style={[styles.recipientId, { color: theme.textSecondary }]}
-                >
-                  {MOCK_TRANSFER.recipientId}
-                </ThemedText>
-              </View>
+        <View style={styles.summaryCard}>
+          <View style={styles.iconCircle}>
+            <View style={styles.iconInner}>
+              <ThemedText style={styles.dollarSign}>$</ThemedText>
             </View>
           </View>
 
-          {/* Amount Card */}
-          <View
-            style={[
-              styles.card,
-              styles.amountCard,
-              {
-                backgroundColor: theme.backgroundRoot,
-                borderColor: theme.border,
-              },
-            ]}
-          >
-            <ThemedText
-              style={[styles.amountLabel, { color: theme.textSecondary }]}
-            >
-              Amount
-            </ThemedText>
-            <ThemedText style={[styles.amountValue, { color: theme.text }]}>
-              ${formatCurrency(MOCK_TRANSFER.amount)}
-            </ThemedText>
+          <ThemedText style={styles.amountText}>
+            ${formatCurrency(15046.12)}
+          </ThemedText>
+
+          <View style={styles.recipientRow}>
+            <View style={styles.bankIconBg}>
+              <Feather name="home" size={20} color="#333" />
+            </View>
+            <View style={styles.recipientDetails}>
+              <ThemedText style={styles.recipientLabel}>
+                Recipient bank account
+              </ThemedText>
+              <ThemedText style={styles.recipientNumber}>
+                91235704180
+              </ThemedText>
+            </View>
           </View>
 
-          {/* Details Card */}
-          <View
-            style={[
-              styles.card,
-              {
-                backgroundColor: theme.backgroundDefault,
-                borderColor: theme.border,
-              },
-            ]}
-          >
-            <ThemedText style={[styles.detailsTitle, { color: theme.text }]}>
-              Transaction Details
+          <View style={styles.divider} />
+
+          <View style={styles.dateRow}>
+            <ThemedText style={styles.dateLabel}>Date</ThemedText>
+            <ThemedText style={styles.dateValue}>
+              Nov 12 2025, 8.12 AM
             </ThemedText>
-
-            <View style={styles.detailRow}>
-              <ThemedText
-                style={[styles.detailLabel, { color: theme.textSecondary }]}
-              >
-                Transfer Amount
-              </ThemedText>
-              <ThemedText style={[styles.detailValue, { color: theme.text }]}>
-                ${formatCurrency(MOCK_TRANSFER.amount)}
-              </ThemedText>
-            </View>
-
-            <View style={styles.detailRow}>
-              <ThemedText
-                style={[styles.detailLabel, { color: theme.textSecondary }]}
-              >
-                Transaction Fee
-              </ThemedText>
-              <ThemedText style={[styles.detailValue, { color: theme.text }]}>
-                ${formatCurrency(MOCK_TRANSFER.fee)}
-              </ThemedText>
-            </View>
-
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
-
-            <View style={styles.detailRow}>
-              <ThemedText style={[styles.totalLabel, { color: theme.text }]}>
-                Total Amount
-              </ThemedText>
-              <ThemedText style={[styles.totalValue, { color: theme.text }]}>
-                ${formatCurrency(MOCK_TRANSFER.total)}
-              </ThemedText>
-            </View>
-
-            {MOCK_TRANSFER.note && (
-              <>
-                <View
-                  style={[styles.divider, { backgroundColor: theme.border }]}
-                />
-                <View style={styles.noteContainer}>
-                  <ThemedText
-                    style={[styles.noteLabel, { color: theme.textSecondary }]}
-                  >
-                    Note
-                  </ThemedText>
-                  <ThemedText style={[styles.noteText, { color: theme.text }]}>
-                    {MOCK_TRANSFER.note}
-                  </ThemedText>
-                </View>
-              </>
-            )}
           </View>
         </View>
       </ScrollView>
@@ -206,11 +116,12 @@ export default function TransferSummaryScreen() {
           styles.bottomButtonContainer,
           {
             paddingBottom: insets.bottom + Spacing.lg,
-            backgroundColor: theme.backgroundRoot,
           },
         ]}
       >
-        <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+        <Animated.View
+          style={{ transform: [{ scale: scaleAnim }], gap: Spacing.md }}
+        >
           <Pressable
             onPress={handleConfirm}
             style={({ pressed }) => [
@@ -222,8 +133,21 @@ export default function TransferSummaryScreen() {
             ]}
           >
             <ThemedText style={styles.confirmButtonText}>
-              Confirm Transfer
+              Confirm Withdrawal
             </ThemedText>
+          </Pressable>
+
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [
+              styles.cancelButton,
+              {
+                backgroundColor: "#8CF79C",
+                opacity: pressed ? 0.9 : 1,
+              },
+            ]}
+          >
+            <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
           </Pressable>
         </Animated.View>
       </View>
@@ -240,95 +164,113 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.xl,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    marginBottom: Spacing["2xl"],
-  },
-  content: {
-    gap: Spacing.lg,
-  },
-  card: {
-    padding: Spacing.xl,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-  },
-  recipientHeader: {
+  header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.md,
+    justifyContent: "space-between",
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
   },
-  avatarCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  headerBackButton: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontFamily: "Outfit_700Bold",
+    flex: 1,
+    textAlign: "center",
+    marginRight: 40,
+  },
+  summaryCard: {
+    padding: Spacing["2xl"],
+    borderRadius: BorderRadius.xl,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+  },
+  iconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: Spacing.xl,
+  },
+  iconInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: "#1A4B4A",
     alignItems: "center",
     justifyContent: "center",
   },
-  recipientInfo: {
+  dollarSign: {
+    fontSize: 30,
+    fontFamily: "Outfit_700Bold",
+    color: "#1A4B4A",
+  },
+  amountText: {
+    fontSize: 32,
+    fontFamily: "Outfit_700Bold",
+    marginBottom: Spacing["2xl"],
+  },
+  recipientRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    gap: Spacing.md,
+    marginBottom: Spacing.xl,
+  },
+  bankIconBg: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F5F5F5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recipientDetails: {
     flex: 1,
   },
-  recipientName: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: Spacing.xs,
+  recipientLabel: {
+    fontSize: 13,
+    color: "#666",
+    fontFamily: "Outfit_400Regular",
   },
-  recipientId: {
-    fontSize: 14,
-  },
-  amountCard: {
-    alignItems: "center",
-  },
-  amountLabel: {
-    fontSize: 14,
-    marginBottom: Spacing.sm,
-  },
-  amountValue: {
-    fontSize: 48,
-    fontWeight: "700",
-    letterSpacing: -2,
-  },
-  detailsTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: Spacing.md,
-  },
-  detailRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: Spacing.xs,
-  },
-  detailLabel: {
-    fontSize: 14,
-  },
-  detailValue: {
-    fontSize: 14,
-    fontWeight: "500",
+  recipientNumber: {
+    fontSize: 15,
+    fontFamily: "Outfit_500Medium",
+    color: "#333",
   },
   divider: {
     height: 1,
-    marginVertical: Spacing.sm,
+    backgroundColor: "#F0F0F0",
+    width: "100%",
+    marginBottom: Spacing.xl,
   },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: "600",
+  dateRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+    alignItems: "center",
   },
-  totalValue: {
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  noteContainer: {
-    gap: Spacing.xs,
-  },
-  noteLabel: {
-    fontSize: 12,
-    textTransform: "uppercase",
-  },
-  noteText: {
+  dateLabel: {
     fontSize: 14,
-    lineHeight: 20,
+    color: "#999",
+    fontFamily: "Outfit_400Regular",
+  },
+  dateValue: {
+    fontSize: 14,
+    color: "#333",
+    fontFamily: "Outfit_500Medium",
   },
   bottomButtonContainer: {
     position: "absolute",
@@ -336,7 +278,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
   },
   confirmButton: {
     height: Spacing.buttonHeight,
@@ -347,6 +288,17 @@ const styles = StyleSheet.create({
   confirmButtonText: {
     color: "#FFFFFF",
     fontSize: 16,
-    fontWeight: "600",
+    fontFamily: "Outfit_600SemiBold",
+  },
+  cancelButton: {
+    height: Spacing.buttonHeight,
+    borderRadius: BorderRadius.full,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cancelButtonText: {
+    color: "#1A4B4A",
+    fontSize: 16,
+    fontFamily: "Outfit_600SemiBold",
   },
 });

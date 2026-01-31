@@ -1,5 +1,5 @@
+use blinks_backend::config::Config;
 use sqlx::postgres::PgPoolOptions;
-use zaps_backend::config::Config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7,7 +7,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
 
     println!("Running migrations...");
-    zaps_backend::db::run_migrations(&config.database.url).await?;
+    blinks_backend::db::run_migrations(&config.database.url).await?;
 
     println!("Connecting to database...");
     let pool = PgPoolOptions::new()

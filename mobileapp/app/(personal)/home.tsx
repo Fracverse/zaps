@@ -11,6 +11,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 
+import BlinkLogo from "../../assets/blinkLogo.svg";
+
 import XLMLogo from "../../assets/XML-logo.svg";
 import USDTLogo from "../../assets/USDT-logo.svg";
 import USDCLogo from "../../assets/USDC-logo.svg";
@@ -52,7 +54,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.logo}>Logo</Text>
+        <BlinkLogo width={80} height={38} />
         <TouchableOpacity style={styles.notificationBtn}>
           <Ionicons
             name="notifications-outline"
@@ -91,10 +93,10 @@ export default function HomeScreen() {
             />
           </View>
 
-          <View style={styles.zapsIdContainer}>
-            <Text style={styles.zapsIdLabel}>Zaps ID</Text>
-            <View style={styles.zapsIdRow}>
-              <Text style={styles.zapsIdValue}>Ejembiii.zaps</Text>
+          <View style={styles.BLINKSIdContainer}>
+            <Text style={styles.BLINKSIdLabel}>Zap ID</Text>
+            <View style={styles.BLINKSIdRow}>
+              <Text style={styles.BLINKSIdValue}>Ejembiii.zap</Text>
               <TouchableOpacity>
                 <Ionicons name="copy-outline" size={16} color={COLORS.black} />
               </TouchableOpacity>
@@ -217,7 +219,7 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     color: COLORS.black,
   },
-  zapsIdContainer: {
+  BLINKSIdContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -225,17 +227,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#F0F0F0",
   },
-  zapsIdLabel: {
+  BLINKSIdLabel: {
     fontSize: 14,
     fontFamily: "Outfit_400Regular",
     color: "#999",
   },
-  zapsIdRow: {
+  BLINKSIdRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-  zapsIdValue: {
+  BLINKSIdValue: {
     fontSize: 14,
     fontFamily: "Outfit_700Bold",
     color: COLORS.black,

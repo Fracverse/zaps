@@ -8,13 +8,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter } from "expo-router";
-import { COLORS } from "../src/constants/colors";
-import { Button } from "../src/components/Button";
-import { AccountTypeCard } from "../src/components/AccountTypeCard";
+import { COLORS } from "../../src/constants/colors";
+import { Button } from "../../src/components/Button";
+import { AccountTypeCard } from "../../src/components/AccountTypeCard";
 import { Ionicons } from "@expo/vector-icons";
 
-import PersonalIcon from "../assets/peronal.svg";
-import MerchantIcon from "../assets/merchant.svg";
+import PersonalIcon from "../../assets/peronal.svg";
+import MerchantIcon from "../../assets/merchant.svg";
 
 export default function AccountTypeScreen() {
   const router = useRouter();
@@ -26,7 +26,7 @@ export default function AccountTypeScreen() {
     if (selectedType === "merchant") {
       router.push("/merchant");
     } else if (selectedType === "personal") {
-      router.push("/username");
+      router.push("/home");
     }
   };
 
@@ -47,7 +47,7 @@ export default function AccountTypeScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.subtitle}>
-          Select how you'll primarily use Zap.
+          Select how you'll primarily use Blink.
         </Text>
 
         <View style={styles.cardsContainer}>

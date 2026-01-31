@@ -73,7 +73,7 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.profileCard}>
-          <Text style={styles.profileName}>Ejembiii.zaps</Text>
+          <Text style={styles.profileName}>Ejembiii.BLINKS</Text>
           <View style={styles.addressRow}>
             <Text style={styles.addressText}>0x4A7d5cBe16...da79bB2cF9a1B</Text>
             <TouchableOpacity>

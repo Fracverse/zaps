@@ -54,8 +54,8 @@ pub enum PaymentError {
     FxSwapFailed = 9,
 }
 
-#[contractclient(name = "ZapsRegistryClient")]
-pub trait ZapsRegistry {
+#[contractclient(name = "BLINKSRegistryClient")]
+pub trait BLINKSRegistry {
     fn get_merchant(env: Env, merchant_id: Bytes) -> MerchantMetadata;
 }
 
@@ -108,7 +108,7 @@ impl PaymentRouter {
         enter(&env);
 
         let registry = registry_address(&env);
-        let registry_client = ZapsRegistryClient::new(&env, &registry);
+        let registry_client = BLINKSRegistryClient::new(&env, &registry);
         let merchant = registry_client.get_merchant(&merchant_id);
 
         if !merchant.active {

@@ -139,7 +139,7 @@ impl Config {
         let mut builder = ConfigBuilder::builder()
             .add_source(File::with_name("config/default").required(false))
             .add_source(
-                Environment::with_prefix("ZAPS")
+                Environment::with_prefix("BLINKS")
                     .prefix_separator("_")
                     .separator("__"),
             );
@@ -159,7 +159,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             database: DatabaseConfig {
-                url: "postgres://localhost/zaps".to_string(),
+                url: "postgres://localhost/BLINKS".to_string(),
             },
             server: ServerConfig { port: 3000 },
             jwt: JwtConfig {

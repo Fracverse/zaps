@@ -463,6 +463,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "blinks-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.21.7",
+ "bcrypt",
+ "chrono",
+ "config",
+ "dashmap",
+ "deadpool-postgres",
+ "governor",
+ "httpmock",
+ "jsonwebtoken",
+ "lazy_static",
+ "prometheus",
+ "regex",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "soroban-sdk",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-postgres",
+ "tokio-test",
+ "tokio-util",
+ "tower 0.4.13",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5139,47 +5175,6 @@ dependencies = [
  "quote",
  "syn 2.0.114",
  "synstructure",
-]
-
-[[package]]
-name = "zaps-backend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.21.7",
- "bb8",
- "bb8-redis",
- "bcrypt",
- "chrono",
- "config",
- "dashmap",
- "deadpool-postgres",
- "futures",
- "governor",
- "httpmock",
- "jsonwebtoken",
- "lazy_static",
- "prometheus",
- "redis 0.24.0",
- "regex",
- "reqwest",
- "ring",
- "serde",
- "serde_json",
- "soroban-sdk",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tokio-postgres",
- "tokio-test",
- "tokio-util",
- "tower 0.4.13",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

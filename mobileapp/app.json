@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "zaps",
-    "slug": "zaps",
+    "name": "BLINKS",
+    "slug": "BLINKS",
     "version": "1.0.0",
-    "scheme": "zaps",
+    "scheme": "BLINKS",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",

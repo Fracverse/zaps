@@ -30,11 +30,11 @@ if (
 export default function ReceiveScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [receiveType, setReceiveType] = useState<"zaps" | "external" | null>(
+  const [receiveType, setReceiveType] = useState<"BLINKS" | "external" | null>(
     null
   );
 
-  const blinksId = "ejembiii.blinks";
+  const zapId = "ejembiii.zap";
   const walletAddress = "GABC...1234"; // Placeholder
 
   const handleNext = () => {
@@ -54,7 +54,7 @@ export default function ReceiveScreen() {
   const handleShare = async () => {
     try {
       await Share.share({
-        message: receiveType === "zaps" ? blinksId : walletAddress,
+        message: receiveType === "BLINKS" ? zapId : walletAddress,
       });
     } catch (error) {
       console.log(error);
@@ -66,11 +66,11 @@ export default function ReceiveScreen() {
       <Text style={styles.subtitle}>Choose how you want to receive money.</Text>
       <View style={styles.cardsContainer}>
         <AccountTypeCard
-          title="Blinx User"
-          description="Receive instantly from any Blinx user via your Zaps ID"
+          title="Blink User"
+          description="Receive instantly from any Blink user via your Zap ID"
           Icon={ZapIcon}
-          selected={receiveType === "zaps"}
-          onPress={() => setReceiveType("zaps")}
+          selected={receiveType === "BLINKS"}
+          onPress={() => setReceiveType("BLINKS")}
         />
         <AccountTypeCard
           title="External Wallet"
@@ -99,10 +99,10 @@ export default function ReceiveScreen() {
           </View>
           <View style={styles.idTextContainer}>
             <Text style={styles.idLabel}>
-              {receiveType === "zaps" ? "Blinks ID" : "Wallet Address"}
+              {receiveType === "BLINKS" ? "Zap ID" : "Wallet Address"}
             </Text>
             <Text style={styles.idValue}>
-              {receiveType === "zaps" ? blinksId : walletAddress}
+              {receiveType === "BLINKS" ? zapId : walletAddress}
             </Text>
           </View>
         </View>
