@@ -10,7 +10,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, health, identity, jobs, metrics as metrics_http, notifications,
+        admin, audit, auth, files, health, identity, jobs, metrics as metrics_http, notifications,
         payments, profiles, transfers, withdrawals,
     },
     job_worker::JobWorker,

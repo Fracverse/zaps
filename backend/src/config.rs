@@ -98,7 +98,6 @@ pub struct RiskThresholds {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueConfig {
     pub redis_url: String,
     pub max_retries: u32,
@@ -134,7 +133,6 @@ pub enum StorageBackend {
     S3,
     Ipfs,
 }
-
 
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
