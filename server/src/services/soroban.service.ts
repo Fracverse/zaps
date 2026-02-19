@@ -41,6 +41,7 @@ class SorobanService {
     async getEvents(startLedger: number) {
         return this.server.getEvents({
             startLedger,
+            filters: [], 
             limit: 100 // Reasonable limit per poll
         });
     }
