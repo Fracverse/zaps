@@ -1,27 +1,38 @@
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::Method,
     middleware::Next,
     response::Response,
 };
+use http_body_util::BodyExt;
 use std::sync::Arc;
 
+use crate::middleware::auth::AuthenticatedUser;
 use crate::service::ServiceContainer;
 
-/// Audit logging middleware that automatically logs all authenticated requests
+const MAX_BODY_SNIPPET_LEN: usize = 2048;
+
 pub async fn audit_logging(
     State(services): State<Arc<ServiceContainer>>,
     request: Request,
     next: Next,
 ) -> Response {
-    // Extract actor_id from request extensions (set by auth middleware)
+    let method = request.method().clone();
+
+    if !matches!(
+        method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        return next.run(request).await;
+    }
+
     let actor_id = request
         .extensions()
-        .get::<String>()
-        .cloned()
+        .get::<AuthenticatedUser>()
+        .map(|u| u.user_id.clone())
         .unwrap_or_else(|| "anonymous".to_string());
 
-    // Extract IP address from headers
     let ip_address = request
         .headers()
         .get("x-forwarded-for")
@@ -34,47 +45,110 @@ pub async fn audit_logging(
         })
         .map(|s| s.to_string());
 
-    // Extract user agent
     let user_agent = request
         .headers()
         .get("user-agent")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
-    // Parse request path and method to determine action and resource
-    let method = request.method().clone();
     let path = request.uri().path().to_string();
     let (action, resource, resource_id) = parse_request_info(&method, &path);
 
-    // Execute the request
+    let is_multipart = request
+        .headers()
+        .get("content-type")
+        .and_then(|ct| ct.to_str().ok())
+        .map(|ct| ct.starts_with("multipart/"))
+        .unwrap_or(false);
+
+    let (request, request_snippet) = if is_multipart {
+        (request, None)
+    } else {
+        let (parts, body) = request.into_parts();
+        let body_bytes = body
+            .collect()
+            .await
+            .map(|c| c.to_bytes())
+            .unwrap_or_default();
+        let snippet = body_snippet(&body_bytes);
+        (Request::from_parts(parts, Body::from(body_bytes)), snippet)
+    };
+
     let response = next.run(request).await;
 
-    // Only log successful requests (2xx status codes)
-    let status = response.status();
-    if status.is_success() {
-        // Clone services for async task
-        let audit_service = services.audit.clone();
+    let status_code = response.status().as_u16();
 
-        // Log asynchronously to avoid blocking the response
-        tokio::spawn(async move {
-            let _ = audit_service
-                .create_audit_log(crate::models::CreateAuditLogParams {
-                    actor_id,
-                    action,
-                    resource,
-                    resource_id,
-                    metadata: None, // metadata can be extended later
-                    ip_address,
-                    user_agent,
-                })
-                .await;
-        });
-    }
+    let (res_parts, res_body) = response.into_parts();
+    let res_bytes = res_body
+        .collect()
+        .await
+        .map(|c| c.to_bytes())
+        .unwrap_or_default();
+    let response_snippet = body_snippet(&res_bytes);
+    let response = Response::from_parts(res_parts, Body::from(res_bytes));
+
+    let metadata = serde_json::json!({
+        "request_body": request_snippet,
+        "response_body": response_snippet,
+        "status_code": status_code,
+    });
+
+    let audit_service = services.audit.clone();
+    tokio::spawn(async move {
+        if let Err(e) = audit_service
+            .create_audit_log(crate::models::CreateAuditLogParams {
+                actor_id,
+                action,
+                resource,
+                resource_id,
+                metadata: Some(metadata),
+                ip_address,
+                user_agent,
+            })
+            .await
+        {
+            tracing::error!("failed to write audit log: {}", e);
+        }
+    });
 
     response
 }
 
-/// Parse HTTP method and path to extract action, resource, and resource_id
+fn body_snippet(bytes: &[u8]) -> Option<serde_json::Value> {
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let end = bytes.len().min(MAX_BODY_SNIPPET_LEN);
+    let text = String::from_utf8_lossy(&bytes[..end]);
+
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(value) => Some(redact_sensitive_fields(value)),
+        Err(_) => Some(serde_json::Value::String(text.into_owned())),
+    }
+}
+
+fn redact_sensitive_fields(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut() {
+        for key in [
+            "password",
+            "pin",
+            "secret",
+            "token",
+            "authorization",
+            "cookie",
+        ] {
+            if obj.contains_key(key) {
+                obj.insert(
+                    key.to_string(),
+                    serde_json::Value::String("[REDACTED]".to_string()),
+                );
+            }
+        }
+    }
+    value
+}
+
 fn parse_request_info(method: &Method, path: &str) -> (String, String, Option<String>) {
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
@@ -82,12 +156,9 @@ fn parse_request_info(method: &Method, path: &str) -> (String, String, Option<St
         return (method.to_string(), "unknown".to_string(), None);
     }
 
-    // Determine resource from path
     let resource = parts.first().unwrap_or(&"unknown").to_string();
 
-    // Try to extract resource ID (typically the second segment)
     let resource_id = if parts.len() > 1 {
-        // Check if it looks like a UUID or ID (not a subresource like "status")
         let potential_id = parts[1];
         if !is_subresource(potential_id) {
             Some(potential_id.to_string())
@@ -98,24 +169,20 @@ fn parse_request_info(method: &Method, path: &str) -> (String, String, Option<St
         None
     };
 
-    // Determine action based on HTTP method
-    let action = match method {
-        &Method::GET if resource_id.is_some() => format!("view_{}", resource),
-        &Method::GET => format!("list_{}", resource),
-        &Method::POST => format!("create_{}", resource),
-        &Method::PUT | &Method::PATCH => format!("update_{}", resource),
-        &Method::DELETE => format!("delete_{}", resource),
+    let action = match *method {
+        Method::POST => format!("create_{}", resource),
+        Method::PUT | Method::PATCH => format!("update_{}", resource),
+        Method::DELETE => format!("delete_{}", resource),
         _ => method.to_string(),
     };
 
     (action, resource, resource_id)
 }
 
-/// Check if a path segment is a subresource rather than an ID
 fn is_subresource(segment: &str) -> bool {
     matches!(
         segment,
-        "status" | "wallet" | "activity" | "stats" | "health" | "qr" | "nfc"
+        "status" | "wallet" | "activity" | "stats" | "health" | "qr" | "nfc" | "read"
     )
 }
 
@@ -125,30 +192,93 @@ mod tests {
     use axum::http::Method;
 
     #[test]
-    fn test_parse_request_info() {
-        // Test GET with ID
-        let (action, resource, resource_id) = parse_request_info(&Method::GET, "/payments/123-456");
-        assert_eq!(action, "view_payments");
+    fn test_parse_post() {
+        let (action, resource, id) = parse_request_info(&Method::POST, "/payments");
+        assert_eq!(action, "create_payments");
         assert_eq!(resource, "payments");
-        assert_eq!(resource_id, Some("123-456".to_string()));
+        assert_eq!(id, None);
+    }
 
-        // Test GET list
-        let (action, resource, resource_id) = parse_request_info(&Method::GET, "/payments");
-        assert_eq!(action, "list_payments");
+    #[test]
+    fn test_parse_put_with_id() {
+        let (action, resource, id) = parse_request_info(&Method::PUT, "/payments/123-456");
+        assert_eq!(action, "update_payments");
         assert_eq!(resource, "payments");
-        assert_eq!(resource_id, None);
+        assert_eq!(id, Some("123-456".to_string()));
+    }
 
-        // Test POST create
-        let (action, resource, resource_id) = parse_request_info(&Method::POST, "/transfers");
-        assert_eq!(action, "create_transfers");
-        assert_eq!(resource, "transfers");
-        assert_eq!(resource_id, None);
+    #[test]
+    fn test_parse_patch() {
+        let (action, resource, id) = parse_request_info(&Method::PATCH, "/profiles/user1");
+        assert_eq!(action, "update_profiles");
+        assert_eq!(resource, "profiles");
+        assert_eq!(id, Some("user1".to_string()));
+    }
 
-        // Test subresource (not treated as ID)
-        let (action, resource, resource_id) =
-            parse_request_info(&Method::GET, "/payments/123/status");
-        assert_eq!(action, "view_payments");
-        assert_eq!(resource, "payments");
-        assert_eq!(resource_id, Some("123".to_string()));
+    #[test]
+    fn test_parse_delete() {
+        let (action, resource, id) = parse_request_info(&Method::DELETE, "/files/abc");
+        assert_eq!(action, "delete_files");
+        assert_eq!(resource, "files");
+        assert_eq!(id, Some("abc".to_string()));
+    }
+
+    #[test]
+    fn test_parse_subresource() {
+        let (action, resource, id) = parse_request_info(&Method::PATCH, "/notifications/123/read");
+        assert_eq!(action, "update_notifications");
+        assert_eq!(resource, "notifications");
+        assert_eq!(id, Some("123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_empty_path() {
+        let (action, resource, id) = parse_request_info(&Method::POST, "/");
+        assert_eq!(action, "POST");
+        assert_eq!(resource, "unknown");
+        assert_eq!(id, None);
+    }
+
+    #[test]
+    fn test_redact_sensitive_fields() {
+        let input = serde_json::json!({
+            "username": "alice",
+            "password": "s3cret",
+            "token": "abc123"
+        });
+        let redacted = redact_sensitive_fields(input);
+        assert_eq!(redacted["username"], "alice");
+        assert_eq!(redacted["password"], "[REDACTED]");
+        assert_eq!(redacted["token"], "[REDACTED]");
+    }
+
+    #[test]
+    fn test_body_snippet_empty() {
+        assert_eq!(body_snippet(&[]), None);
+    }
+
+    #[test]
+    fn test_body_snippet_json() {
+        let data = serde_json::json!({"amount": 100, "asset": "XLM"});
+        let bytes = serde_json::to_vec(&data).unwrap();
+        let snippet = body_snippet(&bytes).unwrap();
+        assert_eq!(snippet["amount"], 100);
+        assert_eq!(snippet["asset"], "XLM");
+    }
+
+    #[test]
+    fn test_body_snippet_with_sensitive_data() {
+        let data = serde_json::json!({"username": "bob", "password": "hunter2"});
+        let bytes = serde_json::to_vec(&data).unwrap();
+        let snippet = body_snippet(&bytes).unwrap();
+        assert_eq!(snippet["username"], "bob");
+        assert_eq!(snippet["password"], "[REDACTED]");
+    }
+
+    #[test]
+    fn test_body_snippet_plain_text() {
+        let text = b"not valid json";
+        let snippet = body_snippet(text).unwrap();
+        assert_eq!(snippet, "not valid json");
     }
 }
