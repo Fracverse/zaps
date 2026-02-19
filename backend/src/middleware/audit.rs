@@ -225,8 +225,7 @@ mod tests {
 
     #[test]
     fn test_parse_subresource() {
-        let (action, resource, id) =
-            parse_request_info(&Method::PATCH, "/notifications/123/read");
+        let (action, resource, id) = parse_request_info(&Method::PATCH, "/notifications/123/read");
         assert_eq!(action, "update_notifications");
         assert_eq!(resource, "notifications");
         assert_eq!(id, Some("123".to_string()));
