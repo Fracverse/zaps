@@ -43,15 +43,26 @@ class QueueService {
     }
 
     public async addJob(payload: JobPayload, options?: JobsOptions) {
+        const defaultOptions: JobsOptions = {
+            attempts: 5,
+            backoff: {
+                type: 'exponential',
+                delay: 1000,
+            },
+            removeOnComplete: true, // Auto-remove completed jobs to save Redis space
+            removeOnFail: false,    // Keep failed jobs for inspection
+        };
+        const finalOptions = { ...defaultOptions, ...options };
+
         switch (payload.type) {
             case JobType.EMAIL:
-                return this.emailQueue.add(JobType.EMAIL, payload.data, options);
+                return this.emailQueue.add(JobType.EMAIL, payload.data, finalOptions);
             case JobType.NOTIFICATION:
-                return this.pushQueue.add(JobType.NOTIFICATION, payload.data, options);
+                return this.pushQueue.add(JobType.NOTIFICATION, payload.data, finalOptions);
             case JobType.SYNC:
-                return this.syncQueue.add(JobType.SYNC, payload.data, options);
+                return this.syncQueue.add(JobType.SYNC, payload.data, finalOptions);
             case JobType.BLOCKCHAIN_TX:
-                return this.blockchainTxQueue.add(JobType.BLOCKCHAIN_TX, payload.data, options);
+                return this.blockchainTxQueue.add(JobType.BLOCKCHAIN_TX, payload.data, finalOptions);
             default:
                 throw new Error(`Unknown job type: ${payload.type}`);
         }
