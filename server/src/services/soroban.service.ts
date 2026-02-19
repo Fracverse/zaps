@@ -39,12 +39,10 @@ class SorobanService {
     }
 
     async getEvents(startLedger: number) {
-        // Logic to poll for events
         return this.server.getEvents({
             startLedger,
-            filters: [
-                // Filter by contract ID
-            ]
+            filters: [], 
+            limit: 100 // Reasonable limit per poll
         });
     }
 }

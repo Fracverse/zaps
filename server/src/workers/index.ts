@@ -1,47 +1,36 @@
 import { Worker, Job } from 'bullmq';
 import { connection } from '../utils/redis';
-import { JobType } from '../services/queue.service';
+import queueService, { JobType } from '../services/queue.service';
 import logger from '../utils/logger';
+import prisma from '../utils/prisma';
+import { PaymentStatus } from '@prisma/client';
 
 export const startWorkers = () => {
-    const worker = new Worker('default', async (job: Job) => {
-        logger.info(`Processing job ${job.id} of type ${job.name}`);
+    // Email Worker
+    new Worker('email-queue', async (job: Job) => {
+        logger.info(`Processing EMAIL job ${job.id}`);
+        await processEmail(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-        try {
-            switch (job.name) {
-                case JobType.EMAIL:
-                    await processEmail(job.data);
-                    break;
-                case JobType.NOTIFICATION:
-                    await processNotification(job.data);
-                    break;
-                case JobType.BLOCKCHAIN_TX:
-                    await processBlockchainTx(job.data);
-                    break;
-                case JobType.SYNC:
-                    await processSync(job.data);
-                    break;
-                default:
-                    logger.warn(`Unknown job type: ${job.name}`);
-            }
-        } catch (err: any) {
-            logger.error(`Error processing job ${job.id}: ${err.message}`, { stack: err.stack });
-            throw err; // Allow BullMQ to handle retries
-        }
-    }, {
-        connection: connection as any,
-        concurrency: 5
-    });
+    // Push Notification Worker
+    new Worker('push-queue', async (job: Job) => {
+        logger.info(`Processing PUSH job ${job.id}`);
+        await processNotification(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-    worker.on('completed', (job) => {
-        logger.info(`Job ${job.id} completed successfully`);
-    });
+    // Sync Worker
+    new Worker('sync-queue', async (job: Job) => {
+        logger.info(`Processing SYNC job ${job.id}`);
+        await processSync(job.data);
+    }, { connection: connection as any, concurrency: 1 }); // Sequential processing for sync might be safer or just 1 for now
 
-    worker.on('failed', (job, err) => {
-        logger.error(`Job ${job?.id} failed with error: ${err.message}`);
-    });
+    // Blockchain Tx Worker
+    new Worker('blockchain-tx-queue', async (job: Job) => {
+        logger.info(`Processing BLOCKCHAIN_TX job ${job.id}`);
+        await processBlockchainTx(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-    logger.info('Background workers started...');
+    logger.info('Background workers started for all queues...');
 };
 
 const processEmail = async (data: any) => {
@@ -60,6 +49,52 @@ const processBlockchainTx = async (data: any) => {
 };
 
 const processSync = async (data: any) => {
-    // Logic for analytical syncs or database maintenance
-    logger.info('Performing sync operation:', { syncType: data.syncType });
+    logger.info('Processing SYNC job', { data });
+
+    if (data.syncType === 'ON_CHAIN_COMPLETION' && (data.eventType === 'PAY_DONE' || data.eventType === 'TRANSFER_DONE')) {
+        const { paymentId } = data;
+
+        if (!paymentId) return;
+
+        const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+
+        if (!payment) {
+            logger.warn(`Payment not found for sync: ${paymentId}`);
+            return;
+        }
+
+        if (payment.status === PaymentStatus.COMPLETED) {
+            logger.info(`Payment ${paymentId} already completed. Skipping.`);
+            return;
+        }
+
+        await prisma.payment.update({
+            where: { id: paymentId },
+            data: { status: PaymentStatus.COMPLETED },
+        });
+        logger.info(`Payment ${paymentId} marked as COMPLETED.`);
+
+        // Dispatch downstream jobs
+        await queueService.addJob({
+            type: JobType.EMAIL,
+            data: {
+                to: 'user@example.com', // Placeholder
+                subject: 'Payment Completed',
+                paymentId,
+                amount: payment.sendAmount.toString()
+            }
+        });
+
+        if (payment.userAddress) {
+            await queueService.addJob({
+                type: JobType.NOTIFICATION,
+                data: {
+                    userId: payment.userAddress,
+                    title: 'Payment Completed',
+                    paymentId
+                }
+            });
+        }
+    }
 };
+
