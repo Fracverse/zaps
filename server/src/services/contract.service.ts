@@ -1,13 +1,41 @@
-import { TransactionBuilder, Account } from '@stellar/stellar-sdk';
+import { xdr } from '@stellar/stellar-sdk';
+import sorobanService from './soroban.service';
+import logger from '../utils/logger';
 
+/**
+ * Higher-level contract interaction service.
+ * Delegates XDR building and sponsorship to SorobanService.
+ */
 export class ContractService {
-    async buildTransaction(sourceAccount: string, contractId: string, method: string, args: any[]) {
-        // Build transaction XDR for Soroban call
-        // Implement Account Abstraction by using a backend fee payer
-    }
+    /**
+     * Builds and sponsors a Soroban contract invocation.
+     * Returns a half-signed XDR (fee payer signed, user signature pending).
+     */
+    async buildAndSponsor(
+        sourceAddress: string,
+        contractId: string,
+        method: string,
+        args: xdr.ScVal[],
+    ): Promise<{ xdr: string; feePayerAddress: string }> {
+        const unsignedXdr = await sorobanService.buildContractCall(
+            sourceAddress,
+            contractId,
+            method,
+            args,
+        );
 
-    async signAuthEntries(xdr: string) {
-        // Service to help with client-side signing preparation
+        const sponsored = await sorobanService.sponsorTransaction(unsignedXdr);
+
+        logger.info('Contract call sponsored', {
+            contract: contractId,
+            method,
+            source: sourceAddress,
+        });
+
+        return {
+            xdr: sponsored.sponsoredXdr,
+            feePayerAddress: sponsored.feePayerAddress,
+        };
     }
 }
 
