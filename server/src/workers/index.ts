@@ -4,44 +4,31 @@ import { JobType } from '../services/queue.service';
 import logger from '../utils/logger';
 
 export const startWorkers = () => {
-    const worker = new Worker('default', async (job: Job) => {
-        logger.info(`Processing job ${job.id} of type ${job.name}`);
+    // Email Worker
+    new Worker('email-queue', async (job: Job) => {
+        logger.info(`Processing EMAIL job ${job.id}`);
+        await processEmail(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-        try {
-            switch (job.name) {
-                case JobType.EMAIL:
-                    await processEmail(job.data);
-                    break;
-                case JobType.NOTIFICATION:
-                    await processNotification(job.data);
-                    break;
-                case JobType.BLOCKCHAIN_TX:
-                    await processBlockchainTx(job.data);
-                    break;
-                case JobType.SYNC:
-                    await processSync(job.data);
-                    break;
-                default:
-                    logger.warn(`Unknown job type: ${job.name}`);
-            }
-        } catch (err: any) {
-            logger.error(`Error processing job ${job.id}: ${err.message}`, { stack: err.stack });
-            throw err; // Allow BullMQ to handle retries
-        }
-    }, {
-        connection: connection as any,
-        concurrency: 5
-    });
+    // Push Notification Worker
+    new Worker('push-queue', async (job: Job) => {
+        logger.info(`Processing PUSH job ${job.id}`);
+        await processNotification(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-    worker.on('completed', (job) => {
-        logger.info(`Job ${job.id} completed successfully`);
-    });
+    // Sync Worker
+    new Worker('sync-queue', async (job: Job) => {
+        logger.info(`Processing SYNC job ${job.id}`);
+        await processSync(job.data);
+    }, { connection: connection as any, concurrency: 1 }); // Sequential processing for sync might be safer or just 1 for now
 
-    worker.on('failed', (job, err) => {
-        logger.error(`Job ${job?.id} failed with error: ${err.message}`);
-    });
+    // Blockchain Tx Worker
+    new Worker('blockchain-tx-queue', async (job: Job) => {
+        logger.info(`Processing BLOCKCHAIN_TX job ${job.id}`);
+        await processBlockchainTx(job.data);
+    }, { connection: connection as any, concurrency: 5 });
 
-    logger.info('Background workers started...');
+    logger.info('Background workers started for all queues...');
 };
 
 const processEmail = async (data: any) => {
