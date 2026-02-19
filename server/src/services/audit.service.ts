@@ -1,36 +1,36 @@
 import prisma from '../utils/prisma';
+import logger from '../utils/logger';
 
-interface AuditLogParams {
-    actorId: string;
-    action: string;
-    resource: string;
-    resourceId?: string;
-    metadata?: any;
-    ipAddress?: string;
-    userAgent?: string;
-}
-
+/**
+ * Skeletal Blueprint for Audit Logging.
+ */
 class AuditService {
-    async log(params: AuditLogParams) {
-        // Port logic from audit_service.rs
+    /**
+     * Durably records a system action.
+     */
+    async log(data: any) {
+        logger.info(`Skeletal Audit: Logging action ${data.action} by ${data.actorId}`);
+
         return prisma.auditLog.create({
             data: {
-                actorId: params.actorId,
-                action: params.action,
-                resource: params.resource,
-                resourceId: params.resourceId,
-                metadata: params.metadata,
-                ipAddress: params.ipAddress,
-                userAgent: params.userAgent,
+                actorId: data.actorId,
+                action: data.action,
+                resource: data.resource,
+                metadata: data.metadata || {},
+                ipAddress: data.ipAddress,
+                userAgent: data.userAgent,
             },
         });
     }
 
+    /**
+     * Retrieves logs for admin oversight.
+     */
     async getLogs(actorId?: string, limit: number = 50) {
         return prisma.auditLog.findMany({
             where: actorId ? { actorId } : {},
-            orderBy: { timestamp: 'desc' },
             take: limit,
+            orderBy: { timestamp: 'desc' },
         });
     }
 }

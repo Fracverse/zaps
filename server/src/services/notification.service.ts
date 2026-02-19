@@ -1,32 +1,30 @@
 import prisma from '../utils/prisma';
-import { NotificationType } from '@prisma/client';
 import queueService, { JobType } from './queue.service';
 
+/**
+ * Skeletal Blueprint for the Notification Center.
+ */
 class NotificationService {
-    async createNotification(userId: string, title: string, message: string, type: NotificationType = NotificationType.SYSTEM) {
-        // Create in-app notification
+    /**
+     * Orchestrates in-app creation and background delivery (Email/Push).
+     */
+    async createNotification(userId: string, title: string, message: string) {
         const notification = await prisma.notification.create({
-            data: {
-                userId,
-                title,
-                message,
-                type,
-            },
+            data: { userId, title, message },
         });
 
-        // Enqueue push/email notification job
+        // Blueprint: Delegate delivery to a background worker.
         await queueService.addJob({
             type: JobType.NOTIFICATION,
-            data: {
-                userId,
-                title,
-                message,
-            },
+            data: { userId, title, message },
         });
 
         return notification;
     }
 
+    /**
+     * Lists unread notifications for a user.
+     */
     async getNotifications(userId: string) {
         return prisma.notification.findMany({
             where: { userId },

@@ -1,12 +1,18 @@
 import prisma from '../utils/prisma';
 import logger from '../utils/logger';
-import { ApiError } from '../middleware/error.middleware';
 
+/**
+ * Skeletal Blueprint for Anchor Integration (SEP-24/31).
+ */
 class AnchorService {
+    /**
+     * Initiates a withdrawal flow via a Stellar Anchor.
+     * Blueprint: Integrate with the Anchor's /transactions/withdraw/interactive endpoint.
+     */
     async createWithdrawal(userId: string, destinationAddress: string, amount: string, asset: string) {
-        logger.info(`Creating withdrawal for user ${userId}: ${amount} ${asset}`);
+        logger.info(`Skeletal Anchor: Initiating withdrawal for ${userId}`);
 
-        const withdrawal = await prisma.withdrawal.create({
+        return prisma.withdrawal.create({
             data: {
                 userId,
                 destinationAddress,
@@ -15,22 +21,21 @@ class AnchorService {
                 status: 'PENDING'
             }
         });
-
-        // In a real SEP-24/31 flow, this would trigger an external anchor API call
-        // For now, we simulate the submission
-        return withdrawal;
     }
 
-    async processSep24Deposit(data: any) {
-        // Implementation for SEP-24 interactive flows
-        logger.info('Processing SEP-24 deposit', { data });
-        return { status: 'mock_success', transaction_id: Math.random().toString(36).substring(7) };
+    /**
+     * Retrieves the status of a withdrawal.
+     */
+    async getWithdrawalStatus(id: string) {
+        return prisma.withdrawal.findUnique({ where: { id } });
     }
 
-    async getWithdrawalStatus(withdrawalId: string) {
-        return prisma.withdrawal.findUnique({
-            where: { id: withdrawalId }
-        });
+    /**
+     * Helper for SEP-24 interactive URL generation.
+     */
+    async getInteractiveUrl(userId: string, asset: string) {
+        // Implementation: Build signed JWT -> Request URL from Anchor -> Return to frontend.
+        return { url: 'https://anchor.com/sep24/interactive?token=...' };
     }
 }
 

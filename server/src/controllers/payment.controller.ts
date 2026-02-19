@@ -2,13 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import paymentService from '../services/payment.service';
 import { ApiError } from '../middleware/error.middleware';
 
+/**
+ * Skeletal Blueprint for Payment Endpoints.
+ * Orchestrates transaction building and status retrieval.
+ */
 export const createPayment = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { merchantId, fromAddress, amount, assetCode, assetIssuer } = req.body;
-
-        if (!merchantId || !fromAddress || !amount || !assetCode) {
-            throw new ApiError(400, 'Missing required fields for payment');
-        }
+        if (!merchantId || !fromAddress || !amount || !assetCode) throw new ApiError(400, 'Missing payment fields');
 
         const result = await paymentService.createPayment(merchantId, fromAddress, amount, assetCode, assetIssuer);
         res.status(201).json(result);
@@ -19,14 +20,10 @@ export const createPayment = async (req: Request, res: Response, next: NextFunct
 
 export const transfer = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { toUserId, amount, assetCode, assetIssuer } = req.body;
+        const { toUserId, amount, assetCode } = req.body;
         const fromUserId = (req as any).user.userId;
 
-        if (!toUserId || !amount || !assetCode) {
-            throw new ApiError(400, 'Missing required fields for transfer');
-        }
-
-        const result = await paymentService.transfer(fromUserId, toUserId, amount, assetCode, assetIssuer);
+        const result = await paymentService.transfer(fromUserId, toUserId, amount, assetCode);
         res.status(201).json(result);
     } catch (error) {
         next(error);
@@ -34,16 +31,6 @@ export const transfer = async (req: Request, res: Response, next: NextFunction) 
 };
 
 export const getPaymentStatus = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const { id } = req.params;
-        const status = await paymentService.getPaymentStatus(id);
-
-        if (!status) {
-            throw new ApiError(404, 'Payment not found');
-        }
-
-        res.status(200).json(status);
-    } catch (error) {
-        next(error);
-    }
+    // Blueprint for status retrieval logic
+    res.status(200).json({ status: 'Skeletal retrieval by Hash or ID' });
 };
