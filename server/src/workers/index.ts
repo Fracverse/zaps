@@ -1,7 +1,9 @@
 import { Worker, Job } from 'bullmq';
 import { connection } from '../utils/redis';
-import { JobType } from '../services/queue.service';
+import queueService, { JobType } from '../services/queue.service';
 import logger from '../utils/logger';
+import prisma from '../utils/prisma';
+import { PaymentStatus } from '@prisma/client';
 
 export const startWorkers = () => {
     // Email Worker
@@ -47,6 +49,52 @@ const processBlockchainTx = async (data: any) => {
 };
 
 const processSync = async (data: any) => {
-    // Logic for analytical syncs or database maintenance
-    logger.info('Performing sync operation:', { syncType: data.syncType });
+    logger.info('Processing SYNC job', { data });
+
+    if (data.syncType === 'ON_CHAIN_COMPLETION' && (data.eventType === 'PAY_DONE' || data.eventType === 'TRANSFER_DONE')) {
+        const { paymentId } = data;
+
+        if (!paymentId) return;
+
+        const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+
+        if (!payment) {
+            logger.warn(`Payment not found for sync: ${paymentId}`);
+            return;
+        }
+
+        if (payment.status === PaymentStatus.COMPLETED) {
+            logger.info(`Payment ${paymentId} already completed. Skipping.`);
+            return;
+        }
+
+        await prisma.payment.update({
+            where: { id: paymentId },
+            data: { status: PaymentStatus.COMPLETED },
+        });
+        logger.info(`Payment ${paymentId} marked as COMPLETED.`);
+
+        // Dispatch downstream jobs
+        await queueService.addJob({
+            type: JobType.EMAIL,
+            data: {
+                to: 'user@example.com', // Placeholder
+                subject: 'Payment Completed',
+                paymentId,
+                amount: payment.sendAmount.toString()
+            }
+        });
+
+        if (payment.userAddress) {
+            await queueService.addJob({
+                type: JobType.NOTIFICATION,
+                data: {
+                    userId: payment.userAddress,
+                    title: 'Payment Completed',
+                    paymentId
+                }
+            });
+        }
+    }
 };
+
