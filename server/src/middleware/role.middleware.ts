@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { Role } from '@prisma/client';
+
+type Role = 'USER' | 'MERCHANT' | 'ADMIN';
 
 export const requireRole = (roles: Role[]) => {
     return (req: any, res: Response, next: NextFunction) => {
@@ -13,6 +14,6 @@ export const requireRole = (roles: Role[]) => {
     };
 };
 
-export const adminOnly = requireRole([Role.ADMIN]);
-export const merchantOnly = requireRole([Role.MERCHANT, Role.ADMIN]);
-export const userOnly = requireRole([Role.USER, Role.ADMIN]);
+export const adminOnly = requireRole(['ADMIN']);
+export const merchantOnly = requireRole(['MERCHANT', 'ADMIN']);
+export const userOnly = requireRole(['USER', 'ADMIN']);

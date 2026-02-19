@@ -189,3 +189,15 @@ model BridgeTransaction {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
 }
+
+model ExternalAddress {
+  id        String   @id @default(uuid())
+  chain     String
+  address   String
+  userId    String
+  user      User     @relation(fields: [userId], references: [userId])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chain, address])
+}

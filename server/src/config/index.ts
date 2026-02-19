@@ -2,6 +2,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const bridgeSupportedChainsEnv = process.env.BRIDGE_SUPPORTED_CHAINS || 'ethereum,polygon,bsc';
+const bridgeSupportedAssetsEnv = process.env.BRIDGE_SUPPORTED_ASSETS || 'USDC,USDT';
+
 export default {
     port: process.env.PORT || 3000,
     stellar: {
@@ -18,4 +21,8 @@ export default {
         password: process.env.REDIS_PASSWORD,
     },
     jwtSecret: process.env.JWT_SECRET || 'super-secret-key',
+    bridge: {
+        supportedChains: bridgeSupportedChainsEnv.split(',').map(chain => chain.trim().toLowerCase()).filter(Boolean),
+        supportedAssets: bridgeSupportedAssetsEnv.split(',').map(asset => asset.trim()).filter(Boolean),
+    },
 };

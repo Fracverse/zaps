@@ -1,17 +1,10 @@
 import prisma from '../utils/prisma';
 import bcrypt from 'bcryptjs';
-import { Role } from '@prisma/client';
 
-/**
- * Skeletal Blueprint for Identity Management.
- * Maps application User IDs to Stellar Addresses.
- */
+type Role = 'USER' | 'MERCHANT' | 'ADMIN';
+
 class IdentityService {
-    /**
-     * Creates a new user with a hashed PIN.
-     * Logic: bcrypt(pin) -> store with stellarAddress -> create default profile.
-     */
-    async createUser(userId: string, stellarAddress: string, pin: string, role: Role = Role.USER) {
+    async createUser(userId: string, stellarAddress: string, pin: string, role: Role = 'USER') {
         const pinHash = await bcrypt.hash(pin, 10);
 
         return prisma.user.create({
@@ -25,15 +18,53 @@ class IdentityService {
         });
     }
 
-    /**
-     * Resolves an internal UserId to their public Stellar address.
-     */
     async resolveUserId(userId: string) {
         const user = await prisma.user.findUnique({
             where: { userId },
             select: { stellarAddress: true },
         });
         return user?.stellarAddress;
+    }
+
+    async mapExternalAddressToUser(userId: string, chain: string, address: string) {
+        const normalizedChain = chain.toLowerCase();
+        const normalizedAddress = address.toLowerCase();
+
+        return prisma.externalAddress.upsert({
+            where: {
+                chain_address: {
+                    chain: normalizedChain,
+                    address: normalizedAddress,
+                },
+            },
+            update: {
+                userId,
+            },
+            create: {
+                chain: normalizedChain,
+                address: normalizedAddress,
+                userId,
+            },
+        });
+    }
+
+    async resolveUserIdFromExternalAddress(chain: string, address: string) {
+        const normalizedChain = chain.toLowerCase();
+        const normalizedAddress = address.toLowerCase();
+
+        const mapping = await prisma.externalAddress.findUnique({
+            where: {
+                chain_address: {
+                    chain: normalizedChain,
+                    address: normalizedAddress,
+                },
+            },
+            select: {
+                userId: true,
+            },
+        });
+
+        return mapping?.userId || null;
     }
 }
 
