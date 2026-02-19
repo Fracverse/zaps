@@ -14,25 +14,47 @@ export interface JobPayload {
 }
 
 class QueueService {
-    private queues: Map<string, Queue> = new Map();
+    private emailQueue: Queue;
+    private pushQueue: Queue;
+    private syncQueue: Queue;
+    private blockchainTxQueue: Queue;
 
     constructor() {
-        this.createQueue('default');
+        this.emailQueue = new Queue('email-queue', { connection: connection as any });
+        this.pushQueue = new Queue('push-queue', { connection: connection as any });
+        this.syncQueue = new Queue('sync-queue', { connection: connection as any });
+        this.blockchainTxQueue = new Queue('blockchain-tx-queue', { connection: connection as any });
     }
 
-    private createQueue(name: string) {
-        const queue = new Queue(name, { connection: connection as any });
-        this.queues.set(name, queue);
-        return queue;
+    public getEmailQueue(): Queue {
+        return this.emailQueue;
     }
 
-    public getQueue(name: string = 'default'): Queue {
-        return this.queues.get(name) || this.createQueue(name);
+    public getPushQueue(): Queue {
+        return this.pushQueue;
+    }
+
+    public getSyncQueue(): Queue {
+        return this.syncQueue;
+    }
+
+    public getBlockchainTxQueue(): Queue {
+        return this.blockchainTxQueue;
     }
 
     public async addJob(payload: JobPayload, options?: JobsOptions) {
-        const queue = this.getQueue();
-        return queue.add(payload.type, payload.data, options);
+        switch (payload.type) {
+            case JobType.EMAIL:
+                return this.emailQueue.add(JobType.EMAIL, payload.data, options);
+            case JobType.NOTIFICATION:
+                return this.pushQueue.add(JobType.NOTIFICATION, payload.data, options);
+            case JobType.SYNC:
+                return this.syncQueue.add(JobType.SYNC, payload.data, options);
+            case JobType.BLOCKCHAIN_TX:
+                return this.blockchainTxQueue.add(JobType.BLOCKCHAIN_TX, payload.data, options);
+            default:
+                throw new Error(`Unknown job type: ${payload.type}`);
+        }
     }
 }
 
