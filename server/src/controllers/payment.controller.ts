@@ -11,7 +11,10 @@ export const createPayment = async (req: Request, res: Response, next: NextFunct
         const { merchantId, fromAddress, amount, assetCode, assetIssuer } = req.body;
         if (!merchantId || !fromAddress || !amount || !assetCode) throw new ApiError(400, 'Missing payment fields');
 
-        const result = await paymentService.createPayment(merchantId, fromAddress, amount, assetCode, assetIssuer);
+        const userId = (req as any).user?.userId;
+        if (!userId) throw new ApiError(401, 'Unauthorized');
+
+        const result = await paymentService.createPayment(userId, merchantId, fromAddress, amount, assetCode, assetIssuer);
         res.status(201).json(result);
     } catch (error) {
         next(error);
