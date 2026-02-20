@@ -55,6 +55,9 @@ pub struct StellarNetwork {
     pub horizon_url: String,
     pub rpc_url: String,
     pub network_id: String,
+    // Optional server-side secret used to sign as fee-payer (fee sponsorship / account abstraction)
+    #[serde(default)]
+    pub fee_payer_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +175,7 @@ impl Default for Config {
                 horizon_url: "https://horizon-testnet.stellar.org".to_string(),
                 rpc_url: "https://soroban-testnet.stellar.org".to_string(),
                 network_id: "Test SDF Network ; September 2015".to_string(),
+                fee_payer_secret: None,
             },
             anchor_config: AnchorConfig {
                 sep24_url: "https://anchor.example.com/sep24".to_string(),
