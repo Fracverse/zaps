@@ -51,3 +51,12 @@ window_ms = 60000 # 1 minute
 max_requests = 100
 scope = "IP"
 
+[queue]
+redis_url = "redis://localhost:6379"
+max_retries = 3
+visibility_timeout_seconds = 300
+backoff_multiplier = 2.0
+max_backoff_seconds = 3600
+dead_letter_max_size = 10000
+worker_count = 4
+reclaim_interval_seconds = 60
