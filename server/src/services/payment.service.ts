@@ -15,7 +15,12 @@ class PaymentService {
      * Builds an unsigned XDR for a merchant payment.
      * Flow: Validate Merchant -> Check Compliance -> Build Stellar Payment OP -> Sponsor Fees.
      */
-    async createPayment(merchantId: string, fromAddress: string, amount: string, assetCode: string, assetIssuer?: string) {
+    async createPayment(userId: string, merchantId: string, fromAddress: string, amount: string, assetCode: string, assetIssuer?: string) {
+        if (await complianceService.checkSanctions(userId)) {
+            throw new ApiError(403, 'User is sanctioned', 'COMPLIANCE_SANCTIONS');
+        }
+        await complianceService.checkVelocity(userId, amount);
+
         const merchant = await prisma.merchant.findUnique({ where: { merchantId } });
         if (!merchant) throw new ApiError(404, 'Merchant not found');
 
@@ -41,6 +46,14 @@ class PaymentService {
      * Skeletal blueprint for User-to-User transfers.
      */
     async transfer(fromUserId: string, toUserId: string, amount: string, assetCode: string, assetIssuer?: string) {
+        if (await complianceService.checkSanctions(fromUserId)) {
+            throw new ApiError(403, 'User is sanctioned', 'COMPLIANCE_SANCTIONS');
+        }
+        if (await complianceService.checkSanctions(toUserId)) {
+            throw new ApiError(403, 'Recipient is sanctioned', 'COMPLIANCE_SANCTIONS');
+        }
+        await complianceService.checkVelocity(fromUserId, amount);
+
         // Implementation: Resolve addresses -> Build Payment XDR -> Return for signing.
         return { xdr: '...', status: 'PENDING' };
     }
