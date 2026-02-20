@@ -121,15 +121,12 @@ pub async fn refresh_token(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<RefreshTokenRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    // Validate the token is specifically a refresh token
     let claims = auth::validate_refresh_token(&request.token, &services.config.jwt.secret)?;
 
-    // Verify user still exists
     if !services.identity.user_exists(&claims.sub).await? {
         return Err(ApiError::Authentication("User not found".to_string()));
     }
 
-    // Generate new token pair
     let token = auth::generate_access_token(
         &claims.sub,
         claims.role,
@@ -149,6 +146,45 @@ pub async fn refresh_token(
         refresh_token,
         user_id: claims.sub,
         role: claims.role.to_string(),
+        expires_in: services.config.jwt.expiration_hours * 3600,
+        refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
+    }))
+}
+
+pub async fn user_register(
+    State(services): State<Arc<ServiceContainer>>,
+    Json(request): Json<RegisterRequest>,
+) -> Result<Json<AuthResponse>, ApiError> {
+    if services.identity.user_exists(&request.user_id).await? {
+        return Err(ApiError::Conflict("User already exists".to_string()));
+    }
+
+    let pin_hash = auth::hash_pin(&request.pin)?;
+
+    let user = services
+        .identity
+        .create_user(request.user_id.clone(), pin_hash)
+        .await?;
+
+    let token = auth::generate_access_token(
+        &user.user_id,
+        user.role,
+        &services.config.jwt.secret,
+        services.config.jwt.expiration_hours,
+    )?;
+
+    let refresh_token = auth::generate_refresh_token(
+        &user.user_id,
+        user.role,
+        &services.config.jwt.secret,
+        services.config.jwt.refresh_expiration_hours,
+    )?;
+
+    Ok(Json(AuthResponse {
+        token,
+        refresh_token,
+        user_id: user.user_id,
+        role: user.role.to_string(),
         expires_in: services.config.jwt.expiration_hours * 3600,
         refresh_expires_in: services.config.jwt.refresh_expiration_hours * 3600,
     }))
