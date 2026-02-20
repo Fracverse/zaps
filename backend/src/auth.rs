@@ -103,9 +103,11 @@ pub fn validate_refresh_token(
     Ok(claims)
 }
 
-/// Hash a PIN using bcrypt with default cost (12)
+const BCRYPT_COST: u32 = 10;
+
+/// Hash a PIN using bcrypt with 10 salt rounds
 pub fn hash_pin(pin: &str) -> Result<String, ApiError> {
-    hash(pin, DEFAULT_COST).map_err(|_| ApiError::InternalServerError)
+    hash(pin, BCRYPT_COST).map_err(|_| ApiError::InternalServerError)
 }
 
 /// Verify a PIN against a bcrypt hash

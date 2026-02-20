@@ -5,7 +5,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::{api_error::ApiError, middleware::AuthenticatedUser, service::ServiceContainer};
+use crate::{api_error::ApiError, auth, middleware::AuthenticatedUser, service::ServiceContainer};
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
@@ -31,9 +31,10 @@ pub async fn create_user(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
+    let pin_hash = auth::hash_pin(&request.pin)?;
     let user = services
         .identity
-        .create_user(request.user_id, request.pin)
+        .create_user(request.user_id, pin_hash)
         .await?;
 
     Ok(Json(UserResponse {
