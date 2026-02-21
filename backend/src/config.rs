@@ -164,7 +164,7 @@ impl Default for Config {
             server: ServerConfig { port: 3000 },
             jwt: JwtConfig {
                 secret: "change-this-in-production".to_string(),
-                expiration_hours: 24,
+                expiration_hours: 1,
                 refresh_expiration_hours: 168, // 7 days
             },
             stellar_network: StellarNetwork {

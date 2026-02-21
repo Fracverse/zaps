@@ -1,6 +1,6 @@
 use crate::api_error::ApiError;
 use crate::role::Role;
-use bcrypt::{hash, verify, DEFAULT_COST};
+use bcrypt::{hash, verify};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
@@ -103,12 +103,24 @@ pub fn validate_refresh_token(
     Ok(claims)
 }
 
-/// Hash a PIN using bcrypt with default cost (12)
-pub fn hash_pin(pin: &str) -> Result<String, ApiError> {
-    hash(pin, DEFAULT_COST).map_err(|_| ApiError::InternalServerError)
+/// Bcrypt cost factor for PIN hashing (10 rounds).
+const PIN_BCRYPT_COST: u32 = 10;
+
+/// Validate that a PIN is 4–6 digits.
+pub fn validate_pin(pin: &str) -> Result<(), ApiError> {
+    if pin.len() < 4 || pin.len() > 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
+        return Err(ApiError::Validation("PIN must be 4–6 digits".to_string()));
+    }
+    Ok(())
 }
 
-/// Verify a PIN against a bcrypt hash
+/// Hash a PIN using bcrypt with 10 rounds.
+pub fn hash_pin(pin: &str) -> Result<String, ApiError> {
+    validate_pin(pin)?;
+    hash(pin, PIN_BCRYPT_COST).map_err(|_| ApiError::InternalServerError)
+}
+
+/// Verify a PIN against a bcrypt hash.
 pub fn verify_pin(pin: &str, hash: &str) -> Result<bool, ApiError> {
     verify(pin, hash).map_err(|_| ApiError::InternalServerError)
 }
