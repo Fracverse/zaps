@@ -1,5 +1,12 @@
 import { Queue, JobsOptions } from 'bullmq';
 import { connection } from '../utils/redis';
+import { workerConfig } from '../config/worker.config';
+import type {
+    EmailJobPayload,
+    NotificationJobPayload,
+    SyncJobPayload,
+    BlockchainTxJobPayload,
+} from '../types/job-payloads';
 
 export enum JobType {
     EMAIL = 'EMAIL',
@@ -8,31 +15,74 @@ export enum JobType {
     BLOCKCHAIN_TX = 'BLOCKCHAIN_TX',
 }
 
-export interface JobPayload {
-    type: JobType;
-    data: any;
-}
+export type JobPayload =
+    | { type: JobType.EMAIL; data: EmailJobPayload }
+    | { type: JobType.NOTIFICATION; data: NotificationJobPayload }
+    | { type: JobType.SYNC; data: SyncJobPayload }
+    | { type: JobType.BLOCKCHAIN_TX; data: BlockchainTxJobPayload };
+
+const DEFAULT_OPTIONS: JobsOptions = {
+    attempts: workerConfig.maxRetries,
+    backoff: {
+        type: workerConfig.backoff.type,
+        delay: workerConfig.backoff.delay,
+    },
+    removeOnComplete: { count: 1000 },
+    removeOnFail: false,
+};
 
 class QueueService {
-    private queues: Map<string, Queue> = new Map();
+    private queue: Queue;
 
     constructor() {
-        this.createQueue('default');
+        this.queue = new Queue(workerConfig.defaultQueue, {
+            connection: connection as any,
+            defaultJobOptions: DEFAULT_OPTIONS,
+        });
     }
 
-    private createQueue(name: string) {
-        const queue = new Queue(name, { connection: connection as any });
-        this.queues.set(name, queue);
-        return queue;
+    public getQueue(): Queue {
+        return this.queue;
     }
 
-    public getQueue(name: string = 'default'): Queue {
-        return this.queues.get(name) || this.createQueue(name);
+    public async addEmailJob(data: EmailJobPayload, options?: JobsOptions) {
+        return this.queue.add(JobType.EMAIL, data, {
+            ...DEFAULT_OPTIONS,
+            ...options,
+            jobId: options?.jobId,
+        });
     }
 
+    public async addNotificationJob(data: NotificationJobPayload, options?: JobsOptions) {
+        return this.queue.add(JobType.NOTIFICATION, data, {
+            ...DEFAULT_OPTIONS,
+            ...options,
+            jobId: options?.jobId,
+        });
+    }
+
+    public async addSyncJob(data: SyncJobPayload, options?: JobsOptions) {
+        return this.queue.add(JobType.SYNC, data, {
+            ...DEFAULT_OPTIONS,
+            ...options,
+            jobId: options?.jobId,
+        });
+    }
+
+    public async addBlockchainTxJob(data: BlockchainTxJobPayload, options?: JobsOptions) {
+        return this.queue.add(JobType.BLOCKCHAIN_TX, data, {
+            ...DEFAULT_OPTIONS,
+            ...options,
+            jobId: options?.jobId,
+        });
+    }
+
+    /** Generic add for backwards compatibility - validates payload structure */
     public async addJob(payload: JobPayload, options?: JobsOptions) {
-        const queue = this.getQueue();
-        return queue.add(payload.type, payload.data, options);
+        return this.queue.add(payload.type, payload.data, {
+            ...DEFAULT_OPTIONS,
+            ...options,
+        });
     }
 }
 

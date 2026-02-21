@@ -38,13 +38,18 @@ class SorobanService {
         return tx.toXDR();
     }
 
-    async getEvents(startLedger: number) {
-        // Logic to poll for events
+    async getEvents(
+        startLedger: number,
+        filters?: { type: 'contract' | 'system' | 'diagnostic'; contractIds?: string[]; topics?: string[][] }[]
+    ) {
+        const defaultFilters = filters ?? [{ type: 'contract' as const }];
         return this.server.getEvents({
             startLedger,
-            filters: [
-                // Filter by contract ID
-            ]
+            filters: defaultFilters.map((f) => ({
+                type: f.type,
+                contractIds: f.contractIds,
+                topics: f.topics,
+            })),
         });
     }
 }

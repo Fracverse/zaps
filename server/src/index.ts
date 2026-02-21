@@ -1,30 +1,27 @@
 import app from './app';
 import config from './config';
-import { startWorkers } from './workers';
+import { startWorkers, stopWorkers } from './workers';
 import eventBridgeService from './services/event-bridge.service';
 import logger from './utils/logger';
 
 const PORT = config.port || 3001;
 
-// Start background workers
 startWorkers();
-
-// Start Event Bridge
 eventBridgeService.start();
 
 const server = app.listen(PORT, () => {
     logger.info(`Server is running on port ${PORT}`);
 });
 
-// Graceful shutdown
 const shutdown = async () => {
     logger.info('Shutting down server...');
     eventBridgeService.stop();
+    await stopWorkers();
     server.close(() => {
         logger.info('HTTP server closed.');
         process.exit(0);
     });
 };
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());

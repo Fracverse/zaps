@@ -2,6 +2,15 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+export const eventBridgeConfig = {
+    pollIntervalMs: parseInt(process.env.EVENT_BRIDGE_POLL_MS || '5000', 10),
+    errorBackoffMs: parseInt(process.env.EVENT_BRIDGE_ERROR_BACKOFF_MS || '10000', 10),
+    contractIds: (process.env.SOROBAN_CONTRACT_IDS || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+};
+
 export default {
     port: process.env.PORT || 3000,
     stellar: {
