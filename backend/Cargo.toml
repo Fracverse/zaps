@@ -74,6 +74,7 @@ bb8-redis = "0.13"
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
+hex = "0.4.3"
 
 # Testing
 [dev-dependencies]

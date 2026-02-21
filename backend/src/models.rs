@@ -13,6 +13,7 @@ pub struct User {
     pub role: Role,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub(crate) address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
