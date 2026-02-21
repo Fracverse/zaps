@@ -109,9 +109,7 @@ const PIN_BCRYPT_COST: u32 = 10;
 /// Validate that a PIN is 4–6 digits.
 pub fn validate_pin(pin: &str) -> Result<(), ApiError> {
     if pin.len() < 4 || pin.len() > 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
-        return Err(ApiError::Validation(
-            "PIN must be 4–6 digits".to_string(),
-        ));
+        return Err(ApiError::Validation("PIN must be 4–6 digits".to_string()));
     }
     Ok(())
 }
