@@ -39,7 +39,7 @@ export default function LanguageScreen() {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.languageList}>
-          {languages.map((lang, index) => {
+          {languages.map((lang, _index) => {
             const isSelected = selectedLanguage === lang.id;
             return (
               <TouchableOpacity
