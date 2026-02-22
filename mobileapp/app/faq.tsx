@@ -14,11 +14,20 @@ import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../src/constants/colors";
 import { useRouter } from "expo-router";
 
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-const FAQItem = ({ question, answer }: { question: string, answer: string }) => {
+const FAQItem = ({
+  question,
+  answer,
+}: {
+  question: string;
+  answer: string;
+}) => {
   const [expanded, setExpanded] = useState(false);
 
   const toggleExpand = () => {
@@ -55,23 +64,28 @@ export default function FAQScreen() {
   const faqs = [
     {
       question: "What is Zaps?",
-      answer: "Zaps is a high-speed payment and transfer platform that allows users and merchants to send, receive, and manage funds seamlessly with low fees.",
+      answer:
+        "Zaps is a high-speed payment and transfer platform that allows users and merchants to send, receive, and manage funds seamlessly with low fees.",
     },
     {
       question: "How do I withdraw funds to my bank?",
-      answer: "Go to the 'Withdraw' section in your dashboard, enter the amount you wish to withdraw, and confirm the transaction. Funds are typically processed within minutes.",
+      answer:
+        "Go to the 'Withdraw' section in your dashboard, enter the amount you wish to withdraw, and confirm the transaction. Funds are typically processed within minutes.",
     },
     {
       question: "Is Zaps secure?",
-      answer: "Yes, Zaps uses bank-grade encryption and secure protocols to ensure your data and funds are always protected. We also support biometric authentication for added security.",
+      answer:
+        "Yes, Zaps uses bank-grade encryption and secure protocols to ensure your data and funds are always protected. We also support biometric authentication for added security.",
     },
     {
       question: "What are the transaction fees?",
-      answer: "Zaps offers competitive fees. Standard transfers typically have a small nominal fee, while basic account features are free. Check our 'Pricing' section for a detailed breakdown.",
+      answer:
+        "Zaps offers competitive fees. Standard transfers typically have a small nominal fee, while basic account features are free. Check our 'Pricing' section for a detailed breakdown.",
     },
     {
       question: "How can I contact support?",
-      answer: "You can reach our support team through the 'Contact Support' page, where you can send us a message or find our contact details.",
+      answer:
+        "You can reach our support team through the 'Contact Support' page, where you can send us a message or find our contact details.",
     },
   ];
 
@@ -93,7 +107,9 @@ export default function FAQScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Frequently Asked Questions</Text>
-        <Text style={styles.subtitle}>Find answers to the most common questions about Zaps.</Text>
+        <Text style={styles.subtitle}>
+          Find answers to the most common questions about Zaps.
+        </Text>
 
         <View style={styles.faqList}>
           {faqs.map((faq, index) => (

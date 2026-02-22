@@ -11,7 +11,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../src/constants/colors";
 import { useRouter } from "expo-router";
 
-const PolicySection = ({ title, content }: { title: string, content: string }) => {
+const PolicySection = ({
+  title,
+  content,
+}: {
+  title: string;
+  content: string;
+}) => {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -26,27 +32,33 @@ export default function PrivacyPolicyScreen() {
   const sections = [
     {
       title: "1. Information We Collect",
-      content: "We collect information you provide directly to us, such as when you create an account, complete a transaction, or contact support. This may include your name, email address, phone number, and financial information related to your transactions.",
+      content:
+        "We collect information you provide directly to us, such as when you create an account, complete a transaction, or contact support. This may include your name, email address, phone number, and financial information related to your transactions.",
     },
     {
       title: "2. How We Use Your Information",
-      content: "We use the information we collect to provide, maintain, and improve our services, to process your transactions, to communicate with you, and to protect Zaps and our users.",
+      content:
+        "We use the information we collect to provide, maintain, and improve our services, to process your transactions, to communicate with you, and to protect Zaps and our users.",
     },
     {
       title: "3. Information Sharing",
-      content: "We do not share your personal information with third parties except as described in this policy, such as to comply with legal obligations, protect our rights, or with your consent.",
+      content:
+        "We do not share your personal information with third parties except as described in this policy, such as to comply with legal obligations, protect our rights, or with your consent.",
     },
     {
       title: "4. Data Security",
-      content: "We take reasonable measures to help protect your information from loss, theft, misuse, and unauthorized access, disclosure, alteration, and destruction.",
+      content:
+        "We take reasonable measures to help protect your information from loss, theft, misuse, and unauthorized access, disclosure, alteration, and destruction.",
     },
     {
       title: "5. Your Choices",
-      content: "You can access and update your account information at any time. You may also contact us to request the deletion of your account and personal information.",
+      content:
+        "You can access and update your account information at any time. You may also contact us to request the deletion of your account and personal information.",
     },
     {
       title: "6. Changes to this Policy",
-      content: "We may update this Privacy Policy from time to time. If we make changes, we will notify you by revising the date at the top of the policy.",
+      content:
+        "We may update this Privacy Policy from time to time. If we make changes, we will notify you by revising the date at the top of the policy.",
     },
   ];
 
@@ -71,19 +83,25 @@ export default function PrivacyPolicyScreen() {
         <Text style={styles.lastUpdated}>Last Updated: February 23, 2026</Text>
 
         <Text style={styles.intro}>
-          At Zaps, we are committed to protecting your privacy and ensuring you have a positive experience when using our services.
+          At Zaps, we are committed to protecting your privacy and ensuring you
+          have a positive experience when using our services.
         </Text>
 
         <View style={styles.sectionsContainer}>
           {sections.map((section, index) => (
-            <PolicySection key={index} title={section.title} content={section.content} />
+            <PolicySection
+              key={index}
+              title={section.title}
+              content={section.content}
+            />
           ))}
         </View>
 
         <View style={styles.contactInfo}>
           <Text style={styles.contactTitle}>Questions?</Text>
           <Text style={styles.contactText}>
-            If you have any questions about this Privacy Policy, please contact us at privacy@zaps.com.
+            If you have any questions about this Privacy Policy, please contact
+            us at privacy@zaps.com.
           </Text>
         </View>
       </ScrollView>

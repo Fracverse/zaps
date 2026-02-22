@@ -103,7 +103,7 @@ export default function ContactSupportScreen() {
 
           <View style={styles.formContainer}>
             <Text style={styles.formTitle}>Send us a message</Text>
-            
+
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Subject</Text>
               <TextInput
@@ -221,7 +221,7 @@ const styles = StyleSheet.create({
   email: { backgroundColor: "#5856D6" },
   call: { backgroundColor: COLORS.primary },
   whatsapp: { backgroundColor: "#25D366" },
-  
+
   formContainer: {
     gap: 20,
   },

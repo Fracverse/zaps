@@ -31,9 +31,21 @@ export default function HelpSupportScreen() {
   const router = useRouter();
 
   const supportOptions = [
-    { id: "faq", icon: "help-circle-outline", label: "Frequently Asked Questions" },
-    { id: "contact", icon: "chatbubble-ellipses-outline", label: "Contact Support" },
-    { id: "privacy", icon: "shield-checkmark-outline", label: "Privacy Policy" },
+    {
+      id: "faq",
+      icon: "help-circle-outline",
+      label: "Frequently Asked Questions",
+    },
+    {
+      id: "contact",
+      icon: "chatbubble-ellipses-outline",
+      label: "Contact Support",
+    },
+    {
+      id: "privacy",
+      icon: "shield-checkmark-outline",
+      label: "Privacy Policy",
+    },
     { id: "terms", icon: "document-text-outline", label: "Terms of Service" },
     { id: "about", icon: "information-circle-outline", label: "About Zaps" },
   ];
@@ -61,7 +73,8 @@ export default function HelpSupportScreen() {
           </View>
           <Text style={styles.illustrationTitle}>How can we help you?</Text>
           <Text style={styles.illustrationDesc}>
-            Our team is here to help you with any issues or questions you might have.
+            Our team is here to help you with any issues or questions you might
+            have.
           </Text>
         </View>
 
