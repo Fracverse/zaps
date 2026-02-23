@@ -637,10 +637,7 @@ async fn test_delete_profile_success() {
     // Delete profile
     let response = app
         .clone()
-        .oneshot(json_delete_auth(
-            &format!("/profiles/{}", user_id),
-            &token,
-        ))
+        .oneshot(json_delete_auth(&format!("/profiles/{}", user_id), &token))
         .await
         .unwrap();
 

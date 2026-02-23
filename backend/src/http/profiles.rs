@@ -25,9 +25,7 @@ fn validate_profile_input(
     // Validate display_name if provided
     if let Some(name) = display_name {
         if name.trim().is_empty() {
-            return Err(ApiError::Validation(
-                "Display name cannot be empty".into(),
-            ));
+            return Err(ApiError::Validation("Display name cannot be empty".into()));
         }
         if name.len() > 100 {
             return Err(ApiError::Validation(
