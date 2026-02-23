@@ -1,6 +1,5 @@
 import sorobanService from './soroban.service';
 import prisma from '../utils/prisma';
-import { PaymentStatus } from '@prisma/client';
 import logger from '../utils/logger';
 
 class EventBridgeService {
@@ -60,7 +59,7 @@ class EventBridgeService {
 
                 await prisma.payment.update({
                     where: { id: paymentId },
-                    data: { status: PaymentStatus.COMPLETED },
+                    data: { status: 'COMPLETED' },
                 });
                 logger.info(`Payment ${paymentId} completed on-chain via Event Bridge`);
             }

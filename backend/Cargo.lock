@@ -479,6 +479,7 @@ dependencies = [
  "deadpool-postgres",
  "futures",
  "governor",
+ "http-body-util",
  "httpmock",
  "jsonwebtoken",
  "lazy_static",

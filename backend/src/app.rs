@@ -141,11 +141,11 @@ pub async fn create_app(
         .nest("/audit", audit_routes)
         .layer(middleware::from_fn_with_state(
             services.clone(),
-            auth_middleware::authenticate,
+            audit_logging,
         ))
         .layer(middleware::from_fn_with_state(
             services.clone(),
-            audit_logging,
+            auth_middleware::authenticate,
         ))
         .layer(middleware::from_fn_with_state(
             services.clone(),

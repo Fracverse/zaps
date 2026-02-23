@@ -109,7 +109,7 @@ export default function SettingsScreen() {
             icon="language-outline"
             label="Language"
             sublabel="English"
-            onPress={() => {}}
+            onPress={() => router.push("/language")}
           />
           <SettingsItem
             icon="business-outline"
