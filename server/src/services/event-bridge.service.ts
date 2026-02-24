@@ -1,9 +1,5 @@
 import sorobanService from './soroban.service';
 import prisma from '../utils/prisma';
-import queueService from './queue.service';
-import { PaymentStatus } from '@prisma/client';
-import { eventBridgeConfig } from '../config';
-import { extractTopicStrings } from '../utils/soroban-events';
 import logger from '../utils/logger';
 
 interface SorobanEvent {
@@ -120,76 +116,17 @@ class EventBridgeService {
         const value = event.value ?? {};
 
         try {
-            if (topic0 === 'payment' && topic1 === 'PaymentSettled') {
-                await this.handlePaymentSettled(event, value);
-                return;
-            }
-            if (topic0 === 'payment' && topic1 === 'PaymentFailed') {
-                await this.handlePaymentFailed(event, value);
-                return;
-            }
-            if (topic0 === 'payment' && topic1 === 'PaymentInitiated') {
-                await this.handlePaymentInitiated(event, value);
-                return;
-            }
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            logger.error('Error processing Soroban event', {
-                component: 'event-bridge',
-                error: msg,
-                eventId: event.id,
-                ledger: event.ledger,
-            });
-            throw err;
-        }
-    }
+            // Port logic from indexer_service.rs
+            // Example: Handle PAY_DONE event (this depends on the contract event schema)
+            if (event.type === 'contract' && event.topic?.[0] === 'PAY_DONE') {
+                const paymentId = event.value?.paymentId;
+                if (!paymentId) return;
 
-    private async handlePaymentSettled(event: SorobanEvent, value: Record<string, unknown>) {
-        const payer = value.payer as string | undefined;
-        const merchantIdBytes = value.merchant_id;
-        const sendAmount = value.send_amount;
-        const settledAmount = value.settled_amount;
-        const txHash = event.id ?? '';
-
-        const merchantId = this.decodeMerchantId(merchantIdBytes);
-        if (!merchantId) {
-            logger.warn('PaymentSettled: could not decode merchant_id', { value });
-            return;
-        }
-
-        const payment = await prisma.payment.findFirst({
-            where: {
-                merchantId,
-                fromAddress: payer ?? undefined,
-                status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
-            },
-            orderBy: { createdAt: 'desc' },
-        });
-
-        if (payment) {
-            await prisma.payment.update({
-                where: { id: payment.id },
-                data: {
-                    status: PaymentStatus.COMPLETED,
-                    txHash: txHash || payment.txHash,
-                    receiveAmount: settledAmount != null ? BigInt(String(settledAmount)) : payment.receiveAmount,
-                },
-            });
-            logger.info('Payment completed on-chain via EventBridge', {
-                component: 'event-bridge',
-                paymentId: payment.id,
-                txHash,
-            });
-            const user = payment.userAddress
-                ? await prisma.user.findFirst({ where: { stellarAddress: payment.userAddress } })
-                : null;
-            if (user) {
-                queueService.addNotificationJob({
-                    userId: user.userId,
-                    title: 'Payment completed',
-                    message: `Payment of ${sendAmount ?? '?'} has been completed.`,
-                    type: 'ACTION',
-                }).catch((e) => logger.warn('Failed to enqueue notification', { error: String(e) }));
+                await prisma.payment.update({
+                    where: { id: paymentId },
+                    data: { status: 'COMPLETED' },
+                });
+                logger.info(`Payment ${paymentId} completed on-chain via Event Bridge`);
             }
         } else {
             logger.warn('PaymentSettled: no matching pending payment', { merchantId, payer });
