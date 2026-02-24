@@ -3,15 +3,17 @@ import authService from '../services/auth.service';
 import identityService from '../services/identity.service';
 import { ApiError } from '../middleware/error.middleware';
 
-/**
- * Skeletal Blueprint for Authentication Endpoints.
- */
 export const register = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { userId, stellarAddress, pin } = req.body;
+        const { userId, stellarAddress, pin, externalChain, externalAddress } = req.body;
         if (!userId || !stellarAddress || !pin) throw new ApiError(400, 'Missing registration fields');
 
         const user = await identityService.createUser(userId, stellarAddress, pin);
+
+        if (externalChain && externalAddress) {
+            await identityService.mapExternalAddressToUser(user.userId, externalChain, externalAddress);
+        }
+
         res.status(201).json({ message: 'User registered', userId: user.userId });
     } catch (error) {
         next(error);
