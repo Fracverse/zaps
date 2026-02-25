@@ -1,65 +1,89 @@
-import { Worker, Job } from 'bullmq';
+import { Worker } from 'bullmq';
 import { connection } from '../utils/redis';
 import { JobType } from '../services/queue.service';
+import { workerConfig } from '../config/worker.config';
+import { getProcessor } from '../processors';
 import logger from '../utils/logger';
 
-export const startWorkers = () => {
-    const worker = new Worker('default', async (job: Job) => {
-        logger.info(`Processing job ${job.id} of type ${job.name}`);
+let worker: Worker | null = null;
 
-        try {
-            switch (job.name) {
-                case JobType.EMAIL:
-                    await processEmail(job.data);
-                    break;
-                case JobType.NOTIFICATION:
-                    await processNotification(job.data);
-                    break;
-                case JobType.BLOCKCHAIN_TX:
-                    await processBlockchainTx(job.data);
-                    break;
-                case JobType.SYNC:
-                    await processSync(job.data);
-                    break;
-                default:
-                    logger.warn(`Unknown job type: ${job.name}`);
+export function startWorkers(): Worker {
+    if (worker) {
+        logger.warn('Workers already started', { component: 'worker' });
+        return worker;
+    }
+
+    worker = new Worker(
+        workerConfig.defaultQueue,
+        async (job) => {
+            const { id, name, data, attemptsMade } = job;
+            const logCtx = { component: 'worker', jobId: id, jobType: name, attempt: attemptsMade + 1 };
+
+            logger.info('Processing job', logCtx);
+
+            const processor = getProcessor(name as JobType);
+            if (!processor) {
+                logger.warn('Unknown job type, skipping', { ...logCtx, jobType: name });
+                return;
             }
-        } catch (err: any) {
-            logger.error(`Error processing job ${job.id}: ${err.message}`, { stack: err.stack });
-            throw err; // Allow BullMQ to handle retries
+
+            try {
+                await processor(data);
+                logger.info('Job completed', logCtx);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.error('Job processing failed', { ...logCtx, error: msg });
+                throw err;
+            }
+        },
+        {
+            connection: connection as any,
+            concurrency: workerConfig.concurrency,
+            limiter: {
+                max: 50,
+                duration: 1000,
+            },
+            lockDuration: workerConfig.lockDuration,
+            stalledInterval: workerConfig.stalledInterval,
         }
-    }, {
-        connection: connection as any,
-        concurrency: 5
-    });
+    );
 
     worker.on('completed', (job) => {
-        logger.info(`Job ${job.id} completed successfully`);
+        logger.debug('Job completed', { component: 'worker', jobId: job.id, jobType: job.name });
     });
 
     worker.on('failed', (job, err) => {
-        logger.error(`Job ${job?.id} failed with error: ${err.message}`);
+        logger.error('Job failed', {
+            component: 'worker',
+            jobId: job?.id,
+            jobType: job?.name,
+            error: err?.message ?? String(err),
+            attemptsMade: job?.attemptsMade,
+        });
     });
 
-    logger.info('Background workers started...');
-};
+    worker.on('error', (err) => {
+        logger.error('Worker error', { component: 'worker', error: err.message });
+    });
 
-const processEmail = async (data: any) => {
-    // Integration with SendGrid/AWS SES would go here
-    logger.info('Sending email to:', { to: data.to, subject: data.subject });
-};
+    logger.info('Background workers started', {
+        component: 'worker',
+        concurrency: workerConfig.concurrency,
+        queue: workerConfig.defaultQueue,
+    });
 
-const processNotification = async (data: any) => {
-    // Integration with FCM/OneSignal would go here
-    logger.info('Sending push notification to user:', { userId: data.userId, title: data.title });
-};
+    return worker;
+}
 
-const processBlockchainTx = async (data: any) => {
-    // Logic to submit XDR to Stellar network and monitor status
-    logger.info('Submitting blockchain transaction...');
-};
+export async function stopWorkers(): Promise<void> {
+    if (worker) {
+        logger.info('Stopping workers gracefully', { component: 'worker' });
+        await worker.close();
+        worker = null;
+        logger.info('Workers stopped', { component: 'worker' });
+    }
+}
 
-const processSync = async (data: any) => {
-    // Logic for analytical syncs or database maintenance
-    logger.info('Performing sync operation:', { syncType: data.syncType });
-};
+export function getWorker(): Worker | null {
+    return worker;
+}

@@ -1,6 +1,6 @@
 import app from './app';
 import config from './config';
-import { startWorkers } from './workers';
+import { startWorkers, stopWorkers } from './workers';
 import eventBridgeService from './services/event-bridge.service';
 import evmBridgeMonitorService from './services/evm-bridge-monitor.service';
 import logger from './utils/logger';
@@ -25,5 +25,5 @@ const shutdown = async () => {
     });
 };
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());
