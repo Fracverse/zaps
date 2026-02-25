@@ -33,42 +33,42 @@ export default function TermsOfServiceScreen() {
     {
       title: "1. Acceptance of Terms",
       content:
-        "By accessing or using Zaps, you agree to be bound by these Terms of Service and all applicable laws and regulations. If you do not agree with any of these terms, you are prohibited from using or accessing this service.",
+        "By accessing or using Blinks, you agree to be bound by these Terms of Service and all applicable laws and regulations. If you do not agree with any of these terms, you are prohibited from using or accessing this service.",
     },
     {
       title: "2. Use License",
       content:
-        "Permission is granted to temporarily download one copy of the materials (information or software) on Zaps' website for personal, non-commercial transitory viewing only.",
+        "Permission is granted to temporarily download one copy of the materials (information or software) on Blinks' website for personal, non-commercial transitory viewing only.",
     },
     {
       title: "3. Disclaimer",
       content:
-        "The materials on Zaps are provided on an 'as is' basis. Zaps makes no warranties, expressed or implied, and hereby disclaims and negates all other warranties including, without limitation, implied warranties or conditions of merchantability, fitness for a particular purpose, or non-infringement of intellectual property or other violation of rights.",
+        "The materials on Blinks are provided on an 'as is' basis. Blinks makes no warranties, expressed or implied, and hereby disclaims and negates all other warranties including, without limitation, implied warranties or conditions of merchantability, fitness for a particular purpose, or non-infringement of intellectual property or other violation of rights.",
     },
     {
       title: "4. Limitations",
       content:
-        "In no event shall Zaps or its suppliers be liable for any damages (including, without limitation, damages for loss of data or profit, or due to business interruption) arising out of the use or inability to use the materials on Zaps.",
+        "In no event shall Blinks or its suppliers be liable for any damages (including, without limitation, damages for loss of data or profit, or due to business interruption) arising out of the use or inability to use the materials on Blinks.",
     },
     {
       title: "5. Accuracy of Materials",
       content:
-        "The materials appearing on Zaps could include technical, typographical, or photographic errors. Zaps does not warrant that any of the materials on its website are accurate, complete or current.",
+        "The materials appearing on Blinks could include technical, typographical, or photographic errors. Blinks does not warrant that any of the materials on its website are accurate, complete or current.",
     },
     {
       title: "6. Links",
       content:
-        "Zaps has not reviewed all of the sites linked to its website and is not responsible for the contents of any such linked site. The inclusion of any link does not imply endorsement by Zaps of the site.",
+        "Blinks has not reviewed all of the sites linked to its website and is not responsible for the contents of any such linked site. The inclusion of any link does not imply endorsement by Blinks of the site.",
     },
     {
       title: "7. Modifications",
       content:
-        "Zaps may revise these terms of service for its website at any time without notice. By using this website you are agreeing to be bound by the then current version of these terms of service.",
+        "Blinks may revise these terms of service for its website at any time without notice. By using this website you are agreeing to be bound by the then current version of these terms of service.",
     },
     {
       title: "8. Governing Law",
       content:
-        "These terms and conditions are governed by and construed in accordance with the laws of the jurisdiction in which Zaps operates and you irrevocably submit to the exclusive jurisdiction of the courts in that State or location.",
+        "These terms and conditions are governed by and construed in accordance with the laws of the jurisdiction in which Blinks operates and you irrevocably submit to the exclusive jurisdiction of the courts in that State or location.",
     },
   ];
 
@@ -93,8 +93,8 @@ export default function TermsOfServiceScreen() {
         <Text style={styles.lastUpdated}>Last Updated: February 23, 2026</Text>
 
         <Text style={styles.intro}>
-          Please read these Terms of Service carefully before using Zaps. These
-          terms govern your access to and use of our platform.
+          Please read these Terms of Service carefully before using Blinks.
+          These terms govern your access to and use of our platform.
         </Text>
 
         <View style={styles.sectionsContainer}>
@@ -111,7 +111,7 @@ export default function TermsOfServiceScreen() {
           <Text style={styles.contactTitle}>Contact Us</Text>
           <Text style={styles.contactText}>
             If you have any questions about these Terms, please contact us at
-            legal@zaps.com.
+            legal@blinks.com.
           </Text>
         </View>
       </ScrollView>

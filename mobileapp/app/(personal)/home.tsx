@@ -94,9 +94,9 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.BLINKSIdContainer}>
-            <Text style={styles.BLINKSIdLabel}>Zap ID</Text>
+            <Text style={styles.BLINKSIdLabel}>Blink ID</Text>
             <View style={styles.BLINKSIdRow}>
-              <Text style={styles.BLINKSIdValue}>Ejembiii.zap</Text>
+              <Text style={styles.BLINKSIdValue}>Ejembiii.blink</Text>
               <TouchableOpacity>
                 <Ionicons name="copy-outline" size={16} color={COLORS.black} />
               </TouchableOpacity>
