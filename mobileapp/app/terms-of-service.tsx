@@ -93,8 +93,8 @@ export default function TermsOfServiceScreen() {
         <Text style={styles.lastUpdated}>Last Updated: February 23, 2026</Text>
 
         <Text style={styles.intro}>
-          Please read these Terms of Service carefully before using Blinks. These
-          terms govern your access to and use of our platform.
+          Please read these Terms of Service carefully before using Blinks.
+          These terms govern your access to and use of our platform.
         </Text>
 
         <View style={styles.sectionsContainer}>

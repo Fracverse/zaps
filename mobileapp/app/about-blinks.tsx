@@ -48,33 +48,36 @@ export default function AboutBlinksScreen() {
           <Text style={styles.heroTitle}>Blinks</Text>
           <Text style={styles.heroSubtitle}>Fast. Secure. Seamless.</Text>
           <Text style={styles.heroDescription}>
-            Blinks is a next-generation payment and transfer platform designed to 
-            make moving money as easy as sending a message. Whether you're a user 
-            sending funds to friends or a merchant accepting payments, Blinks 
-            provides the speed and reliability you need.
+            Blinks is a next-generation payment and transfer platform designed
+            to make moving money as easy as sending a message. Whether you're a
+            user sending funds to friends or a merchant accepting payments,
+            Blinks provides the speed and reliability you need.
           </Text>
         </View>
 
         {/* Mission Section */}
         <Section title="Our Mission" icon="rocket-outline">
-          Our mission is to democratize financial access by providing a unified, 
-          borderless payment experience. We believe that everyone should have 
+          Our mission is to democratize financial access by providing a unified,
+          borderless payment experience. We believe that everyone should have
           access to fast, low-cost financial services, regardless of location.
         </Section>
 
         {/* How It Works Section */}
         <Section title="How It Works" icon="settings-outline">
-          Blinks leverages advanced blockchain technology to ensure near-instant 
-          settlements. Simply scan a QR code, enter a Blinks ID, or tap to pay. 
-          Our intelligent routing system handles the rest, ensuring your funds 
+          Blinks leverages advanced blockchain technology to ensure near-instant
+          settlements. Simply scan a QR code, enter a Blinks ID, or tap to pay.
+          Our intelligent routing system handles the rest, ensuring your funds
           reach their destination safely and efficiently.
         </Section>
 
         {/* Security & Transparency Section */}
-        <Section title="Security & Transparency" icon="shield-checkmark-outline">
-          Security is at the heart of everything we do. Blinks uses 
-          multi-signature wallets, bank-grade encryption, and real-time 
-          monitoring to protect your assets. All transactions are transparently 
+        <Section
+          title="Security & Transparency"
+          icon="shield-checkmark-outline"
+        >
+          Security is at the heart of everything we do. Blinks uses
+          multi-signature wallets, bank-grade encryption, and real-time
+          monitoring to protect your assets. All transactions are transparently
           recorded on-chain, providing an immutable audit trail.
         </Section>
 
@@ -82,7 +85,7 @@ export default function AboutBlinksScreen() {
         <View style={styles.ctaCard}>
           <Text style={styles.ctaTitle}>Ready to start?</Text>
           <Text style={styles.ctaText}>
-            Join thousands of users and merchants already using Blinks for their 
+            Join thousands of users and merchants already using Blinks for their
             daily transactions.
           </Text>
           <TouchableOpacity
@@ -95,7 +98,9 @@ export default function AboutBlinksScreen() {
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>© 2026 Blinks. All rights reserved.</Text>
+          <Text style={styles.footerText}>
+            © 2026 Blinks. All rights reserved.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>

@@ -83,8 +83,8 @@ export default function PrivacyPolicyScreen() {
         <Text style={styles.lastUpdated}>Last Updated: February 23, 2026</Text>
 
         <Text style={styles.intro}>
-          At Blinks, we are committed to protecting your privacy and ensuring you
-          have a positive experience when using our services.
+          At Blinks, we are committed to protecting your privacy and ensuring
+          you have a positive experience when using our services.
         </Text>
 
         <View style={styles.sectionsContainer}>
