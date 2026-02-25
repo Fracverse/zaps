@@ -10,12 +10,15 @@ import { ApiError } from '../middleware/error.middleware';
 export const createPayment = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { merchantId, fromAddress, amount, assetCode, assetIssuer, memo, minReceive } = req.body;
+        const userId = (req as any).user?.userId;
 
         if (!merchantId || !fromAddress || !amount || !assetCode) {
             throw new ApiError(400, 'Missing required fields: merchantId, fromAddress, amount, assetCode', 'VALIDATION_ERROR');
         }
+        if (!userId) throw new ApiError(401, 'Authentication required', 'AUTH_REQUIRED');
 
         const result = await paymentService.createPayment(
+            userId,
             merchantId,
             fromAddress,
             amount,
@@ -24,7 +27,6 @@ export const createPayment = async (req: Request, res: Response, next: NextFunct
             memo,
             minReceive,
         );
-
         res.status(201).json(result);
     } catch (error) {
         next(error);

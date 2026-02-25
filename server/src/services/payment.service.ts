@@ -66,6 +66,7 @@ class PaymentService {
      * The server NEVER touches user private keys.
      */
     async createPayment(
+        userId: string,
         merchantId: string,
         fromAddress: string,
         amount: string,
@@ -80,9 +81,10 @@ class PaymentService {
         if (!merchant.active) throw new ApiError(400, 'Merchant is inactive', 'MERCHANT_INACTIVE');
 
         // 2. Compliance
-        const sanctioned = await complianceService.checkSanctions(fromAddress);
-        if (sanctioned) throw new ApiError(403, 'Address is sanctioned', 'SANCTIONED');
-        await complianceService.checkVelocity(fromAddress, BigInt(amount));
+        if (await complianceService.checkSanctions(userId)) {
+            throw new ApiError(403, 'User is sanctioned', 'COMPLIANCE_SANCTIONS');
+        }
+        await complianceService.checkVelocity(userId, amount);
 
         // 3. Build the Soroban PaymentRouter.pay() invocation
         const routerContract = config.stellar.paymentRouterContract;
@@ -174,6 +176,8 @@ class PaymentService {
         // 2. Compliance
         const sanctioned = await complianceService.checkSanctions(fromUserId);
         if (sanctioned) throw new ApiError(403, 'Sender is sanctioned', 'SANCTIONED');
+        const recipientSanctioned = await complianceService.checkSanctions(toUserId);
+        if (recipientSanctioned) throw new ApiError(403, 'Recipient is sanctioned', 'SANCTIONED');
         await complianceService.checkVelocity(fromUserId, BigInt(amount));
 
         // 3. Build classic Stellar payment XDR
