@@ -38,7 +38,7 @@ export default function PrivacyPolicyScreen() {
     {
       title: "2. How We Use Your Information",
       content:
-        "We use the information we collect to provide, maintain, and improve our services, to process your transactions, to communicate with you, and to protect Zaps and our users.",
+        "We use the information we collect to provide, maintain, and improve our services, to process your transactions, to communicate with you, and to protect Blinks and our users.",
     },
     {
       title: "3. Information Sharing",
@@ -83,7 +83,7 @@ export default function PrivacyPolicyScreen() {
         <Text style={styles.lastUpdated}>Last Updated: February 23, 2026</Text>
 
         <Text style={styles.intro}>
-          At Zaps, we are committed to protecting your privacy and ensuring you
+          At Blinks, we are committed to protecting your privacy and ensuring you
           have a positive experience when using our services.
         </Text>
 
@@ -101,7 +101,7 @@ export default function PrivacyPolicyScreen() {
           <Text style={styles.contactTitle}>Questions?</Text>
           <Text style={styles.contactText}>
             If you have any questions about this Privacy Policy, please contact
-            us at privacy@zaps.com.
+            us at privacy@blinks.com.
           </Text>
         </View>
       </ScrollView>

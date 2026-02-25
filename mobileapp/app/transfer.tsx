@@ -17,7 +17,7 @@ import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { AccountTypeCard } from "../src/components/AccountTypeCard";
 
-import ZapIcon from "../assets/icon-4.svg";
+import BlinksIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
 import XLMLogo from "../assets/XML-logo.svg";
 import USDTLogo from "../assets/USDT-logo.svg";
@@ -122,7 +122,7 @@ export default function TransferScreen() {
         <AccountTypeCard
           title="Blinx User"
           description="Send instantly to any Blinx user via their BLINKS ID"
-          Icon={ZapIcon}
+          Icon={BlinksIcon}
           selected={transferType === "BLINKS"}
           onPress={() => setTransferType("BLINKS")}
         />
@@ -202,7 +202,7 @@ export default function TransferScreen() {
 
         <View style={styles.infoRow}>
           <View style={styles.recipientBadge}>
-            <ZapIcon width={16} height={16} />
+            <BlinksIcon width={16} height={16} />
           </View>
           <View style={styles.infoCol}>
             <Text style={styles.infoLabel}>Recipient ID</Text>

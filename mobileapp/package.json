@@ -1,6 +1,10 @@
 {
   "name": "BLINKS",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Agbeleshe/zaps.git"
+  },
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",

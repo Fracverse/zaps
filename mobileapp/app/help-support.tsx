@@ -47,7 +47,7 @@ export default function HelpSupportScreen() {
       label: "Privacy Policy",
     },
     { id: "terms", icon: "document-text-outline", label: "Terms of Service" },
-    { id: "about", icon: "information-circle-outline", label: "About Zaps" },
+    { id: "about", icon: "information-circle-outline", label: "About Blinks" },
   ];
 
   return (
@@ -90,7 +90,7 @@ export default function HelpSupportScreen() {
                   contact: "/contact-support",
                   privacy: "/privacy-policy",
                   terms: "/terms-of-service",
-                  about: "/help-support", // Stay on same page or link to about
+                  about: "/about-blinks",
                 };
                 if (routes[option.id]) {
                   router.push(routes[option.id]);
@@ -103,7 +103,7 @@ export default function HelpSupportScreen() {
       </ScrollView>
 
       <View style={styles.footer}>
-        <Text style={styles.versionText}>Zaps v1.0.0 (Build 124)</Text>
+        <Text style={styles.versionText}>Blinks v1.0.0 (Build 124)</Text>
       </View>
     </SafeAreaView>
   );
