@@ -480,6 +480,7 @@ dependencies = [
  "futures",
  "governor",
  "hex",
+ "http-body-util",
  "httpmock",
  "jsonwebtoken",
  "lazy_static",
