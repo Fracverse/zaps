@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod anchor;
 pub mod audit;
 pub mod auth;
 pub mod files;
@@ -13,6 +14,7 @@ pub mod transfers;
 pub mod withdrawals;
 
 pub use admin::*;
+pub use anchor::*;
 pub use audit::*;
 pub use auth::*;
 pub use files::*;

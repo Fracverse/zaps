@@ -38,10 +38,11 @@ impl IdentityService {
         Ok(User {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
-            stellar_address: row.get(2),
+            stellar_address: row.get::<_, String>(2).clone(),
             role: Role::from_str(row.get::<_, &str>(3)).unwrap(),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            address: row.get(2),
         })
     }
 
@@ -59,10 +60,11 @@ impl IdentityService {
         let user = User {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
-            stellar_address: row.get(2),
+            stellar_address: row.get::<_, String>(2).clone(),
             role: Role::from_str(row.get::<_, &str>(3)).unwrap(),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(6),
+            address: row.get(2),
         };
         let pin_hash: String = row.get(4);
 
@@ -83,10 +85,11 @@ impl IdentityService {
         Ok(User {
             id: row.get::<_, Uuid>(0).to_string(),
             user_id: row.get(1),
-            stellar_address: row.get(2),
+            stellar_address: row.get::<_, String>(2).clone(),
             role: Role::from_str(row.get::<_, &str>(3)).unwrap(),
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(5),
+            address: row.get(2),
         })
     }
 

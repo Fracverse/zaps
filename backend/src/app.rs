@@ -152,8 +152,12 @@ pub async fn create_app(
             rate_limit::rate_limit,
         ));
 
+    // -------------------- Anchor --------------------
+    let anchor_routes = Router::new().route("/webhook", post(crate::http::anchor::anchor_webhook));
+
     // -------------------- Public Routes --------------------
     let public_routes = Router::new()
+        .nest("/anchor", anchor_routes)
         .nest("/auth", auth_routes)
         .nest("/health", health_routes)
         .merge(metrics_routes);
