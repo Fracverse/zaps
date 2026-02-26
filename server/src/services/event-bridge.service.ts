@@ -1,6 +1,7 @@
 import sorobanService from './soroban.service';
 import prisma from '../utils/prisma';
 import logger from '../utils/logger';
+import queueService, { JobType } from './queue.service';
 
 interface SorobanEvent {
     id?: string;
@@ -117,11 +118,31 @@ class EventBridgeService {
 
         try {
             // Port logic from indexer_service.rs
-            // Example: Handle PAY_DONE event (this depends on the contract event schema)
-            if (event.type === 'contract' && event.topic?.[0] === 'PAY_DONE') {
-                const paymentId = event.value?.paymentId;
-                if (!paymentId) return;
+            // Checks if event is a contract event and has the expected structure
+            if (event.type === 'contract' && event.topic) {
+                // Topic decoding would happen here using scValToNative
+                // For now assuming existing string topics for simplicity or raw match
+                // In production, use scValToNative(xdr.ScVal.fromXDR(event.topic[0], 'base64'))
 
+                // Simplified matching for topic strings if they are not XDR encoded in this mock/stub
+                const topic = event.topic[0];
+
+                if (topic === 'PAY_DONE' || topic === 'TRANSFER_DONE') {
+                    const paymentId = event.value?.paymentId; // Need to decode value too
+
+                    if (paymentId) {
+                        await queueService.addJob({
+                            type: JobType.SYNC,
+                            data: {
+                                syncType: 'ON_CHAIN_COMPLETION',
+                                eventType: topic,
+                                paymentId: paymentId,
+                                rawEvent: event
+                            }
+                        });
+                        logger.info(`Queued SYNC job for ${topic} event: ${paymentId}`);
+                    }
+                }
                 await prisma.payment.update({
                     where: { id: paymentId },
                     data: { status: 'COMPLETED' },
