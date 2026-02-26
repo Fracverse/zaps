@@ -98,6 +98,7 @@ pub async fn create_app(
     // -------------------- Profiles --------------------
     let profile_routes = Router::new()
         .route("/", post(profiles::create_profile))
+        .route("/me", get(profiles::get_my_profile))
         .route("/:user_id", get(profiles::get_profile))
         .route("/:user_id", patch(profiles::update_profile))
         .route("/:user_id", delete(profiles::delete_profile));
@@ -140,19 +141,23 @@ pub async fn create_app(
         .nest("/audit", audit_routes)
         .layer(middleware::from_fn_with_state(
             services.clone(),
-            auth_middleware::authenticate,
+            audit_logging,
         ))
         .layer(middleware::from_fn_with_state(
             services.clone(),
-            audit_logging,
+            auth_middleware::authenticate,
         ))
         .layer(middleware::from_fn_with_state(
             services.clone(),
             rate_limit::rate_limit,
         ));
 
+    // -------------------- Anchor --------------------
+    let anchor_routes = Router::new().route("/webhook", post(crate::http::anchor::anchor_webhook));
+
     // -------------------- Public Routes --------------------
     let public_routes = Router::new()
+        .nest("/anchor", anchor_routes)
         .nest("/auth", auth_routes)
         .nest("/health", health_routes)
         .merge(metrics_routes);

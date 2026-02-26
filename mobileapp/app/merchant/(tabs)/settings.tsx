@@ -109,7 +109,7 @@ export default function SettingsScreen() {
             icon="language-outline"
             label="Language"
             sublabel="English"
-            onPress={() => {}}
+            onPress={() => router.push("/language")}
           />
           <SettingsItem
             icon="business-outline"
@@ -121,7 +121,7 @@ export default function SettingsScreen() {
             icon="help-circle-outline"
             label="Help & Support"
             sublabel="Reach out for assistance"
-            onPress={() => {}}
+            onPress={() => router.push("/help-support")}
             isLast={true}
           />
         </View>

@@ -1,6 +1,9 @@
-import { Worker, Job } from 'bullmq';
+import { Worker } from 'bullmq';
 import { connection } from '../utils/redis';
 import queueService, { JobType } from '../services/queue.service';
+import { JobType } from '../services/queue.service';
+import { workerConfig } from '../config/worker.config';
+import { getProcessor } from '../processors';
 import logger from '../utils/logger';
 import prisma from '../utils/prisma';
 import { PaymentStatus } from '@prisma/client';
@@ -32,21 +35,84 @@ export const startWorkers = () => {
 
     logger.info('Background workers started for all queues...');
 };
+let worker: Worker | null = null;
 
-const processEmail = async (data: any) => {
-    // Integration with SendGrid/AWS SES would go here
-    logger.info('Sending email to:', { to: data.to, subject: data.subject });
-};
+export function startWorkers(): Worker {
+    if (worker) {
+        logger.warn('Workers already started', { component: 'worker' });
+        return worker;
+    }
 
-const processNotification = async (data: any) => {
-    // Integration with FCM/OneSignal would go here
-    logger.info('Sending push notification to user:', { userId: data.userId, title: data.title });
-};
+    worker = new Worker(
+        workerConfig.defaultQueue,
+        async (job) => {
+            const { id, name, data, attemptsMade } = job;
+            const logCtx = { component: 'worker', jobId: id, jobType: name, attempt: attemptsMade + 1 };
 
-const processBlockchainTx = async (data: any) => {
-    // Logic to submit XDR to Stellar network and monitor status
-    logger.info('Submitting blockchain transaction...');
-};
+            logger.info('Processing job', logCtx);
+
+            const processor = getProcessor(name as JobType);
+            if (!processor) {
+                logger.warn('Unknown job type, skipping', { ...logCtx, jobType: name });
+                return;
+            }
+
+            try {
+                await processor(data);
+                logger.info('Job completed', logCtx);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.error('Job processing failed', { ...logCtx, error: msg });
+                throw err;
+            }
+        },
+        {
+            connection: connection as any,
+            concurrency: workerConfig.concurrency,
+            limiter: {
+                max: 50,
+                duration: 1000,
+            },
+            lockDuration: workerConfig.lockDuration,
+            stalledInterval: workerConfig.stalledInterval,
+        }
+    );
+
+    worker.on('completed', (job) => {
+        logger.debug('Job completed', { component: 'worker', jobId: job.id, jobType: job.name });
+    });
+
+    worker.on('failed', (job, err) => {
+        logger.error('Job failed', {
+            component: 'worker',
+            jobId: job?.id,
+            jobType: job?.name,
+            error: err?.message ?? String(err),
+            attemptsMade: job?.attemptsMade,
+        });
+    });
+
+    worker.on('error', (err) => {
+        logger.error('Worker error', { component: 'worker', error: err.message });
+    });
+
+    logger.info('Background workers started', {
+        component: 'worker',
+        concurrency: workerConfig.concurrency,
+        queue: workerConfig.defaultQueue,
+    });
+
+    return worker;
+}
+
+export async function stopWorkers(): Promise<void> {
+    if (worker) {
+        logger.info('Stopping workers gracefully', { component: 'worker' });
+        await worker.close();
+        worker = null;
+        logger.info('Workers stopped', { component: 'worker' });
+    }
+}
 
 const processSync = async (data: any) => {
     logger.info('Processing SYNC job', { data });
@@ -98,3 +164,6 @@ const processSync = async (data: any) => {
     }
 };
 
+export function getWorker(): Worker | null {
+    return worker;
+}

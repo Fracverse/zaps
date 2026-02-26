@@ -71,9 +71,13 @@ redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 bb8 = "0.8"
 bb8-redis = "0.13"
 
+# HTTP body utilities
+http-body-util = "0.1"
+
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
+hex = "0.4.3"
 
 # Testing
 [dev-dependencies]
