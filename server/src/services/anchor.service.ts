@@ -1,5 +1,7 @@
 import prisma from '../utils/prisma';
 import logger from '../utils/logger';
+import { ApiError } from '../middleware/error.middleware';
+import complianceService from './compliance.service';
 
 /**
  * Skeletal Blueprint for Anchor Integration (SEP-24/31).
@@ -11,6 +13,11 @@ class AnchorService {
      */
     async createWithdrawal(userId: string, destinationAddress: string, amount: string, asset: string) {
         logger.info(`Skeletal Anchor: Initiating withdrawal for ${userId}`);
+
+        if (await complianceService.checkSanctions(userId)) {
+            throw new ApiError(403, 'User is sanctioned', 'COMPLIANCE_SANCTIONS');
+        }
+        await complianceService.checkVelocity(userId, amount);
 
         return prisma.withdrawal.create({
             data: {

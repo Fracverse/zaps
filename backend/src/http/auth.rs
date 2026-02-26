@@ -82,7 +82,7 @@ pub async fn register(
         return Err(ApiError::Conflict("User already exists".to_string()));
     }
 
-    // Hash the PIN
+    // Validate and hash the PIN (enforces 4–6 digit format, bcrypt 10 rounds)
     let pin_hash = auth::hash_pin(&request.pin)?;
 
     // Create user with default role (User)

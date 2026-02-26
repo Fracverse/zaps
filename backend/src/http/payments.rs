@@ -23,6 +23,8 @@ pub struct PaymentResponse {
     pub status: String,
     pub memo: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    // base64 XDR pre-sponsored by server as fee-payer (if available)
+    pub sponsored_xdr: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +49,8 @@ pub struct QrPaymentResponse {
     pub merchant_id: String,
     pub amount: i64,
     pub asset: String,
+    // Base64 XDR for QR code payload (pre-sponsored if fee payer available)
+    pub xdr_payload: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +67,8 @@ pub struct NfcValidationResponse {
     pub valid: bool,
     pub merchant_id: String,
     pub amount: i64,
+    // Base64 XDR for NFC payload (pre-sponsored if fee payer available)
+    pub xdr_payload: Option<String>,
 }
 
 pub async fn create_payment(
@@ -73,6 +79,35 @@ pub async fn create_payment(
     // For now, using a placeholder address
     let from_address = "GEXAMPLE_ADDRESS".to_string();
 
+    // Validate asset format early (XLM or CODE:ISSUER)
+    services.soroban.validate_asset(&request.send_asset)?;
+
+    // Ensure merchant exists and fetch vault address
+    let merchant = services.payment.get_merchant(&request.merchant_id).await?;
+
+    // Build payment XDR (base64) for client signing; this is pre-sponsorship build
+    let tx_xdr = services
+        .soroban
+        .build_payment_xdr(
+            &from_address,
+            &merchant.vault_address,
+            &request.send_asset,
+            request.send_amount,
+            request.memo.as_deref(),
+        )
+        .await?;
+
+    // Optionally simulate to get accurate fees/footprint (not currently returned)
+    let _sim = services.soroban.simulate_transaction(&tx_xdr).await?;
+
+    // Sign as fee payer (server-side) to produce a pre-sponsored XDR
+    let sponsored_xdr = services
+        .soroban
+        .sign_transaction_as_fee_payer(&tx_xdr)
+        .await
+        .map(Some)?;
+
+    // Persist payment (status pending)
     let payment = services
         .payment
         .create_payment(from_address, request)
@@ -89,6 +124,7 @@ pub async fn create_payment(
         status: payment.status.to_string(),
         memo: payment.memo,
         created_at: payment.created_at,
+        sponsored_xdr,
     }))
 }
 
@@ -112,6 +148,7 @@ pub async fn get_payment(
         status: payment.status.to_string(),
         memo: payment.memo,
         created_at: payment.created_at,
+        sponsored_xdr: None,
     }))
 }
 
@@ -135,6 +172,31 @@ pub async fn generate_qr(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<QrPaymentRequest>,
 ) -> Result<Json<QrPaymentResponse>, ApiError> {
+    // Validate asset format early
+    services.soroban.validate_asset(&request.asset)?;
+
+    // Get merchant vault address
+    let merchant = services.payment.get_merchant(&request.merchant_id).await?;
+
+    // Build XDR for QR payload
+    let tx_xdr = services
+        .soroban
+        .build_payment_xdr(
+            "GQRCODE_PLACEHOLDER", // Will be replaced by client with actual sender
+            &merchant.vault_address,
+            &request.asset,
+            request.amount,
+            request.memo.as_deref(),
+        )
+        .await?;
+
+    // Sign as fee payer if available
+    let xdr_payload = services
+        .soroban
+        .sign_transaction_as_fee_payer(&tx_xdr)
+        .await
+        .ok();
+
     let qr_data = services
         .payment
         .generate_qr_payment(request.clone())
@@ -145,6 +207,7 @@ pub async fn generate_qr(
         merchant_id: request.merchant_id,
         amount: request.amount,
         asset: request.asset,
+        xdr_payload,
     }))
 }
 
@@ -152,6 +215,31 @@ pub async fn validate_nfc(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<NfcPaymentRequest>,
 ) -> Result<Json<NfcValidationResponse>, ApiError> {
+    // Validate asset format early
+    services.soroban.validate_asset(&request.asset)?;
+
+    // Get merchant vault address
+    let merchant = services.payment.get_merchant(&request.merchant_id).await?;
+
+    // Build XDR for NFC payload
+    let tx_xdr = services
+        .soroban
+        .build_payment_xdr(
+            "GNFC_PLACEHOLDER", // Will be replaced by client with actual sender
+            &merchant.vault_address,
+            &request.asset,
+            request.amount,
+            request.memo.as_deref(),
+        )
+        .await?;
+
+    // Sign as fee payer if available
+    let xdr_payload = services
+        .soroban
+        .sign_transaction_as_fee_payer(&tx_xdr)
+        .await
+        .ok();
+
     let valid = services
         .payment
         .validate_nfc_payment(request.clone())
@@ -161,5 +249,6 @@ pub async fn validate_nfc(
         valid,
         merchant_id: request.merchant_id,
         amount: request.amount,
+        xdr_payload,
     }))
 }

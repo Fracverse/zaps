@@ -88,6 +88,107 @@ Configuration is loaded from:
 - `POST /payments/qr/generate` - Generate QR payment
 - `POST /payments/nfc/validate` - Validate NFC payment
 
+#### User-to-User Transfers (Protected)
+
+Direct transfers between two BLINKS users are exposed via the **Transfers** API. These endpoints construct an **unsigned Stellar transaction XDR** that the client signs and submits, keeping funds non-custodial.
+
+- `POST /transfers/transfers` - Build an unsigned user-to-user transfer XDR
+- `GET /transfers/transfers/{id}` - Get transfer details (skeletal, subject to extension)
+- `GET /transfers/transfers/{id}/status` - Get transfer status (skeletal, subject to extension)
+
+##### `POST /transfers/transfers` – Build unsigned XDR for a direct transfer
+
+**Purpose**
+
+- Create an **unsigned Stellar transaction XDR** representing a transfer from the authenticated user (`from_user_id`) to another BLINKS user (`to_user_id`).
+- Validate that the recipient exists and has a structurally valid Stellar address.
+- Support an optional memo for business / reconciliation needs.
+
+**Authentication**
+
+- Requires a valid JWT access token.
+- The authenticated user is resolved from the token (`sub`) and injected as `AuthenticatedUser` by the auth middleware.
+
+**Request Body**
+
+```json
+{
+  "to_user_id": "alice",
+  "amount": 1000000,
+  "asset": "USDC",
+  "memo": "Rent payment January"
+}
+```
+
+- **`to_user_id`**: Target BLINKS user identifier. Must correspond to an existing row in the `users` table.
+- **`amount`**: Integer amount in the smallest unit for the given asset (e.g. 1 USDC = 1_000_000 if using 7 decimals). Must be `> 0`.
+- **`asset`**: Logical asset code used by your application (e.g. `USDC`).
+- **`memo`** *(optional)*: Free-text memo attached to the logical transfer for downstream reconciliation and user UX.
+
+**Validation Rules**
+
+- `amount` must be strictly greater than zero; otherwise the handler returns:
+  - `400 BAD_REQUEST` with `error="VALIDATION_ERROR"`.
+- `to_user_id` must resolve to an existing user:
+  - Backed by `IdentityService::get_user_by_id`.
+  - If not found, the handler returns:
+    - `404 NOT_FOUND` with `error="NOT_FOUND"`.
+- The recipient must have a structurally valid Stellar address:
+  - Current implementation checks that the address is non-empty and starts with `G`.
+  - If invalid, the handler returns:
+    - `400 BAD_REQUEST` with `error="VALIDATION_ERROR"` and message `"Recipient has an invalid Stellar address"`.
+- The sender (`from_user_id`) is taken from the authenticated JWT subject and resolved via `IdentityService::get_user_wallet` to obtain the sender’s Stellar address.
+
+**Backend Flow**
+
+Implementation lives in `backend/src/http/transfers.rs`:
+
+- Extracts `AuthenticatedUser` (via middleware) to obtain `from_user_id`.
+- Uses `IdentityService` to:
+  - Fetch the sender wallet (`get_user_wallet`) and derive the sender Stellar address.
+  - Resolve `to_user_id` into a `User` and obtain the recipient Stellar address.
+- Performs a lightweight Stellar address validation for the recipient.
+- Constructs a `BuildTransactionDto` with:
+  - `contract_id = "user_to_user_transfer"` – a logical identifier for the user-to-user transfer contract or flow.
+  - `method = "transfer"` – the contract method being invoked.
+  - `args` – JSON-encoded argument list containing:
+    - `from_user_id`, `from_address`
+    - `to_user_id`, `to_address`
+    - `asset`, `amount`
+    - `memo` (optional)
+- Invokes `SorobanService::build_transaction(dto)` which returns a **mock unsigned XDR** string (in production this would be a real Stellar/Soroban transaction XDR).
+- Synthesizes a **transient transfer identifier** (`Uuid::new_v4()`) and returns it alongside the unsigned XDR.
+
+**Response**
+
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "from_user_id": "bob",
+  "to_user_id": "alice",
+  "amount": 1000000,
+  "asset": "USDC",
+  "status": "pending",
+  "memo": "Rent payment January",
+  "unsigned_xdr": "mock_xdr_invoke_user_to_user_transfer_transfer_[...]"
+}
+```
+
+- **`id`**: UUID generated server-side for this transfer request. Currently ephemeral until a full persistence layer for transfers is added.
+- **`from_user_id`**: The authenticated user (JWT subject).
+- **`to_user_id`**: Recipient BLINKS user ID.
+- **`amount`**: Requested transfer amount.
+- **`asset`**: Asset code.
+- **`status`**: Currently fixed to `"pending"` to reflect that the transfer has not yet been signed or submitted.
+- **`memo`**: Echoes the request memo, if provided.
+- **`unsigned_xdr`**: Base64-encoded (mock) unsigned transaction XDR that the client must sign and submit to the Stellar network.
+
+**Client Responsibilities**
+
+- Sign the `unsigned_xdr` with the user’s Stellar private key on the client side.
+- Submit the signed XDR to the Stellar network (e.g. via Horizon/Soroban RPC or another backend endpoint).
+- Optionally store or correlate the returned `id` and `memo` for user receipts and history views.
+
 #### Admin (Protected, Admin Only)
 - `GET /admin/dashboard/stats` - Dashboard statistics
 - `GET /admin/transactions` - Transaction listing
