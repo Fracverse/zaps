@@ -11,6 +11,7 @@ use crate::{
     middleware::auth::AuthenticatedUser,
     models::BuildTransactionDto,
     service::ServiceContainer,
+    service::soroban_service::TransactionBuilder,
 };
 
 #[derive(Debug, Serialize)]
