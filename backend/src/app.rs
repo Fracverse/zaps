@@ -56,6 +56,10 @@ pub async fn create_app(
         .route("/register", post(auth::register))
         .route("/refresh", post(auth::refresh_token));
 
+    // -------------------- User --------------------
+    let user_routes = Router::new()
+        .route("/register", post(auth::user_register));
+
     // -------------------- Identity --------------------
     let identity_routes = Router::new()
         .route("/users", post(identity::create_user))
@@ -159,6 +163,7 @@ pub async fn create_app(
     let public_routes = Router::new()
         .nest("/anchor", anchor_routes)
         .nest("/auth", auth_routes)
+        .nest("/user", user_routes)
         .nest("/health", health_routes)
         .merge(metrics_routes);
 
