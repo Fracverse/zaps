@@ -196,7 +196,7 @@ impl PaymentService {
         Ok(true)
     }
 
-    async fn get_merchant(&self, merchant_id: &str) -> Result<Merchant, ApiError> {
+    pub async fn get_merchant(&self, merchant_id: &str) -> Result<Merchant, ApiError> {
         let client = self.db_pool.get().await?;
 
         let row = client
