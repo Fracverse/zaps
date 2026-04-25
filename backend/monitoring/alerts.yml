@@ -1,0 +1,42 @@
+groups:
+  - name: blinks-backend
+    rules:
+      - alert: HighHttpErrorRate
+        expr: sum(rate(http_errors_total[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: BLINKS backend HTTP error rate is above 5%
+
+      - alert: CriticalHttpErrorRate
+        expr: sum(rate(http_errors_total[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: BLINKS backend HTTP error rate is above 10%
+
+      - alert: ApiRateLimitPressure
+        expr: sum(rate(rate_limit_events_total{outcome="blocked"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: API rate limit blocks are elevated
+
+      - alert: ComplianceBlockedTransaction
+        expr: increase(compliance_screenings_total{decision="blocked"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Compliance screening blocked at least one transaction
+
+      - alert: BackendDown
+        expr: up{job="blinks-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: BLINKS backend Prometheus scrape target is down

@@ -47,6 +47,42 @@ lazy_static! {
     )
     .expect("Can't create db_pool_connections metric");
 
+    pub static ref CACHE_EVENTS_TOTAL: CounterVec = register_counter_vec!(
+        "cache_events_total",
+        "Total cache events by operation and outcome",
+        &["operation", "outcome"]
+    )
+    .expect("Can't create cache_events_total metric");
+
+    pub static ref RATE_LIMIT_EVENTS_TOTAL: CounterVec = register_counter_vec!(
+        "rate_limit_events_total",
+        "Total rate limit decisions by scope and outcome",
+        &["scope", "outcome"]
+    )
+    .expect("Can't create rate_limit_events_total metric");
+
+    pub static ref BUSINESS_EVENTS_TOTAL: CounterVec = register_counter_vec!(
+        "business_events_total",
+        "Total business KPI events",
+        &["event_type", "status"]
+    )
+    .expect("Can't create business_events_total metric");
+
+    pub static ref COMPLIANCE_SCREENINGS_TOTAL: CounterVec = register_counter_vec!(
+        "compliance_screenings_total",
+        "Total compliance screenings by decision and risk level",
+        &["decision", "risk_level"]
+    )
+    .expect("Can't create compliance_screenings_total metric");
+
+    pub static ref TRANSACTION_RISK_SCORE: HistogramVec = register_histogram_vec!(
+        "transaction_risk_score",
+        "Transaction risk score distribution",
+        &["risk_level"],
+        vec![0.0, 10.0, 25.0, 50.0, 75.0, 90.0, 100.0]
+    )
+    .expect("Can't create transaction_risk_score metric");
+
     /// Application uptime gauge (set at startup)
     pub static ref APP_UPTIME_SECONDS: Gauge = register_gauge!(
         "app_uptime_seconds",
@@ -159,6 +195,11 @@ impl MetricsService {
         let _ = &*HTTP_ERRORS_TOTAL;
         let _ = &*ACTIVE_CONNECTIONS;
         let _ = &*DB_POOL_CONNECTIONS;
+        let _ = &*CACHE_EVENTS_TOTAL;
+        let _ = &*RATE_LIMIT_EVENTS_TOTAL;
+        let _ = &*BUSINESS_EVENTS_TOTAL;
+        let _ = &*COMPLIANCE_SCREENINGS_TOTAL;
+        let _ = &*TRANSACTION_RISK_SCORE;
         let _ = &*APP_UPTIME_SECONDS;
 
         tracing::info!("Metrics service initialized");
@@ -297,6 +338,34 @@ impl MetricsService {
     /// Update database pool metrics
     pub fn update_db_pool_metrics(active_connections: usize) {
         DB_POOL_CONNECTIONS.set(active_connections as f64);
+    }
+
+    pub fn record_cache_event(operation: &str, outcome: &str) {
+        CACHE_EVENTS_TOTAL
+            .with_label_values(&[operation, outcome])
+            .inc();
+    }
+
+    pub fn record_rate_limit_event(scope: &str, allowed: bool) {
+        let outcome = if allowed { "allowed" } else { "blocked" };
+        RATE_LIMIT_EVENTS_TOTAL
+            .with_label_values(&[scope, outcome])
+            .inc();
+    }
+
+    pub fn record_business_event(event_type: &str, status: &str) {
+        BUSINESS_EVENTS_TOTAL
+            .with_label_values(&[event_type, status])
+            .inc();
+    }
+
+    pub fn record_compliance_screening(decision: &str, risk_level: &str, risk_score: u8) {
+        COMPLIANCE_SCREENINGS_TOTAL
+            .with_label_values(&[decision, risk_level])
+            .inc();
+        TRANSACTION_RISK_SCORE
+            .with_label_values(&[risk_level])
+            .observe(risk_score as f64);
     }
 
     /// Increment active connections

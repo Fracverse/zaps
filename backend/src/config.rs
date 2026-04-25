@@ -21,12 +21,22 @@ pub struct Config {
     pub environment: EnvironmentType,
     pub rate_limit: RateLimitConfig,
     #[serde(default)]
+    pub observability: ObservabilityConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
+    #[serde(default)]
     pub storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub url: String,
+    #[serde(default = "default_database_pool_size")]
+    pub max_pool_size: usize,
+}
+
+fn default_database_pool_size() -> usize {
+    16
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +94,12 @@ pub struct ComplianceConfig {
     pub sanctions_api_key: String,
     pub velocity_limits: VelocityLimits,
     pub risk_thresholds: RiskThresholds,
+    #[serde(default = "default_compliance_alert_webhook")]
+    pub alert_webhook_url: Option<String>,
+}
+
+fn default_compliance_alert_webhook() -> Option<String> {
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +126,42 @@ pub struct QueueConfig {
     pub dead_letter_max_size: usize,
     pub worker_count: usize,
     pub reclaim_interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    pub service_name: String,
+    pub sentry_dsn: Option<String>,
+    pub alert_webhook_url: Option<String>,
+    pub log_retention_days: u16,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            service_name: "blinks-backend".to_string(),
+            sentry_dsn: None,
+            alert_webhook_url: None,
+            log_retention_days: 30,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    pub redis_url: String,
+    pub default_ttl_seconds: u64,
+    pub hot_data_ttl_seconds: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            redis_url: "redis://localhost:6379".to_string(),
+            default_ttl_seconds: 300,
+            hot_data_ttl_seconds: 60,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +215,7 @@ impl Default for Config {
         Self {
             database: DatabaseConfig {
                 url: "postgres://localhost/BLINKS".to_string(),
+                max_pool_size: 16,
             },
             server: ServerConfig { port: 3000 },
             jwt: JwtConfig {
@@ -194,6 +247,7 @@ impl Default for Config {
             compliance_config: ComplianceConfig {
                 sanctions_api_url: "https://api.sanctions.example.com".to_string(),
                 sanctions_api_key: "api-key".to_string(),
+                alert_webhook_url: None,
                 velocity_limits: VelocityLimits {
                     daily_transaction_limit: 10_000_000,    // 10,000 USD
                     monthly_transaction_limit: 100_000_000, // 100,000 USD
@@ -220,7 +274,10 @@ impl Default for Config {
                 window_ms: 60000, // 1 minute
                 max_requests: 100,
                 scope: RateLimitScope::Ip,
+                endpoint_limits: vec![],
             },
+            observability: ObservabilityConfig::default(),
+            cache: CacheConfig::default(),
             storage: StorageConfig::default(),
         }
     }

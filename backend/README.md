@@ -267,7 +267,17 @@ The backend follows a modular service architecture:
 - **Authorization**: Role-based access control
 - **Metrics**: Prometheus metrics collection
 - **Request ID**: Request tracing and correlation
+- **Rate Limiting**: Redis-backed fixed-window enforcement with per-IP, per-user, API-key, and endpoint-specific buckets
 - **CORS**: Cross-origin resource sharing
+
+### Observability, Compliance, and Performance
+
+- Run with `LOG_FORMAT=json` to emit structured JSON logs suitable for ELK, Loki, Datadog, or another log aggregation backend.
+- Prometheus metrics are exposed at `GET /metrics`; JSON metrics and alert status are available at `GET /metrics/json` and `GET /metrics/alerts`.
+- Monitoring assets live in `monitoring/` and include Prometheus scrape config, alert rules, and a Grafana dashboard.
+- Compliance screening records transaction risk assessments, sanctions decisions, velocity-limit checks, and high-risk flags before payments, transfers, and withdrawals proceed.
+- Redis is used for distributed rate limiting and cache-aside helpers; the app falls back gracefully when Redis is unavailable.
+- Database pool size is configurable with `BLINKS_DATABASE__MAX_POOL_SIZE`, and query/index optimization lives in the migration set.
 
 ### Database Schema
 

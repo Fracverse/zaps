@@ -352,6 +352,49 @@ pub struct RateLimitConfig {
     pub window_ms: u64,
     pub max_requests: u32,
     pub scope: RateLimitScope,
+    #[serde(default)]
+    pub endpoint_limits: Vec<EndpointRateLimitConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointRateLimitConfig {
+    pub path_prefix: String,
+    pub window_ms: u64,
+    pub max_requests: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+    Blocked,
+}
+
+impl fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            RiskLevel::Low => "low",
+            RiskLevel::Medium => "medium",
+            RiskLevel::High => "high",
+            RiskLevel::Blocked => "blocked",
+        };
+        write!(f, "{}", value)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionRiskAssessment {
+    pub user_id: String,
+    pub address: String,
+    pub amount: i64,
+    pub risk_score: u8,
+    pub risk_level: RiskLevel,
+    pub sanctions_match: bool,
+    pub velocity_limit_exceeded: bool,
+    pub reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

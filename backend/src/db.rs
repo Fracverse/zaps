@@ -5,13 +5,20 @@ use tokio_postgres::NoTls;
 pub type DbPool = Pool;
 
 pub async fn create_pool(database_url: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
+    create_pool_with_max_size(database_url, 16).await
+}
+
+pub async fn create_pool_with_max_size(
+    database_url: &str,
+    max_size: usize,
+) -> Result<DbPool, Box<dyn std::error::Error>> {
     let pg_config = tokio_postgres::Config::from_str(database_url)?;
     let mgr_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     };
     let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
     let pool = Pool::builder(mgr)
-        .max_size(16)
+        .max_size(max_size)
         .runtime(Runtime::Tokio1)
         .build()?;
     Ok(pool)

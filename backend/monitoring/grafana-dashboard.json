@@ -1,0 +1,80 @@
+{
+  "title": "BLINKS Backend Operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Requests / sec",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP latency p95",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP errors",
+      "targets": [
+        {
+          "expr": "sum(rate(http_errors_total[5m])) by (error_type)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate limit decisions",
+      "targets": [
+        {
+          "expr": "sum(rate(rate_limit_events_total[5m])) by (scope, outcome)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Compliance screenings",
+      "targets": [
+        {
+          "expr": "sum(rate(compliance_screenings_total[5m])) by (decision, risk_level)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Business events",
+      "targets": [
+        {
+          "expr": "sum(rate(business_events_total[5m])) by (event_type, status)"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache events",
+      "targets": [
+        {
+          "expr": "sum(rate(cache_events_total[5m])) by (operation, outcome)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "DB pool connections",
+      "targets": [
+        {
+          "expr": "db_pool_connections"
+        }
+      ]
+    }
+  ]
+}

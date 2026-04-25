@@ -9,9 +9,9 @@ use uuid::Uuid;
 use crate::{
     api_error::ApiError,
     middleware::auth::AuthenticatedUser,
-    models::BuildTransactionDto,
+    models::{BuildTransactionDto, RiskLevel},
     service::soroban_service::TransactionBuilder,
-    service::ServiceContainer,
+    service::{MetricsService, ServiceContainer},
 };
 
 #[derive(Debug, Serialize)]
@@ -68,6 +68,17 @@ pub async fn create_transfer(
         ));
     }
 
+    let risk_assessment = services
+        .compliance
+        .assess_transaction_risk(&auth_user.user_id, &to_user.stellar_address, request.amount)
+        .await?;
+    if risk_assessment.risk_level == RiskLevel::Blocked {
+        MetricsService::record_business_event("transfer", "blocked");
+        return Err(ApiError::Compliance(
+            "Transfer blocked by sanctions screening".to_string(),
+        ));
+    }
+
     // Build an unsigned transaction XDR for the direct transfer
     let dto = BuildTransactionDto {
         contract_id: "user_to_user_transfer".to_string(),
@@ -86,6 +97,7 @@ pub async fn create_transfer(
     let unsigned_xdr = services.soroban.build_transaction(dto).await?;
 
     let transfer_id = Uuid::new_v4();
+    MetricsService::record_business_event("transfer", "created");
 
     Ok(Json(TransferResponse {
         id: transfer_id,

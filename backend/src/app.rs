@@ -57,8 +57,7 @@ pub async fn create_app(
         .route("/refresh", post(auth::refresh_token));
 
     // -------------------- User --------------------
-    let user_routes = Router::new()
-        .route("/register", post(auth::user_register));
+    let user_routes = Router::new().route("/register", post(auth::user_register));
 
     // -------------------- Identity --------------------
     let identity_routes = Router::new()

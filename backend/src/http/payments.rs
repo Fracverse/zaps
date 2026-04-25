@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     api_error::ApiError,
+    models::RiskLevel,
+    service::MetricsService,
     service::{payment_service::CreatePaymentRequest, ServiceContainer},
 };
 
@@ -85,6 +87,17 @@ pub async fn create_payment(
     // Ensure merchant exists and fetch vault address
     let merchant = services.payment.get_merchant(&request.merchant_id).await?;
 
+    let risk_assessment = services
+        .compliance
+        .assess_transaction_risk("anonymous", &merchant.vault_address, request.send_amount)
+        .await?;
+    if risk_assessment.risk_level == RiskLevel::Blocked {
+        MetricsService::record_business_event("payment", "blocked");
+        return Err(ApiError::Compliance(
+            "Payment blocked by sanctions screening".to_string(),
+        ));
+    }
+
     // Build payment XDR (base64) for client signing; this is pre-sponsorship build
     let tx_xdr = services
         .soroban
@@ -112,6 +125,12 @@ pub async fn create_payment(
         .payment
         .create_payment(from_address, request)
         .await?;
+    let _ = services
+        .cache
+        .set_json(&format!("payment:{}", payment.id), &payment, None)
+        .await;
+
+    MetricsService::record_business_event("payment", "created");
 
     Ok(Json(PaymentResponse {
         id: Uuid::parse_str(&payment.id).unwrap_or_default(),
@@ -135,7 +154,15 @@ pub async fn get_payment(
     let payment_uuid = Uuid::parse_str(&payment_id)
         .map_err(|_| ApiError::Validation("Invalid Payment ID".to_string()))?;
 
-    let payment = services.payment.get_payment(payment_uuid).await?;
+    let cache_key = format!("payment:{}", payment_uuid);
+    let payment = match services.cache.get_json(&cache_key).await? {
+        Some(payment) => payment,
+        None => {
+            let payment = services.payment.get_payment(payment_uuid).await?;
+            let _ = services.cache.set_json(&cache_key, &payment, None).await;
+            payment
+        }
+    };
 
     Ok(Json(PaymentResponse {
         id: Uuid::parse_str(&payment.id).unwrap_or_default(),
@@ -202,6 +229,8 @@ pub async fn generate_qr(
         .generate_qr_payment(request.clone())
         .await?;
 
+    MetricsService::record_business_event("payment_qr", "generated");
+
     Ok(Json(QrPaymentResponse {
         qr_data,
         merchant_id: request.merchant_id,
@@ -244,6 +273,8 @@ pub async fn validate_nfc(
         .payment
         .validate_nfc_payment(request.clone())
         .await?;
+
+    MetricsService::record_business_event("payment_nfc", if valid { "valid" } else { "invalid" });
 
     Ok(Json(NfcValidationResponse {
         valid,

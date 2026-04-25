@@ -11,9 +11,10 @@ use uuid::Uuid;
 use crate::{
     api_error::ApiError,
     middleware::auth::AuthenticatedUser,
+    models::RiskLevel,
     service::{
         anchor_service::{CreateWithdrawalParams, KycStatus, Sep31PayoutParams},
-        ServiceContainer,
+        MetricsService, ServiceContainer,
     },
 };
 
@@ -98,6 +99,17 @@ pub async fn create_withdrawal(
         .map_err(|_| ApiError::NotFound(format!("No wallet found for user {}", user_id)))?;
     let stellar_address = &wallet.address;
 
+    let risk_assessment = services
+        .compliance
+        .assess_transaction_risk(user_id, &request.destination_address, request.amount)
+        .await?;
+    if risk_assessment.risk_level == RiskLevel::Blocked {
+        MetricsService::record_business_event("withdrawal", "blocked");
+        return Err(ApiError::Compliance(
+            "Withdrawal blocked by sanctions screening".to_string(),
+        ));
+    }
+
     // ── Step 1: KYC gate ──────────────────────────────────────────────────────
     let kyc_status = if services.config.anchor_config.kyc_required {
         let status = services
@@ -142,6 +154,8 @@ pub async fn create_withdrawal(
             sep24_interactive_url: Some(sep24.url.clone()),
         })
         .await?;
+
+    MetricsService::record_business_event("withdrawal", "created");
 
     Ok((
         StatusCode::CREATED,

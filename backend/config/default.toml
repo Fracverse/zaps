@@ -3,6 +3,7 @@ environment = "development"
 
 [database]
 url = "postgres://localhost/BLINKS"
+max_pool_size = 16
 
 [server]
 port = 3000
@@ -35,6 +36,7 @@ max_bridge_amount = 100000000  # 1000 USD in cents
 [compliance]
 sanctions_api_url = "https://api.sanctions.example.com"
 sanctions_api_key = "api-key"
+alert_webhook_url = ""
 
 [compliance.velocity_limits]
 daily_transaction_limit = 10000000  # 10,000 USD
@@ -50,6 +52,27 @@ suspicious_patterns = []
 window_ms = 60000 # 1 minute
 max_requests = 100
 scope = "IP"
+
+[[rate_limit.endpoint_limits]]
+path_prefix = "/auth"
+window_ms = 60000
+max_requests = 20
+
+[[rate_limit.endpoint_limits]]
+path_prefix = "/payments"
+window_ms = 60000
+max_requests = 60
+
+[observability]
+service_name = "blinks-backend"
+sentry_dsn = ""
+alert_webhook_url = ""
+log_retention_days = 30
+
+[cache]
+redis_url = "redis://localhost:6379"
+default_ttl_seconds = 300
+hot_data_ttl_seconds = 60
 
 [queue]
 redis_url = "redis://localhost:6379"

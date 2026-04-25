@@ -11,7 +11,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
 
     // Initialize database
-    let db_pool = db::create_pool(&config.database.url).await?;
+    let db_pool =
+        db::create_pool_with_max_size(&config.database.url, config.database.max_pool_size).await?;
 
     // Run database migrations
     db::run_migrations(&config.database.url).await?;

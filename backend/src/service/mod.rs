@@ -1,6 +1,7 @@
 pub mod anchor_service;
 pub mod audit_service;
 pub mod bridge_service;
+pub mod cache_service;
 pub mod compliance_service;
 pub mod identity_service;
 pub mod indexer_service;
@@ -15,6 +16,7 @@ pub mod storage_service;
 pub use anchor_service::AnchorService;
 pub use audit_service::AuditService;
 pub use bridge_service::BridgeService;
+pub use cache_service::CacheService;
 pub use compliance_service::ComplianceService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
@@ -43,6 +45,7 @@ pub struct ServiceContainer {
     pub indexer: IndexerService,
     pub notification: NotificationService,
     pub rate_limit: RateLimitService,
+    pub cache: CacheService,
     pub profile: ProfileService,
     pub soroban: SorobanService,
     pub storage: StorageService,
@@ -62,7 +65,8 @@ impl ServiceContainer {
         let audit = AuditService::new(db_pool.clone(), config.clone());
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
         let notification = NotificationService::new(db_pool.clone(), config.clone());
-        let rate_limit = RateLimitService::new(config.clone());
+        let rate_limit = RateLimitService::new(config.clone()).await;
+        let cache = CacheService::new(config.clone()).await;
         let profile = ProfileService::new(db_pool.clone(), config.clone());
         let soroban = SorobanService::new(config.clone());
         let storage = StorageService::new(config.clone());
@@ -77,6 +81,7 @@ impl ServiceContainer {
             indexer,
             notification,
             rate_limit,
+            cache,
             profile,
             soroban,
             storage,
