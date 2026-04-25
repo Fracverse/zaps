@@ -9,6 +9,7 @@ import bridgeRoutes from './bridge.routes';
 import auditRoutes from './audit.routes';
 import notificationRoutes from './notification.routes';
 import fileRoutes from './file.routes';
+import payoutRoutes from './payout.routes';
 import { authenticate } from '../middleware/auth.middleware';
 import { auditLogging } from '../middleware/audit.middleware';
 import { rateLimit } from '../middleware/rate-limit.middleware';
@@ -31,6 +32,7 @@ router.use('/bridge', bridgeRoutes);
 router.use('/audit', auditRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/files', fileRoutes);
+router.use('/payouts', payoutRoutes);
 router.use('/admin', adminRoutes);
 
 export default router;

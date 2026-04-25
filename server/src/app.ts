@@ -2,9 +2,11 @@ import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import swaggerUi from 'swagger-ui-express';
 import routes from './routes';
 import { errorHandler } from './middleware/error.middleware';
 import { rateLimit } from './middleware/rate-limit.middleware';
+import { openApiSpec } from './docs/openapi';
 
 const app: Express = express();
 
@@ -26,6 +28,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
         return originalSend.apply(res, arguments as any);
     };
     next();
+});
+
+// Interactive API documentation (Swagger UI) — available at /api-docs
+app.use(
+    '/api-docs',
+    swaggerUi.serve,
+    swaggerUi.setup(openApiSpec, {
+        customSiteTitle: 'Zaps API Docs',
+        swaggerOptions: { persistAuthorization: true },
+    }),
+);
+
+// Serve the raw OpenAPI spec as JSON for Postman / code generators
+app.get('/api-docs.json', (_req: Request, res: Response) => {
+    res.json(openApiSpec);
 });
 
 // Routes
