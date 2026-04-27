@@ -1,0 +1,113 @@
+{
+  "common": {
+    "ok": "موافق",
+    "cancel": "إلغاء",
+    "retry": "إعادة المحاولة",
+    "done": "تم",
+    "next": "التالي",
+    "previous": "السابق",
+    "save": "حفظ",
+    "delete": "حذف",
+    "edit": "تحرير",
+    "close": "إغلاق",
+    "loading": "جاري التحميل...",
+    "error": "خطأ",
+    "success": "نجح",
+    "warning": "تحذير",
+    "info": "معلومات"
+  },
+  "errors": {
+    "generic": "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+    "network": "خطأ في الشبكة. يرجى فحص اتصالك.",
+    "offline": "أنت غير متصل. قد لا تكون بعض الميزات متاحة.",
+    "server": "خطأ في الخادم. يرجى المحاولة مرة أخرى لاحقاً.",
+    "validation": "يرجى فحص الإدخال والمحاولة مرة أخرى.",
+    "timeout": "انتهت مهلة الطلب. يرجى المحاولة مرة أخرى.",
+    "unauthorized": "لست مخولاً لتنفيذ هذا الإجراء.",
+    "notFound": "المورد المطلوب لم يتم العثور عليه.",
+    "crash": "التطبيق واجه خطأ غير متوقع."
+  },
+  "network": {
+    "offline": "أنت غير متصل",
+    "online": "أنت متصل مرة أخرى",
+    "retrying": "إعادة المحاولة... ({{attempt}}/{{maxAttempts}})",
+    "retryFailed": "فشلت إعادة المحاولة",
+    "checkConnection": "يرجى فحص اتصال الإنترنت الخاص بك"
+  },
+  "transactions": {
+    "success": "تمت المعاملة بنجاح",
+    "failed": "فشلت المعاملة",
+    "pending": "المعاملة معلقة",
+    "confirming": "تأكيد المعاملة...",
+    "sending": "جاري إرسال الدفعة...",
+    "receiving": "جاري استلام الدفعة...",
+    "insufficientBalance": "رصيد غير كافٍ",
+    "invalidAmount": "مبلغ غير صالح",
+    "invalidRecipient": "عنوان المستلم غير صالح"
+  },
+  "wallet": {
+    "create": "إنشاء محفظة",
+    "backup": "نسخ احتياطي للمحفظة",
+    "restore": "استعادة المحفظة",
+    "balance": "الرصيد",
+    "send": "إرسال",
+    "receive": "استلام",
+    "scan": "مسح QR",
+    "showQR": "عرض رمز QR",
+    "copyAddress": "نسخ العنوان",
+    "addressCopied": "تم نسخ العنوان إلى الحافظة"
+  },
+  "auth": {
+    "login": "تسجيل الدخول",
+    "logout": "تسجيل الخروج",
+    "signup": "إنشاء حساب",
+    "password": "كلمة المرور",
+    "confirmPassword": "تأكيد كلمة المرور",
+    "forgotPassword": "نسيت كلمة المرور؟",
+    "resetPassword": "إعادة تعيين كلمة المرور",
+    "biometric": "استخدام البصمة",
+    "pin": "PIN",
+    "enterPin": "أدخل PIN الخاص بك",
+    "incorrectPin": "PIN غير صحيح",
+    "pinSetup": "إعداد PIN"
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "language": "اللغة",
+    "theme": "المظهر",
+    "notifications": "الإشعارات",
+    "privacy": "الخصوصية",
+    "security": "الأمان",
+    "about": "حول",
+    "help": "المساعدة والدعم",
+    "contact": "اتصل بنا",
+    "terms": "شروط الخدمة",
+    "privacyPolicy": "سياسة الخصوصية"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "ar": "العربية",
+    "sw": "Kiswahili"
+  },
+  "currency": {
+    "usd": "دولار أمريكي",
+    "eur": "يورو",
+    "gbp": "جنيه إسترليني",
+    "xlm": "XLM",
+    "usdt": "USDT",
+    "usdc": "USDC"
+  },
+  "dates": {
+    "today": "اليوم",
+    "yesterday": "أمس",
+    "tomorrow": "غداً",
+    "thisWeek": "هذا الأسبوع",
+    "lastWeek": "الأسبوع الماضي",
+    "thisMonth": "هذا الشهر",
+    "lastMonth": "الشهر الماضي",
+    "thisYear": "هذا العام",
+    "lastYear": "العام الماضي"
+  }
+}

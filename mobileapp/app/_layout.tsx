@@ -9,6 +9,27 @@ import {
   Outfit_500Medium,
   Outfit_700Bold,
 } from "@expo-google-fonts/outfit";
+import { ErrorBoundary } from "../src/components/ErrorBoundary";
+import { ToastManager } from "../src/components/Toast";
+import { useOfflineDetection } from "../src/hooks/useNetworkStatus";
+import "../src/locales/i18n"; // Initialize i18n
+
+function LayoutContent() {
+  useOfflineDetection();
+  
+  return (
+    <View style={{ flex: 1 }}>
+      <StatusBar style="auto" />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: COLORS.white },
+        }}
+      />
+      <ToastManager />
+    </View>
+  );
+}
 
 export default function Layout() {
   const [fontsLoaded] = useFonts({
@@ -23,14 +44,8 @@ export default function Layout() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
-      <StatusBar style="auto" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: COLORS.white },
-        }}
-      />
-    </View>
+    <ErrorBoundary>
+      <LayoutContent />
+    </ErrorBoundary>
   );
 }

@@ -1,0 +1,113 @@
+{
+  "common": {
+    "ok": "Sawa",
+    "cancel": "Ghairi",
+    "retry": "Jaribu tena",
+    "done": "Imekamilika",
+    "next": "Ifuatayo",
+    "previous": "Iliyopita",
+    "save": "Hifadhi",
+    "delete": "Futa",
+    "edit": "Hariri",
+    "close": "Funga",
+    "loading": "Inapakia...",
+    "error": "Hitilafu",
+    "success": "Mafanikio",
+    "warning": "Onyo",
+    "info": "Maelezo"
+  },
+  "errors": {
+    "generic": "Kuna kitu kimeenda vibaya. Tafadhali jaribu tena.",
+    "network": "Hitilafu ya mtandao. Tafadhali angalia muunganisho wako.",
+    "offline": "Wako nje ya mtandao. Baadhi ya vipengele haviwezi kupatikana.",
+    "server": "Hitilafu ya seva. Tafadhali jaribu tena baadaye.",
+    "validation": "Tafadhali angalia uingizaji wako na jaribu tena.",
+    "timeout": "Ombi limeisha muda. Tafadhali jaribu tena.",
+    "unauthorized": "Haujaruhusiwa kufanya kitendo hiki.",
+    "notFound": "Rasilimali iliyotafutwa haikupatikana.",
+    "crash": "Programu imekutana na hitilafu isiyotarajiwa."
+  },
+  "network": {
+    "offline": "Wako nje ya mtandao",
+    "online": "Umerudi mtandaoni",
+    "retrying": "Inajaribu tena... ({{attempt}}/{{maxAttempts}})",
+    "retryFailed": "Kujaribu tena kumeshindwa",
+    "checkConnection": "Tafadhali angalia muunganisho wako wa intaneti"
+  },
+  "transactions": {
+    "success": "Muamala umekamilika kwa mafanikio",
+    "failed": "Muamala umeshindwa",
+    "pending": "Muamala unasubiri",
+    "confirming": "Kuthibitisha muamala...",
+    "sending": "Inatumia malipo...",
+    "receiving": "Inapokea malipo...",
+    "insufficientBalance": "Salio haitoshi",
+    "invalidAmount": "Kiasi batili",
+    "invalidRecipient": "Anwani ya mpokeaji batili"
+  },
+  "wallet": {
+    "create": "Tengeneza Mkoba",
+    "backup": "Hifadhi Nakala ya Mkoba",
+    "restore": "Rejesha Mkoba",
+    "balance": "Salio",
+    "send": "Tuma",
+    "receive": "Pokea",
+    "scan": "Changanua QR",
+    "showQR": "Onyesha Msimbo wa QR",
+    "copyAddress": "Nakili Anwani",
+    "addressCopied": "Anwani imenakiliwa kwenye clipboard"
+  },
+  "auth": {
+    "login": "Ingia",
+    "logout": "Toka",
+    "signup": "Jisajili",
+    "password": "Nenosiri",
+    "confirmPassword": "Thibitisha Nenosiri",
+    "forgotPassword": "Umesahau nenosiri?",
+    "resetPassword": "Weka upya nenosiri",
+    "biometric": "Tumia Biometriki",
+    "pin": "PIN",
+    "enterPin": "Ingiza PIN yako",
+    "incorrectPin": "PIN batili",
+    "pinSetup": "Sanidi PIN"
+  },
+  "settings": {
+    "title": "Mipangilio",
+    "language": "Lugha",
+    "theme": "Mandhari",
+    "notifications": "Arifa",
+    "privacy": "Faragha",
+    "security": "Usalama",
+    "about": "Kuhusu",
+    "help": "Msaada na Usaidizi",
+    "contact": "Wasiliana Nasi",
+    "terms": "Masharti ya Huduma",
+    "privacyPolicy": "Sera ya Faragha"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "ar": "العربية",
+    "sw": "Kiswahili"
+  },
+  "currency": {
+    "usd": "USD",
+    "eur": "EUR",
+    "gbp": "GBP",
+    "xlm": "XLM",
+    "usdt": "USDT",
+    "usdc": "USDC"
+  },
+  "dates": {
+    "today": "Leo",
+    "yesterday": "Jana",
+    "tomorrow": "Kesho",
+    "thisWeek": "Wiki Hii",
+    "lastWeek": "Wiki Ilivyopita",
+    "thisMonth": "Mwezi Huu",
+    "lastMonth": "Mwezi Uliopita",
+    "thisYear": "Mwaka Huu",
+    "lastYear": "Mwaka Uliopita"
+  }
+}
