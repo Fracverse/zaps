@@ -12,4 +12,11 @@ module.exports = {
   testEnvironmentOptions: {
     eventListeners: ["detox/runners/jest/listeners/allure"],
   },
+  globals: {
+    beforeAll: true,
+    beforeEach: true,
+    describe: true,
+    it: true,
+    device: true,
+  },
 };

@@ -25,4 +25,19 @@ module.exports = {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
   },
   ignorePatterns: ["node_modules/", "dist/", ".expo/"],
+  overrides: [
+    {
+      files: ["e2e/**/*.js"],
+      env: {
+        jest: true,
+      },
+      globals: {
+        beforeAll: true,
+        beforeEach: true,
+        describe: true,
+        it: true,
+        device: true,
+      },
+    },
+  ],
 };
