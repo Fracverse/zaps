@@ -1,20 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
+import { View, Text, StyleSheet, ScrollView, Alert } from "react-native";
+import { useTranslation } from "react-i18next";
+import { Button } from "./Button";
+import { LanguageSelector } from "./LanguageSelector";
+import { safeAsyncCall, fetchWithRetry } from "../utils/retry";
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Alert,
-} from 'react-native';
-import { useTranslation } from 'react-i18next';
-import { Button } from './Button';
-import { LanguageSelector } from './LanguageSelector';
-import { safeAsyncCall, fetchWithRetry } from '../utils/retry';
-import { formatCurrency, formatDate, formatRelativeDate } from '../utils/formatting';
-import { COLORS } from '../constants/colors';
+  formatCurrency,
+  formatDate,
+  formatRelativeDate,
+} from "../utils/formatting";
+import { COLORS } from "../constants/colors";
 
 // Import global toast type
-import './Toast';
+import "./Toast";
 
 export const ErrorHandlingDemo: React.FC = () => {
   const { t, i18n } = useTranslation();
