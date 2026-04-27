@@ -32,13 +32,16 @@ export const retryWithBackoff = async <T>(
       }
 
       // Calculate delay with exponential backoff
-      const delay = Math.min(baseDelay * Math.pow(backoffFactor, attempt), maxDelay);
-      
+      const delay = Math.min(
+        baseDelay * Math.pow(backoffFactor, attempt),
+        maxDelay
+      );
+
       // Notify about retry
       onRetry?.(attempt + 1, error);
 
       // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
@@ -56,7 +59,7 @@ export const fetchWithRetry = async (
       const response = await fetch(url, {
         ...options,
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           ...options.headers,
         },
       });
@@ -73,17 +76,14 @@ export const fetchWithRetry = async (
       maxDelay: 5000,
       onRetry: (attempt, error) => {
         console.warn(`Retry attempt ${attempt} for ${url}:`, error);
-        if (typeof global !== 'undefined' && global.toast) {
-          global.toast.warning(
-            `Network error. Retrying... (${attempt}/3)`,
-            {
-              label: 'Cancel',
-              onPress: () => {
-                // This would need to be implemented to cancel the retry
-                console.log('Retry cancelled by user');
-              },
-            }
-          );
+        if (typeof global !== "undefined" && global.toast) {
+          global.toast.warning(`Network error. Retrying... (${attempt}/3)`, {
+            label: "Cancel",
+            onPress: () => {
+              // This would need to be implemented to cancel the retry
+              console.log("Retry cancelled by user");
+            },
+          });
         }
       },
       ...retryOptions,
@@ -103,31 +103,31 @@ export const safeAsyncCall = async <T>(
 ): Promise<T | null> => {
   const {
     successMessage,
-    errorMessage = 'Something went wrong. Please try again.',
+    errorMessage = "Something went wrong. Please try again.",
     showLoading = true,
     retryOptions,
   } = options;
 
   try {
-    if (showLoading && typeof global !== 'undefined' && global.toast) {
+    if (showLoading && typeof global !== "undefined" && global.toast) {
       // Could show a loading toast here if needed
     }
 
-    const result = retryOptions 
+    const result = retryOptions
       ? await retryWithBackoff(fn, retryOptions)
       : await fn();
 
-    if (successMessage && typeof global !== 'undefined' && global.toast) {
+    if (successMessage && typeof global !== "undefined" && global.toast) {
       global.toast.success(successMessage);
     }
 
     return result;
   } catch (error) {
-    console.error('Async call failed:', error);
-    
-    if (typeof global !== 'undefined' && global.toast) {
+    console.error("Async call failed:", error);
+
+    if (typeof global !== "undefined" && global.toast) {
       global.toast.error(errorMessage, {
-        label: 'Retry',
+        label: "Retry",
         onPress: () => {
           // Retry the operation
           safeAsyncCall(fn, options);

@@ -1,14 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   Animated,
   TouchableOpacity,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+} from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
-export type ToastType = 'success' | 'error' | 'warning' | 'info';
+export type ToastType = "success" | "error" | "warning" | "info";
 
 interface ToastProps {
   message: string;
@@ -23,7 +23,7 @@ interface ToastProps {
 
 export const Toast: React.FC<ToastProps> = ({
   message,
-  type = 'info',
+  type = "info",
   duration = 3000,
   onHide,
   action,
@@ -31,7 +31,7 @@ export const Toast: React.FC<ToastProps> = ({
   const [fadeAnim] = useState(new Animated.Value(0));
   const [slideAnim] = useState(new Animated.Value(-100));
 
-  const hideToast = () => {
+  const hideToast = useCallback(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 0,
@@ -46,7 +46,7 @@ export const Toast: React.FC<ToastProps> = ({
     ]).start(() => {
       onHide?.();
     });
-  };
+  }, [fadeAnim, slideAnim, onHide]);
 
   useEffect(() => {
     // Show toast
@@ -69,50 +69,50 @@ export const Toast: React.FC<ToastProps> = ({
     }, duration);
 
     return () => clearTimeout(timer);
-  }, [duration, fadeAnim, slideAnim]);
+  }, [duration, fadeAnim, slideAnim, hideToast]);
 
   const getIcon = () => {
     switch (type) {
-      case 'success':
-        return 'checkmark-circle';
-      case 'error':
-        return 'close-circle';
-      case 'warning':
-        return 'warning';
-      case 'info':
-        return 'information-circle';
+      case "success":
+        return "checkmark-circle";
+      case "error":
+        return "close-circle";
+      case "warning":
+        return "warning";
+      case "info":
+        return "information-circle";
       default:
-        return 'information-circle';
+        return "information-circle";
     }
   };
 
   const getIconColor = () => {
     switch (type) {
-      case 'success':
-        return '#4CAF50';
-      case 'error':
-        return '#F44336';
-      case 'warning':
-        return '#FF9800';
-      case 'info':
-        return '#2196F3';
+      case "success":
+        return "#4CAF50";
+      case "error":
+        return "#F44336";
+      case "warning":
+        return "#FF9800";
+      case "info":
+        return "#2196F3";
       default:
-        return '#2196F3';
+        return "#2196F3";
     }
   };
 
   const getBackgroundColor = () => {
     switch (type) {
-      case 'success':
-        return '#E8F5E8';
-      case 'error':
-        return '#FFEBEE';
-      case 'warning':
-        return '#FFF3E0';
-      case 'info':
-        return '#E3F2FD';
+      case "success":
+        return "#E8F5E8";
+      case "error":
+        return "#FFEBEE";
+      case "warning":
+        return "#FFF3E0";
+      case "info":
+        return "#E3F2FD";
       default:
-        return '#E3F2FD';
+        return "#E3F2FD";
     }
   };
 
@@ -134,11 +134,17 @@ export const Toast: React.FC<ToastProps> = ({
           color={getIconColor()}
           style={styles.icon}
         />
-        <Text style={[styles.message, { color: getIconColor() }]} numberOfLines={2}>
+        <Text
+          style={[styles.message, { color: getIconColor() }]}
+          numberOfLines={2}
+        >
           {message}
         </Text>
         {action && (
-          <TouchableOpacity onPress={action.onPress} style={styles.actionButton}>
+          <TouchableOpacity
+            onPress={action.onPress}
+            style={styles.actionButton}
+          >
             <Text style={[styles.actionText, { color: getIconColor() }]}>
               {action.label}
             </Text>
@@ -154,44 +160,40 @@ export const Toast: React.FC<ToastProps> = ({
 
 // Toast Manager Component
 export const ToastManager: React.FC = () => {
-  const [toasts, setToasts] = useState<Array<{ id: string; props: ToastProps }>>([]);
+  const [toasts, setToasts] = useState<{ id: string; props: ToastProps }[]>([]);
 
-  const showToast = (props: Omit<ToastProps, 'onHide'>) => {
+  const showToast = (props: Omit<ToastProps, "onHide">) => {
     const id = Date.now().toString();
     const newToast = { id, props };
-    
-    setToasts(prev => [...prev, newToast]);
+
+    setToasts((prev) => [...prev, newToast]);
   };
 
   const hideToast = (id: string) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id));
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
   // Global toast function
   useEffect(() => {
     const toastFunctions = {
       show: showToast,
-      success: (message: string, action?: ToastProps['action']) =>
-        showToast({ message, type: 'success', action }),
-      error: (message: string, action?: ToastProps['action']) =>
-        showToast({ message, type: 'error', action }),
-      warning: (message: string, action?: ToastProps['action']) =>
-        showToast({ message, type: 'warning', action }),
-      info: (message: string, action?: ToastProps['action']) =>
-        showToast({ message, type: 'info', action }),
+      success: (message: string, action?: ToastProps["action"]) =>
+        showToast({ message, type: "success", action }),
+      error: (message: string, action?: ToastProps["action"]) =>
+        showToast({ message, type: "error", action }),
+      warning: (message: string, action?: ToastProps["action"]) =>
+        showToast({ message, type: "warning", action }),
+      info: (message: string, action?: ToastProps["action"]) =>
+        showToast({ message, type: "info", action }),
     };
-    
+
     (global as any).toast = toastFunctions;
   }, []);
 
   return (
     <View style={styles.toastContainer}>
       {toasts.map(({ id, props }) => (
-        <Toast
-          key={id}
-          {...props}
-          onHide={() => hideToast(id)}
-        />
+        <Toast key={id} {...props} onHide={() => hideToast(id)} />
       ))}
     </View>
   );
@@ -203,7 +205,7 @@ const styles = StyleSheet.create({
     marginVertical: 8,
     padding: 12,
     borderRadius: 8,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: {
       width: 0,
       height: 2,
@@ -213,8 +215,8 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   content: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     flex: 1,
   },
   icon: {
@@ -223,7 +225,7 @@ const styles = StyleSheet.create({
   message: {
     flex: 1,
     fontSize: 14,
-    fontFamily: 'Outfit_400Regular',
+    fontFamily: "Outfit_400Regular",
     lineHeight: 20,
   },
   actionButton: {
@@ -233,15 +235,15 @@ const styles = StyleSheet.create({
   },
   actionText: {
     fontSize: 14,
-    fontFamily: 'Outfit_600SemiBold',
-    textDecorationLine: 'underline',
+    fontFamily: "Outfit_600SemiBold",
+    textDecorationLine: "underline",
   },
   closeButton: {
     marginLeft: 8,
     padding: 4,
   },
   toastContainer: {
-    position: 'absolute',
+    position: "absolute",
     top: 50,
     left: 0,
     right: 0,
@@ -251,7 +253,7 @@ const styles = StyleSheet.create({
 
 // Global toast types
 declare global {
-  var toast: {
+  let toast: {
     show: (props: Omit<ToastProps, 'onHide'>) => void;
     success: (message: string, action?: ToastProps['action']) => void;
     error: (message: string, action?: ToastProps['action']) => void;

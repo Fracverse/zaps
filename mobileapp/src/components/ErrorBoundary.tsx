@@ -1,6 +1,6 @@
-import React, { Component, ReactNode } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { COLORS } from '../constants/colors';
+import React, { Component, ReactNode } from "react";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { COLORS } from "../constants/colors";
 
 interface Props {
   children: ReactNode;
@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
     // TODO: Send to error tracking service like Sentry
   }
 
@@ -47,7 +47,10 @@ export class ErrorBoundary extends Component<Props, State> {
             {__DEV__ && this.state.error && (
               <Text style={styles.errorDetail}>{this.state.error.message}</Text>
             )}
-            <TouchableOpacity style={styles.retryButton} onPress={this.handleRetry}>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={this.handleRetry}
+            >
               <Text style={styles.retryText}>Try Again</Text>
             </TouchableOpacity>
           </View>
@@ -62,37 +65,37 @@ export class ErrorBoundary extends Component<Props, State> {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     backgroundColor: COLORS.white,
     padding: 20,
   },
   content: {
-    alignItems: 'center',
+    alignItems: "center",
     maxWidth: 300,
   },
   title: {
     fontSize: 24,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.text,
     marginBottom: 16,
-    textAlign: 'center',
+    textAlign: "center",
   },
   message: {
     fontSize: 16,
-    fontFamily: 'Outfit_400Regular',
+    fontFamily: "Outfit_400Regular",
     color: COLORS.darkGray,
     marginBottom: 24,
-    textAlign: 'center',
+    textAlign: "center",
     lineHeight: 24,
   },
   errorDetail: {
     fontSize: 12,
-    fontFamily: 'Outfit_400Regular',
-    color: 'red',
+    fontFamily: "Outfit_400Regular",
+    color: "red",
     marginBottom: 24,
-    textAlign: 'center',
-    backgroundColor: '#f5f5f5',
+    textAlign: "center",
+    backgroundColor: "#f5f5f5",
     padding: 12,
     borderRadius: 8,
   },
@@ -105,6 +108,6 @@ const styles = StyleSheet.create({
   retryText: {
     color: COLORS.secondary,
     fontSize: 16,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
   },
 });

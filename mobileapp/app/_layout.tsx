@@ -16,7 +16,7 @@ import "../src/locales/i18n"; // Initialize i18n
 
 function LayoutContent() {
   useOfflineDetection();
-  
+
   return (
     <View style={{ flex: 1 }}>
       <StatusBar style="auto" />

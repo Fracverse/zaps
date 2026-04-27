@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
   Alert,
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
@@ -14,20 +13,23 @@ import { safeAsyncCall, fetchWithRetry } from '../utils/retry';
 import { formatCurrency, formatDate, formatRelativeDate } from '../utils/formatting';
 import { COLORS } from '../constants/colors';
 
+// Import global toast type
+import './Toast';
+
 export const ErrorHandlingDemo: React.FC = () => {
   const { t, i18n } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
 
   const testSuccessToast = () => {
-    if (typeof global !== 'undefined' && global.toast) {
-      global.toast.success(t('transactions.success'));
+    if (typeof globalThis !== "undefined" && (globalThis as any).toast) {
+      (globalThis as any).toast.success(t("transactions.success"));
     }
   };
 
   const testErrorToast = () => {
-    if (typeof global !== 'undefined' && global.toast) {
-      global.toast.error(t('errors.generic'), {
-        label: t('common.retry'),
+    if (typeof globalThis !== "undefined" && (globalThis as any).toast) {
+      (globalThis as any).toast.error(t("errors.generic"), {
+        label: t("common.retry"),
         onPress: () => {
           testSuccessToast();
         },
@@ -41,7 +43,7 @@ export const ErrorHandlingDemo: React.FC = () => {
       async () => {
         // Simulate a network request that might fail
         const response = await fetchWithRetry(
-          'https://jsonplaceholder.typicode.com/posts/1',
+          "https://jsonplaceholder.typicode.com/posts/1",
           {},
           {
             maxRetries: 2,
@@ -53,8 +55,8 @@ export const ErrorHandlingDemo: React.FC = () => {
         return response.json();
       },
       {
-        successMessage: t('common.success'),
-        errorMessage: t('errors.network'),
+        successMessage: t("common.success"),
+        errorMessage: t("errors.network"),
         showLoading: true,
       }
     );
@@ -62,26 +64,26 @@ export const ErrorHandlingDemo: React.FC = () => {
   };
 
   const testCrashError = () => {
-    throw new Error('This is a test crash to demonstrate error boundary');
+    throw new Error("This is a test crash to demonstrate error boundary");
   };
 
   const testFormatting = () => {
     const amount = 1234.56;
     const date = new Date();
-    
+
     Alert.alert(
-      'Formatting Demo',
-      `Currency: ${formatCurrency(amount, 'USD')}\n` +
-      `Date: ${formatDate(date)}\n` +
-      `Relative: ${formatRelativeDate(date)}\n` +
-      `Language: ${i18n.language}`
+      "Formatting Demo",
+      `Currency: ${formatCurrency(amount, "USD")}\n` +
+        `Date: ${formatDate(date)}\n` +
+        `Relative: ${formatRelativeDate(date)}\n` +
+        `Language: ${i18n.language}`
     );
   };
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Error Handling & I18n Demo</Text>
-      
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Toast Notifications</Text>
         <Button
@@ -127,7 +129,8 @@ export const ErrorHandlingDemo: React.FC = () => {
           style={styles.button}
         />
         <Text style={styles.warning}>
-          This will trigger an error to demonstrate the error boundary. The app won't crash.
+          This will trigger an error to demonstrate the error boundary. The app
+          won't crash.
         </Text>
       </View>
 
@@ -135,9 +138,7 @@ export const ErrorHandlingDemo: React.FC = () => {
         <Text style={styles.sectionTitle}>Current Language Info</Text>
         <Text style={styles.info}>Language: {i18n.language}</Text>
         <Text style={styles.info}>Direction: {i18n.dir()}</Text>
-        <Text style={styles.info}>
-          Sample Text: {t('common.loading')}
-        </Text>
+        <Text style={styles.info}>Sample Text: {t("common.loading")}</Text>
       </View>
     </ScrollView>
   );
@@ -151,17 +152,17 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 24,
-    fontFamily: 'Outfit_700Bold',
+    fontFamily: "Outfit_700Bold",
     color: COLORS.text,
     marginBottom: 24,
-    textAlign: 'center',
+    textAlign: "center",
   },
   section: {
     marginBottom: 32,
   },
   sectionTitle: {
     fontSize: 18,
-    fontFamily: 'Outfit_600SemiBold',
+    fontFamily: "Outfit_600SemiBold",
     color: COLORS.text,
     marginBottom: 16,
   },
@@ -170,15 +171,15 @@ const styles = StyleSheet.create({
   },
   warning: {
     fontSize: 12,
-    fontFamily: 'Outfit_400Regular',
+    fontFamily: "Outfit_400Regular",
     color: COLORS.darkGray,
-    fontStyle: 'italic',
+    fontStyle: "italic",
     marginTop: 8,
-    textAlign: 'center',
+    textAlign: "center",
   },
   info: {
     fontSize: 14,
-    fontFamily: 'Outfit_400Regular',
+    fontFamily: "Outfit_400Regular",
     color: COLORS.darkGray,
     marginBottom: 4,
   },

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import NetInfo from '@react-native-community/netinfo';
+import { useState, useEffect } from "react";
+import NetInfo from "@react-native-community/netinfo";
 
 interface NetworkStatus {
   isConnected: boolean | null;
@@ -12,11 +12,11 @@ export const useNetworkStatus = (): NetworkStatus => {
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus>({
     isConnected: null, // Unknown initially
     isInternetReachable: null,
-    type: 'unknown',
+    type: "unknown",
   });
 
   useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener(state => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
       setNetworkStatus({
         isConnected: state.isConnected,
         isInternetReachable: state.isInternetReachable,
@@ -26,7 +26,7 @@ export const useNetworkStatus = (): NetworkStatus => {
     });
 
     // Initial check
-    NetInfo.fetch().then(state => {
+    NetInfo.fetch().then((state) => {
       setNetworkStatus({
         isConnected: state.isConnected,
         isInternetReachable: state.isInternetReachable,
@@ -49,14 +49,14 @@ export const useOfflineDetection = () => {
   useEffect(() => {
     if (networkStatus.isConnected === false) {
       setWasOffline(true);
-      if (typeof global !== 'undefined' && global.toast) {
+      if (typeof global !== "undefined" && global.toast) {
         global.toast.warning(
-          'You are offline. Some features may not be available.',
+          "You are offline. Some features may not be available.",
           {
-            label: 'Retry',
+            label: "Retry",
             onPress: () => {
               // Trigger network recheck
-              const event = new Event('network-retry');
+              const event = new Event("network-retry");
               window.dispatchEvent?.(event);
             },
           }
@@ -64,8 +64,8 @@ export const useOfflineDetection = () => {
       }
     } else if (networkStatus.isConnected === true && wasOffline) {
       setWasOffline(false);
-      if (typeof global !== 'undefined' && global.toast) {
-        global.toast.success('You are back online!');
+      if (typeof global !== "undefined" && global.toast) {
+        global.toast.success("You are back online!");
       }
     }
   }, [networkStatus.isConnected, wasOffline]);
