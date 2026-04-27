@@ -7,10 +7,16 @@ import {
   StatusBar,
   SafeAreaView,
   Animated,
+  Share,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import QRCode from "react-native-qrcode-svg";
+import { buildSep0007PayUri } from "../../src/utils/sep0007";
+
+// Merchant's Stellar address — replace with real address from auth context
+const MERCHANT_STELLAR_ADDRESS =
+  "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
 
 const QRCodeScreen = () => {
   const { amount } = useLocalSearchParams();
@@ -18,12 +24,12 @@ const QRCodeScreen = () => {
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
-  // Create payment data for QR code
-  const paymentData = JSON.stringify({
-    amount: amount || "0",
-    merchant: "Ejembiii.BLINKS",
-    timestamp: new Date().toISOString(),
-    currency: "USD",
+  // Build a SEP-0007 pay URI so any compatible wallet can scan and pay
+  const sep0007Uri = buildSep0007PayUri({
+    destination: MERCHANT_STELLAR_ADDRESS,
+    ...(amount ? { amount: String(amount) } : {}),
+    asset_code: "USDC",
+    memo: "Blink merchant payment",
   });
 
   useEffect(() => {
@@ -50,9 +56,15 @@ const QRCodeScreen = () => {
     ]).start();
   }, [fadeAnim, scaleAnim, slideAnim]);
 
-  const handleShare = () => {
-    // Handle share functionality
-    console.log("Share QR code");
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: sep0007Uri,
+        title: "Blink Payment QR",
+      });
+    } catch (error) {
+      console.log("Share error:", error);
+    }
   };
 
   const handleContinue = () => {
@@ -110,7 +122,7 @@ const QRCodeScreen = () => {
         >
           <View style={styles.qrCode}>
             <QRCode
-              value={paymentData}
+              value={sep0007Uri}
               size={240}
               color="#000"
               backgroundColor="#fff"
