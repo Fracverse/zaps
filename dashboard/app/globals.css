@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+:root {
+  --sidebar-w: 240px;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f8fafc;
+  color: #0f172a;
+}
