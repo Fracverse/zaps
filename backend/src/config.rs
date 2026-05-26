@@ -275,6 +275,7 @@ impl Default for Config {
                 max_requests: 100,
                 scope: RateLimitScope::Ip,
                 endpoint_limits: vec![],
+                bypass_admin: true,
             },
             observability: ObservabilityConfig::default(),
             cache: CacheConfig::default(),

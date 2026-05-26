@@ -5,6 +5,38 @@ use redis::{aio::ConnectionManager, AsyncCommands};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
+use uuid::Uuid;
+
+const REDIS_SLIDING_WINDOW_LUA: &str = r#"
+    local key = KEYS[1]
+    local now = tonumber(ARGV[1])
+    local window = tonumber(ARGV[2])
+    local limit = tonumber(ARGV[3])
+    local member = ARGV[4]
+    
+    -- Prune expired entries
+    redis.call('zremrangebyscore', key, 0, now - window)
+    
+    -- Count remaining entries
+    local count = redis.call('zcard', key)
+    
+    local allowed = 0
+    if count < limit then
+        redis.call('zadd', key, now, member)
+        redis.call('pexpire', key, window)
+        allowed = 1
+        count = count + 1
+    end
+    
+    -- Get oldest timestamp to calculate reset
+    local oldest = redis.call('zrange', key, 0, 0, 'withscores')
+    local oldest_ts = now
+    if #oldest > 0 then
+        oldest_ts = tonumber(oldest[2])
+    end
+    
+    return {allowed, count, oldest_ts}
+"#;
 
 #[derive(Debug, Clone)]
 pub struct RateLimitDecision {
@@ -15,16 +47,15 @@ pub struct RateLimitDecision {
 }
 
 #[derive(Debug, Clone)]
-struct WindowCounter {
-    count: u32,
-    reset_at_ms: u64,
+struct LocalSlidingWindow {
+    timestamps: Vec<u64>,
 }
 
 #[derive(Clone)]
 pub struct RateLimitService {
     config: RateLimitConfig,
     redis: Arc<Mutex<Option<ConnectionManager>>>,
-    local_windows: Arc<DashMap<String, WindowCounter>>,
+    local_windows: Arc<DashMap<String, LocalSlidingWindow>>,
 }
 
 impl RateLimitService {
@@ -104,28 +135,38 @@ impl RateLimitService {
         let mut guard = self.redis.lock().await;
         let connection = guard.as_mut()?;
 
-        let count: redis::RedisResult<u32> = connection.incr(key, 1_u32).await;
-        let count = match count {
-            Ok(count) => count,
+        let now = now_ms();
+        let member = Uuid::new_v4().to_string();
+
+        let script = redis::Script::new(REDIS_SLIDING_WINDOW_LUA);
+        let result: redis::RedisResult<(u8, u32, u64)> = script
+            .key(key)
+            .arg(now)
+            .arg(window_ms)
+            .arg(max_requests)
+            .arg(&member)
+            .invoke_async(connection)
+            .await;
+
+        let (allowed, count, oldest_ts) = match result {
+            Ok(values) => values,
             Err(error) => {
-                tracing::warn!(%error, "Redis rate limit increment failed; falling back locally");
+                tracing::warn!(%error, "Redis sliding window rate limit script failed; falling back locally");
                 *guard = None;
                 return None;
             }
         };
 
-        if count == 1 {
-            let expire_result: redis::RedisResult<()> =
-                connection.pexpire(key, window_ms as i64).await;
-            if let Err(error) = expire_result {
-                tracing::warn!(%error, "Redis rate limit expiry failed");
-            }
-        }
+        let reset_after_seconds = if count > 0 {
+            let oldest_plus_window = oldest_ts.saturating_add(window_ms);
+            let time_remaining_ms = oldest_plus_window.saturating_sub(now);
+            (time_remaining_ms + 999) / 1000
+        } else {
+            (window_ms + 999) / 1000
+        };
 
-        let ttl_ms: i64 = connection.pttl(key).await.unwrap_or(window_ms as i64);
-        let reset_after_seconds = ((ttl_ms.max(0) as u64) + 999) / 1000;
         Some(RateLimitDecision {
-            allowed: count <= max_requests,
+            allowed: allowed == 1,
             limit: max_requests,
             remaining: max_requests.saturating_sub(count),
             reset_after_seconds,
@@ -134,27 +175,37 @@ impl RateLimitService {
 
     fn check_local(&self, key: &str, max_requests: u32, window_ms: u64) -> RateLimitDecision {
         let now = now_ms();
-        let reset_at_ms = now.saturating_add(window_ms);
         let mut entry = self
             .local_windows
             .entry(key.to_string())
-            .or_insert(WindowCounter {
-                count: 0,
-                reset_at_ms,
+            .or_insert(LocalSlidingWindow {
+                timestamps: Vec::new(),
             });
 
-        if now >= entry.reset_at_ms {
-            entry.count = 0;
-            entry.reset_at_ms = reset_at_ms;
+        // Retain timestamps within the window
+        let window_start = now.saturating_sub(window_ms);
+        entry.timestamps.retain(|&ts| ts > window_start);
+
+        let allowed = entry.timestamps.len() < max_requests as usize;
+        if allowed {
+            entry.timestamps.push(now);
         }
 
-        entry.count = entry.count.saturating_add(1);
-        let reset_after_seconds = (entry.reset_at_ms.saturating_sub(now) + 999) / 1000;
+        let count = entry.timestamps.len() as u32;
+        let oldest_ts = entry.timestamps.first().cloned().unwrap_or(now);
+
+        let reset_after_seconds = if count > 0 {
+            let oldest_plus_window = oldest_ts.saturating_add(window_ms);
+            let time_remaining_ms = oldest_plus_window.saturating_sub(now);
+            (time_remaining_ms + 999) / 1000
+        } else {
+            (window_ms + 999) / 1000
+        };
 
         RateLimitDecision {
-            allowed: entry.count <= max_requests,
+            allowed,
             limit: max_requests,
-            remaining: max_requests.saturating_sub(entry.count),
+            remaining: max_requests.saturating_sub(count),
             reset_after_seconds,
         }
     }

@@ -52,6 +52,7 @@ suspicious_patterns = []
 window_ms = 60000 # 1 minute
 max_requests = 100
 scope = "IP"
+bypass_admin = true
 
 [[rate_limit.endpoint_limits]]
 path_prefix = "/auth"

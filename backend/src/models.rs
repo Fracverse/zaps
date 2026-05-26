@@ -354,6 +354,12 @@ pub struct RateLimitConfig {
     pub scope: RateLimitScope,
     #[serde(default)]
     pub endpoint_limits: Vec<EndpointRateLimitConfig>,
+    #[serde(default = "default_bypass_admin")]
+    pub bypass_admin: bool,
+}
+
+fn default_bypass_admin() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

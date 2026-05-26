@@ -56,8 +56,8 @@ lazy_static! {
 
     pub static ref RATE_LIMIT_EVENTS_TOTAL: CounterVec = register_counter_vec!(
         "rate_limit_events_total",
-        "Total rate limit decisions by scope and outcome",
-        &["scope", "outcome"]
+        "Total rate limit decisions by scope, outcome, and path",
+        &["scope", "outcome", "path"]
     )
     .expect("Can't create rate_limit_events_total metric");
 
@@ -346,10 +346,11 @@ impl MetricsService {
             .inc();
     }
 
-    pub fn record_rate_limit_event(scope: &str, allowed: bool) {
+    pub fn record_rate_limit_event(scope: &str, allowed: bool, path: &str) {
         let outcome = if allowed { "allowed" } else { "blocked" };
+        let normalized_path = Self::normalize_path(path);
         RATE_LIMIT_EVENTS_TOTAL
-            .with_label_values(&[scope, outcome])
+            .with_label_values(&[scope, outcome, &normalized_path])
             .inc();
     }
 
