@@ -444,3 +444,128 @@ pub struct FileUploadResponseDto {
     pub size: u64,
     pub url: String,
 }
+
+// =============================================================================
+// Payment Dispute Models
+// =============================================================================
+
+/// Payment dispute status lifecycle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DisputeStatus {
+    /// Dispute has been filed and is awaiting review.
+    Open,
+    /// Dispute is under active investigation.
+    UnderReview,
+    /// Dispute has been resolved in the customer's favour (refund issued).
+    ResolvedCustomer,
+    /// Dispute has been resolved in the merchant's favour (no refund).
+    ResolvedMerchant,
+    /// Dispute was closed without a resolution (e.g. withdrawn by customer).
+    Closed,
+}
+
+impl FromStr for DisputeStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "under_review" => DisputeStatus::UnderReview,
+            "resolved_customer" => DisputeStatus::ResolvedCustomer,
+            "resolved_merchant" => DisputeStatus::ResolvedMerchant,
+            "closed" => DisputeStatus::Closed,
+            _ => DisputeStatus::Open,
+        })
+    }
+}
+
+impl fmt::Display for DisputeStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DisputeStatus::Open => "open",
+            DisputeStatus::UnderReview => "under_review",
+            DisputeStatus::ResolvedCustomer => "resolved_customer",
+            DisputeStatus::ResolvedMerchant => "resolved_merchant",
+            DisputeStatus::Closed => "closed",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Reason category for a payment dispute.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DisputeReason {
+    /// Customer did not authorise the transaction.
+    Unauthorized,
+    /// Goods or services were not delivered.
+    NotDelivered,
+    /// Goods or services were significantly not as described.
+    NotAsDescribed,
+    /// Customer was charged the wrong amount.
+    IncorrectAmount,
+    /// Duplicate charge for the same transaction.
+    Duplicate,
+    /// Any other reason (details in `description`).
+    Other,
+}
+
+impl FromStr for DisputeReason {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "unauthorized" => DisputeReason::Unauthorized,
+            "not_delivered" => DisputeReason::NotDelivered,
+            "not_as_described" => DisputeReason::NotAsDescribed,
+            "incorrect_amount" => DisputeReason::IncorrectAmount,
+            "duplicate" => DisputeReason::Duplicate,
+            _ => DisputeReason::Other,
+        })
+    }
+}
+
+impl fmt::Display for DisputeReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DisputeReason::Unauthorized => "unauthorized",
+            DisputeReason::NotDelivered => "not_delivered",
+            DisputeReason::NotAsDescribed => "not_as_described",
+            DisputeReason::IncorrectAmount => "incorrect_amount",
+            DisputeReason::Duplicate => "duplicate",
+            DisputeReason::Other => "other",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// A payment dispute record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentDispute {
+    pub id: String,
+    pub payment_id: String,
+    pub filed_by_user_id: String,
+    pub reason: DisputeReason,
+    pub description: String,
+    pub status: DisputeStatus,
+    /// Amount being disputed (may differ from full payment amount for partial disputes).
+    pub disputed_amount: i64,
+    /// Internal notes added by admins during review.
+    pub resolution_notes: Option<String>,
+    /// ID of the admin who resolved the dispute.
+    pub resolved_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Evidence item attached to a dispute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisputeEvidence {
+    pub id: String,
+    pub dispute_id: String,
+    pub submitted_by_user_id: String,
+    pub evidence_type: String,
+    pub description: String,
+    pub file_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+}

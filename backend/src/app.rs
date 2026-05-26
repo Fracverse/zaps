@@ -10,12 +10,13 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, files, health, identity, jobs, metrics as metrics_http, notifications,
-        payments, profiles, transfers, withdrawals,
+        admin, audit, auth, disputes, files, health, identity, jobs, metrics as metrics_http,
+        notifications, payments, profiles, transfers, version as version_http, withdrawals,
     },
     job_worker::JobWorker,
     middleware::{
         audit_logging, auth as auth_middleware, metrics, rate_limit, request_id, role_guard,
+        version_middleware,
     },
     role::Role,
     service::{MetricsService, ServiceContainer},
@@ -37,6 +38,10 @@ pub async fn create_app(
             tracing::error!("Job workers failed: {}", e);
         }
     });
+
+    // =========================================================================
+    // Route definitions
+    // =========================================================================
 
     // -------------------- Health --------------------
     let health_routes = Router::new()
@@ -106,15 +111,14 @@ pub async fn create_app(
         .route("/:user_id", patch(profiles::update_profile))
         .route("/:user_id", delete(profiles::delete_profile));
 
-    // -------------------- Admin --------------------
-    // Files routes
+    // -------------------- Files --------------------
     let files_routes = Router::new()
         .route("/upload", post(files::upload_file))
         .route("/:id", get(files::get_file))
         .route("/:id/meta", get(files::get_file_metadata))
         .route("/:id", delete(files::delete_file));
 
-    // Admin routes (protected)
+    // -------------------- Admin --------------------
     let admin_routes = Router::new()
         .route("/dashboard/stats", get(admin::get_dashboard_stats))
         .route("/transactions", get(admin::get_transactions))
@@ -128,11 +132,45 @@ pub async fn create_app(
         .route("/audit-logs/:id", get(audit::get_audit_log))
         .layer(middleware::from_fn(role_guard::admin_only()));
 
+    // -------------------- Disputes (v2 only) --------------------
+    // Payment-scoped dispute routes
+    let payment_dispute_routes = Router::new()
+        .route(
+            "/payments/:payment_id/disputes",
+            post(disputes::file_dispute),
+        )
+        .route(
+            "/payments/:payment_id/disputes",
+            get(disputes::list_payment_disputes),
+        );
+
+    // Standalone dispute routes
+    let dispute_routes = Router::new()
+        .route("/disputes", get(disputes::list_all_disputes))
+        .route("/disputes/me", get(disputes::list_my_disputes))
+        .route("/disputes/:dispute_id", get(disputes::get_dispute))
+        .route(
+            "/disputes/:dispute_id/status",
+            patch(disputes::update_dispute_status),
+        )
+        .route(
+            "/disputes/:dispute_id/evidence",
+            post(disputes::add_evidence),
+        )
+        .route(
+            "/disputes/:dispute_id/evidence",
+            get(disputes::list_evidence),
+        );
+
     // -------------------- Jobs --------------------
     let _job_routes = jobs::create_job_routes();
 
-    // -------------------- Protected Routes --------------------
-    let protected_routes = Router::new()
+    // =========================================================================
+    // Protected route bundles (auth + rate-limit + audit middleware applied)
+    // =========================================================================
+
+    // Shared protected routes (available on both /api/v1 and /api/v2)
+    let shared_protected = Router::new()
         .nest("/identity", identity_routes)
         .nest("/payments", payment_routes)
         .nest("/transfers", transfer_routes)
@@ -141,7 +179,15 @@ pub async fn create_app(
         .nest("/profiles", profile_routes)
         .nest("/files", files_routes)
         .nest("/admin", admin_routes)
-        .nest("/audit", audit_routes)
+        .nest("/audit", audit_routes);
+
+    // v2-only protected routes (disputes)
+    let v2_only_protected = Router::new()
+        .merge(payment_dispute_routes)
+        .merge(dispute_routes);
+
+    // Apply auth/rate-limit/audit middleware to shared routes
+    let shared_protected_with_middleware = shared_protected
         .layer(middleware::from_fn_with_state(
             services.clone(),
             audit_logging,
@@ -155,10 +201,53 @@ pub async fn create_app(
             rate_limit::rate_limit,
         ));
 
-    // -------------------- Anchor --------------------
-    let anchor_routes = Router::new().route("/webhook", post(crate::http::anchor::anchor_webhook));
+    // Apply auth/rate-limit/audit middleware to v2-only routes
+    let v2_only_protected_with_middleware = v2_only_protected
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            audit_logging,
+        ))
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            auth_middleware::authenticate,
+        ))
+        .layer(middleware::from_fn_with_state(
+            services.clone(),
+            rate_limit::rate_limit,
+        ));
 
-    // -------------------- Public Routes --------------------
+    // =========================================================================
+    // Versioned API routes
+    // =========================================================================
+
+    // /api/v1 — all shared routes, no dispute endpoints
+    let api_v1 = Router::new()
+        .merge(shared_protected_with_middleware.clone())
+        .layer(middleware::from_fn(version_middleware));
+
+    // /api/v2 — shared routes + dispute endpoints
+    let api_v2 = Router::new()
+        .merge(shared_protected_with_middleware)
+        .merge(v2_only_protected_with_middleware)
+        .layer(middleware::from_fn(version_middleware));
+
+    // =========================================================================
+    // Version documentation routes (public, no auth)
+    // =========================================================================
+    let version_doc_routes = Router::new()
+        .route("/versions", get(version_http::list_versions))
+        .route("/versions/:version", get(version_http::get_version))
+        .route(
+            "/versions/:version/migration",
+            get(version_http::get_migration_guide),
+        );
+
+    // =========================================================================
+    // Anchor & public routes
+    // =========================================================================
+    let anchor_routes =
+        Router::new().route("/webhook", post(crate::http::anchor::anchor_webhook));
+
     let public_routes = Router::new()
         .nest("/anchor", anchor_routes)
         .nest("/auth", auth_routes)
@@ -166,9 +255,17 @@ pub async fn create_app(
         .nest("/health", health_routes)
         .merge(metrics_routes);
 
+    // =========================================================================
+    // Assemble the full router
+    // =========================================================================
     let app = Router::new()
+        // Versioned API namespaces
+        .nest("/api/v1", api_v1)
+        .nest("/api/v2", api_v2)
+        // Version documentation (public)
+        .nest("/api", version_doc_routes)
+        // Legacy unversioned public routes (backward compat)
         .merge(public_routes)
-        .merge(protected_routes)
         .with_state(services)
         .layer(middleware::from_fn(request_id::request_id))
         .layer(middleware::from_fn(metrics::track_metrics))

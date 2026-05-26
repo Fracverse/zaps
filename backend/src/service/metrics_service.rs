@@ -8,6 +8,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 lazy_static! {
+    /// API version usage counter — tracks which version is being called
+    pub static ref API_VERSION_USAGE_TOTAL: CounterVec = register_counter_vec!(
+        "api_version_usage_total",
+        "Total API requests by version",
+        &["version", "path"]
+    )
+    .expect("Can't create api_version_usage_total metric");
+
+    /// Cache hit rate gauge — current rolling hit rate percentage
+    pub static ref CACHE_HIT_RATE: prometheus::Gauge = register_gauge!(
+        "cache_hit_rate_percent",
+        "Current cache hit rate as a percentage (0-100)"
+    )
+    .expect("Can't create cache_hit_rate_percent metric");
+
     /// Total HTTP requests counter with method, path, and status labels
     pub static ref HTTP_REQUESTS_TOTAL: CounterVec = register_counter_vec!(
         "http_requests_total",
@@ -190,6 +205,8 @@ impl MetricsService {
     /// Initialize metrics (call at application startup)
     pub fn init() {
         // Force lazy_static initialization
+        let _ = &*API_VERSION_USAGE_TOTAL;
+        let _ = &*CACHE_HIT_RATE;
         let _ = &*HTTP_REQUESTS_TOTAL;
         let _ = &*HTTP_REQUEST_DURATION_SECONDS;
         let _ = &*HTTP_ERRORS_TOTAL;
@@ -367,6 +384,19 @@ impl MetricsService {
         TRANSACTION_RISK_SCORE
             .with_label_values(&[risk_level])
             .observe(risk_score as f64);
+    }
+
+    /// Record API version usage for analytics.
+    pub fn record_api_version_usage(version: &str, path: &str) {
+        let normalized = Self::normalize_path(path);
+        API_VERSION_USAGE_TOTAL
+            .with_label_values(&[version, &normalized])
+            .inc();
+    }
+
+    /// Update the cache hit rate gauge.
+    pub fn record_cache_hit_rate(hit_rate_percent: f64) {
+        CACHE_HIT_RATE.set(hit_rate_percent);
     }
 
     /// Increment active connections

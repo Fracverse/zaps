@@ -3,6 +3,7 @@ pub mod audit_service;
 pub mod bridge_service;
 pub mod cache_service;
 pub mod compliance_service;
+pub mod dispute_service;
 pub mod identity_service;
 pub mod indexer_service;
 pub mod metrics_service;
@@ -18,6 +19,7 @@ pub use audit_service::AuditService;
 pub use bridge_service::BridgeService;
 pub use cache_service::CacheService;
 pub use compliance_service::ComplianceService;
+pub use dispute_service::DisputeService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
 pub use metrics_service::{
@@ -38,6 +40,7 @@ use std::sync::Arc;
 pub struct ServiceContainer {
     pub identity: IdentityService,
     pub payment: PaymentService,
+    pub dispute: DisputeService,
     pub bridge: BridgeService,
     pub anchor: AnchorService,
     pub compliance: ComplianceService,
@@ -59,6 +62,7 @@ impl ServiceContainer {
 
         let identity = IdentityService::new(db_pool.clone(), config.clone());
         let payment = PaymentService::new(db_pool.clone(), config.clone());
+        let dispute = DisputeService::new(db_pool.clone(), config.clone());
         let bridge = BridgeService::new(db_pool.clone(), config.clone());
         let anchor = AnchorService::new(db_pool.clone(), config.clone());
         let compliance = ComplianceService::new(db_pool.clone(), config.clone());
@@ -74,6 +78,7 @@ impl ServiceContainer {
         Ok(Self {
             identity,
             payment,
+            dispute,
             bridge,
             anchor,
             compliance,
