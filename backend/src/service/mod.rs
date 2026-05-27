@@ -1,5 +1,6 @@
 pub mod anchor_service;
 pub mod audit_service;
+pub mod batch_service;
 pub mod bridge_service;
 pub mod cache_service;
 pub mod compliance_service;
@@ -11,11 +12,13 @@ pub mod notification_service;
 pub mod payment_service;
 pub mod profile_service;
 pub mod rate_limit_service;
+pub mod session_service;
 pub mod soroban_service;
 pub mod storage_service;
 
 pub use anchor_service::AnchorService;
 pub use audit_service::AuditService;
+pub use batch_service::BatchService;
 pub use bridge_service::BridgeService;
 pub use cache_service::CacheService;
 pub use compliance_service::ComplianceService;
@@ -29,6 +32,7 @@ pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
 pub use profile_service::ProfileService;
 pub use rate_limit_service::RateLimitService;
+pub use session_service::SessionService;
 pub use soroban_service::SorobanService;
 pub use storage_service::StorageService;
 
@@ -52,6 +56,8 @@ pub struct ServiceContainer {
     pub profile: ProfileService,
     pub soroban: SorobanService,
     pub storage: StorageService,
+    pub batch: BatchService,
+    pub session: SessionService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
@@ -74,6 +80,8 @@ impl ServiceContainer {
         let profile = ProfileService::new(db_pool.clone(), config.clone());
         let soroban = SorobanService::new(config.clone());
         let storage = StorageService::new(config.clone());
+        let batch = BatchService::new(db_pool.clone(), config.clone());
+        let session = SessionService::new(db_pool.clone(), config.clone());
 
         Ok(Self {
             identity,
@@ -90,6 +98,8 @@ impl ServiceContainer {
             profile,
             soroban,
             storage,
+            batch,
+            session,
             config,
             db_pool,
         })

@@ -10,7 +10,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, disputes, files, health, identity, jobs, metrics as metrics_http,
+        admin, audit, auth, batches, disputes, files, health, identity, jobs, metrics as metrics_http,
         notifications, payments, profiles, transfers, version as version_http, withdrawals,
     },
     job_worker::JobWorker,
@@ -132,6 +132,15 @@ pub async fn create_app(
         .route("/audit-logs/:id", get(audit::get_audit_log))
         .layer(middleware::from_fn(role_guard::admin_only()));
 
+    // -------------------- Batches --------------------
+    let batch_routes = Router::new()
+        .route("/batches", post(batches::create_batch))
+        .route("/batches/:batch_id", get(batches::get_batch))
+        .route("/batches/:batch_id/items", post(batches::add_payment_to_batch))
+        .route("/batches/:batch_id/report", get(batches::get_batch_report))
+        .route("/batches/:batch_id/process", post(batches::process_batch))
+        .route("/batches/merchant/:merchant_id", get(batches::get_merchant_batches));
+
     // -------------------- Disputes (v2 only) --------------------
     // Payment-scoped dispute routes
     let payment_dispute_routes = Router::new()
@@ -178,6 +187,7 @@ pub async fn create_app(
         .nest("/notifications", notification_routes)
         .nest("/profiles", profile_routes)
         .nest("/files", files_routes)
+        .nest("/batches", batch_routes)
         .nest("/admin", admin_routes)
         .nest("/audit", audit_routes);
 
