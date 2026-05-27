@@ -17,6 +17,11 @@ members = [
     "payment-recovery",
     "payment-analytics",
     "payment-escrow",
+    "payment-splitter",
+    "loyalty-points",
+    "payment-scheduler",
+    "payment-history",
+    "payment-tagging",
 ]
 
 [workspace.dependencies]
