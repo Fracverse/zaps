@@ -74,7 +74,34 @@ function LayoutContent() {
           headerShown: false,
           contentStyle: { backgroundColor: COLORS.white },
         }}
-      />
+      >
+        {/* Existing screens */}
+        <Stack.Screen name="index" />
+        <Stack.Screen name="onboarding-start" />
+        <Stack.Screen name="account-type/index" />
+        <Stack.Screen name="create-wallet" />
+        <Stack.Screen name="backup-key" />
+        <Stack.Screen name="password" />
+        <Stack.Screen name="biometric" />
+        <Stack.Screen name="username" />
+
+        {/* Secure key management screens — Issue #97 */}
+        <Stack.Screen
+          name="mnemonic-backup"
+          options={{
+            // Prevent swipe-back while the phrase is visible
+            gestureEnabled: false,
+            animation: "slide_from_right",
+          }}
+        />
+        <Stack.Screen
+          name="wallet-recovery"
+          options={{
+            gestureEnabled: true,
+            animation: "slide_from_right",
+          }}
+        />
+      </Stack>
       <ToastManager />
     </View>
   );

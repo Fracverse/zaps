@@ -250,14 +250,3 @@ const styles = StyleSheet.create({
     zIndex: 9999,
   },
 });
-
-// Global toast types
-declare global {
-  let toast: {
-    show: (props: Omit<ToastProps, "onHide">) => void;
-    success: (message: string, action?: ToastProps["action"]) => void;
-    error: (message: string, action?: ToastProps["action"]) => void;
-    warning: (message: string, action?: ToastProps["action"]) => void;
-    info: (message: string, action?: ToastProps["action"]) => void;
-  };
-}

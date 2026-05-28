@@ -20,6 +20,9 @@ members = [
     "price-oracle",
     "payment-tagging",
     "payment-approval",
+    "payment-splitter",
+    "loyalty-points",
+    "payment-insurance",
 ]
 
 [workspace.dependencies]
