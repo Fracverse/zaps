@@ -10,8 +10,13 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     config::Config,
     http::{
-        admin, audit, auth, batches, disputes, files, health, identity, jobs, metrics as metrics_http,
-        notifications, payments, profiles, transfers, version as version_http, withdrawals,
+        admin, analytics, audit, auth, batches, currency, disputes, files, health, identity, jobs,
+        metrics as metrics_http, notifications, payments, profiles, transfers, version as version_http,
+        withdrawals,
+    },
+    http::{
+        get_reconciliation_audit_log, get_reconciliations, resolve_reconciliation,
+        run_reconciliation,
     },
     job_worker::JobWorker,
     middleware::{
@@ -132,6 +137,26 @@ pub async fn create_app(
         .route("/audit-logs/:id", get(audit::get_audit_log))
         .layer(middleware::from_fn(role_guard::admin_only()));
 
+    // -------------------- Analytics --------------------
+    let analytics_routes = Router::new()
+        .route("/analytics/payments", get(analytics::get_payment_analytics))
+        .route("/analytics/merchant/:merchant_id", get(analytics::get_merchant_performance))
+        .route("/analytics/report", post(analytics::generate_custom_report))
+        .route("/analytics/export", post(analytics::export_to_csv));
+
+    // -------------------- Reconciliation --------------------
+    let reconciliation_routes = Router::new()
+        .route("/reconciliation/run", post(run_reconciliation))
+        .route("/reconciliation", get(get_reconciliations))
+        .route("/reconciliation/:id/resolve", post(resolve_reconciliation))
+        .route("/reconciliation/:id/audit", get(get_reconciliation_audit_log));
+
+    // -------------------- Currency --------------------
+    let currency_routes = Router::new()
+        .route("/currency/convert", get(currency::convert_currency))
+        .route("/currency/rates/:from/:to", get(currency::get_exchange_rate))
+        .route("/currency/supported", get(currency::get_supported_currencies));
+
     // -------------------- Batches --------------------
     let batch_routes = Router::new()
         .route("/batches", post(batches::create_batch))
@@ -189,7 +214,10 @@ pub async fn create_app(
         .nest("/files", files_routes)
         .nest("/batches", batch_routes)
         .nest("/admin", admin_routes)
-        .nest("/audit", audit_routes);
+        .nest("/audit", audit_routes)
+        .nest("/", currency_routes)
+        .nest("/", analytics_routes)
+        .nest("/", reconciliation_routes);
 
     // v2-only protected routes (disputes)
     let v2_only_protected = Router::new()

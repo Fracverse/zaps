@@ -491,6 +491,7 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "sha2",
  "soroban-sdk",
  "sqlx",
  "thiserror 1.0.69",

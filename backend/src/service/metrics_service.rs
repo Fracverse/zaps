@@ -1,7 +1,7 @@
 use lazy_static::lazy_static;
 use prometheus::{
-    core::Collector, register_counter_vec, register_gauge, register_histogram_vec, CounterVec,
-    Encoder, Gauge, HistogramVec, TextEncoder,
+    core::Collector, register_counter_vec, register_gauge, register_gauge_vec,
+    register_histogram_vec, CounterVec, Encoder, Gauge, GaugeVec, HistogramVec, TextEncoder,
 };
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,6 +105,31 @@ lazy_static! {
     )
     .expect("Can't create app_uptime_seconds metric");
 
+    /// Payment volume metrics
+    pub static ref PAYMENT_VOLUME_TOTAL: CounterVec = register_counter_vec!(
+        "payment_volume_total",
+        "Total payment volume by merchant and currency",
+        &["merchant_id", "currency"]
+    )
+    .expect("Can't create payment_volume_total metric");
+
+    /// Payment success rate gauge
+    pub static ref PAYMENT_SUCCESS_RATE: GaugeVec = register_gauge_vec!(
+        "payment_success_rate_percent",
+        "Payment success rate by merchant",
+        &["merchant_id"]
+    )
+    .expect("Can't create payment_success_rate_percent metric");
+
+    /// Payment processing duration
+    pub static ref PAYMENT_PROCESSING_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+        "payment_processing_duration_seconds",
+        "Time taken to process payments",
+        &["payment_method", "status"],
+        vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0]
+    )
+    .expect("Can't create payment_processing_duration_seconds metric");
+
     /// Application start time (Unix timestamp)
     static ref APP_START_TIME: AtomicU64 = AtomicU64::new(
         SystemTime::now()
@@ -164,43 +189,58 @@ pub struct AlertPayload {
 }
 
 /// Alert threshold configuration
-#[derive(Debug, Clone)]
-pub struct AlertThreshold {
-    pub metric_name: String,
-    pub warning_threshold: f64,
-    pub critical_threshold: f64,
-}
-
-/// Metrics service for monitoring and alerting
-#[derive(Clone)]
-pub struct MetricsService {
-    alert_thresholds: Vec<AlertThreshold>,
-}
-
-impl Default for MetricsService {
-    fn default() -> Self {
-        Self::new()
+    #[derive(Debug, Clone)]
+    pub struct AlertThreshold {
+        pub metric_name: String,
+        pub warning_threshold: f64,
+        pub critical_threshold: f64,
+        pub direction: AlertDirection,
     }
-}
 
-impl MetricsService {
-    pub fn new() -> Self {
-        // Initialize default alert thresholds
-        let alert_thresholds = vec![
-            AlertThreshold {
-                metric_name: "error_rate".to_string(),
-                warning_threshold: 5.0,   // 5% error rate warning
-                critical_threshold: 10.0, // 10% error rate critical
-            },
-            AlertThreshold {
-                metric_name: "request_duration_p99".to_string(),
-                warning_threshold: 1.0,  // 1 second warning
-                critical_threshold: 5.0, // 5 seconds critical
-            },
-        ];
-
-        Self { alert_thresholds }
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum AlertDirection {
+        Above, // Alert when value exceeds threshold
+        Below, // Alert when value falls below threshold
     }
+
+    /// Metrics service for monitoring and alerting
+    #[derive(Clone)]
+    pub struct MetricsService {
+        alert_thresholds: Vec<AlertThreshold>,
+    }
+
+    impl Default for MetricsService {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl MetricsService {
+        pub fn new() -> Self {
+            // Initialize default alert thresholds
+            let alert_thresholds = vec![
+                AlertThreshold {
+                    metric_name: "error_rate".to_string(),
+                    warning_threshold: 5.0,   // 5% error rate warning
+                    critical_threshold: 10.0, // 10% error rate critical
+                    direction: AlertDirection::Above,
+                },
+                AlertThreshold {
+                    metric_name: "request_duration_p99".to_string(),
+                    warning_threshold: 1.0,  // 1 second warning
+                    critical_threshold: 5.0, // 5 seconds critical
+                    direction: AlertDirection::Above,
+                },
+                AlertThreshold {
+                    metric_name: "payment_success_rate".to_string(),
+                    warning_threshold: 90.0,   // 90% success rate warning
+                    critical_threshold: 80.0,  // 80% success rate critical
+                    direction: AlertDirection::Below,
+                },
+            ];
+
+            Self { alert_thresholds }
+        }
 
     /// Initialize metrics (call at application startup)
     pub fn init() {
@@ -218,8 +258,36 @@ impl MetricsService {
         let _ = &*COMPLIANCE_SCREENINGS_TOTAL;
         let _ = &*TRANSACTION_RISK_SCORE;
         let _ = &*APP_UPTIME_SECONDS;
+        let _ = &*PAYMENT_VOLUME_TOTAL;
+        let _ = &*PAYMENT_SUCCESS_RATE;
+        let _ = &*PAYMENT_PROCESSING_DURATION_SECONDS;
 
         tracing::info!("Metrics service initialized");
+    }
+
+    /// Record payment volume
+    pub fn record_payment_volume(merchant_id: &str, currency: &str, amount: f64) {
+        PAYMENT_VOLUME_TOTAL
+            .with_label_values(&[merchant_id, currency])
+            .inc_by(amount);
+    }
+
+    /// Update payment success rate for a merchant
+    pub fn update_payment_success_rate(merchant_id: &str, success_rate: f64) {
+        PAYMENT_SUCCESS_RATE
+            .with_label_values(&[merchant_id])
+            .set(success_rate);
+    }
+
+    /// Record payment processing duration
+    pub fn record_payment_processing_duration(
+        payment_method: &str,
+        status: &str,
+        duration_secs: f64,
+    ) {
+        PAYMENT_PROCESSING_DURATION_SECONDS
+            .with_label_values(&[payment_method, status])
+            .observe(duration_secs);
     }
 
     /// Get application uptime in seconds

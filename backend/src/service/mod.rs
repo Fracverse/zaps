@@ -1,9 +1,11 @@
 pub mod anchor_service;
+pub mod analytics_service;
 pub mod audit_service;
 pub mod batch_service;
 pub mod bridge_service;
 pub mod cache_service;
 pub mod compliance_service;
+pub mod currency_service;
 pub mod dispute_service;
 pub mod identity_service;
 pub mod indexer_service;
@@ -12,16 +14,22 @@ pub mod notification_service;
 pub mod payment_service;
 pub mod profile_service;
 pub mod rate_limit_service;
+pub mod reconciliation_service;
 pub mod session_service;
 pub mod soroban_service;
 pub mod storage_service;
 
 pub use anchor_service::AnchorService;
+pub use analytics_service::{
+    AnalyticsService, CustomReportRequest, DailyTrend, MerchantPerformance, PaymentAnalytics,
+    PaymentMethodStats,
+};
 pub use audit_service::AuditService;
 pub use batch_service::BatchService;
 pub use bridge_service::BridgeService;
 pub use cache_service::CacheService;
 pub use compliance_service::ComplianceService;
+pub use currency_service::{Currency, CurrencyService, ExchangeRate};
 pub use dispute_service::DisputeService;
 pub use identity_service::IdentityService;
 pub use indexer_service::IndexerService;
@@ -32,6 +40,9 @@ pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
 pub use profile_service::ProfileService;
 pub use rate_limit_service::RateLimitService;
+pub use reconciliation_service::{
+    Discrepancy, ExternalRecord, ReconciliationRequest, ReconciliationResult, ReconciliationService,
+};
 pub use session_service::SessionService;
 pub use soroban_service::SorobanService;
 pub use storage_service::StorageService;
@@ -48,6 +59,9 @@ pub struct ServiceContainer {
     pub bridge: BridgeService,
     pub anchor: AnchorService,
     pub compliance: ComplianceService,
+    pub currency: CurrencyService,
+    pub analytics: AnalyticsService,
+    pub reconciliation: ReconciliationService,
     pub audit: AuditService,
     pub indexer: IndexerService,
     pub notification: NotificationService,
@@ -72,6 +86,9 @@ impl ServiceContainer {
         let bridge = BridgeService::new(db_pool.clone(), config.clone());
         let anchor = AnchorService::new(db_pool.clone(), config.clone());
         let compliance = ComplianceService::new(db_pool.clone(), config.clone());
+        let currency = CurrencyService::new((*db_pool).clone(), config.clone());
+        let analytics = AnalyticsService::new((*db_pool).clone(), config.clone());
+        let reconciliation = ReconciliationService::new((*db_pool).clone(), config.clone());
         let audit = AuditService::new(db_pool.clone(), config.clone());
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
         let notification = NotificationService::new(db_pool.clone(), config.clone());
@@ -90,6 +107,9 @@ impl ServiceContainer {
             bridge,
             anchor,
             compliance,
+            currency,
+            analytics,
+            reconciliation,
             audit,
             indexer,
             notification,

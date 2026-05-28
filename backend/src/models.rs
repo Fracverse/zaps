@@ -569,3 +569,95 @@ pub struct DisputeEvidence {
     pub file_url: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+// =============================================================================
+// Payment Reconciliation Models
+// =============================================================================
+
+/// Payment reconciliation status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationStatus {
+    Pending,
+    Matched,
+    Mismatched,
+    ManualReview,
+    Resolved,
+}
+
+impl std::fmt::Display for ReconciliationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let s = match self {
+            ReconciliationStatus::Pending => "pending",
+            ReconciliationStatus::Matched => "matched",
+            ReconciliationStatus::Mismatched => "mismatched",
+            ReconciliationStatus::ManualReview => "manual_review",
+            ReconciliationStatus::Resolved => "resolved",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug)]
+pub struct ParseReconciliationStatusError;
+
+impl std::fmt::Display for ParseReconciliationStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "invalid reconciliation status")
+    }
+}
+
+impl std::error::Error for ParseReconciliationStatusError {}
+
+impl std::str::FromStr for ReconciliationStatus {
+    type Err = ParseReconciliationStatusError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(ReconciliationStatus::Pending),
+            "matched" => Ok(ReconciliationStatus::Matched),
+            "mismatched" => Ok(ReconciliationStatus::Mismatched),
+            "manual_review" => Ok(ReconciliationStatus::ManualReview),
+            "resolved" => Ok(ReconciliationStatus::Resolved),
+            _ => Err(ParseReconciliationStatusError),
+        }
+    }
+}
+
+/// Reconciliation source
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ReconciliationSource {
+    Stellar,
+    Bank,
+    Manual,
+}
+
+/// Payment reconciliation record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentReconciliation {
+    pub id: String,
+    pub payment_id: Option<String>,
+    pub external_id: Option<String>,
+    pub source: ReconciliationSource,
+    pub amount: i64,
+    pub currency: String,
+    pub status: ReconciliationStatus,
+    pub discrepancy_notes: Option<String>,
+    pub resolved_by: Option<String>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Audit log for reconciliation actions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconciliationAuditLog {
+    pub id: String,
+    pub reconciliation_id: String,
+    pub actor_id: String,
+    pub action: String,
+    pub old_status: Option<ReconciliationStatus>,
+    pub new_status: Option<ReconciliationStatus>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}

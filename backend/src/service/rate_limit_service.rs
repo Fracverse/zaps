@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::models::{EndpointRateLimitConfig, RateLimitConfig, RateLimitScope};
 use dashmap::DashMap;
-use redis::{aio::ConnectionManager, AsyncCommands};
+use redis::aio::ConnectionManager;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;

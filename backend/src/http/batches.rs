@@ -200,7 +200,7 @@ pub async fn process_batch(
     Path(batch_id): Path<String>,
 ) -> Result<Json<BatchReportResponse>, ApiError> {
     // Verify batch exists
-    let batch = services
+    let _batch = services
         .batch
         .get_batch(&batch_id)
         .await?
