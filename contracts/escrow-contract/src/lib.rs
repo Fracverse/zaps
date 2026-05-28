@@ -127,10 +127,10 @@ impl EscrowContract {
         // Write state BEFORE the external token call so that any reentrant
         // invocation of this contract sees the escrow as already existing.
         let escrow = Escrow {
-            buyer: buyer.clone(),
-            seller: seller.clone(),
+            buyer,
+            seller,
             arbitrator: Option::None,
-            token: token.clone(),
+            token,
             amount,
             state: EscrowState::Locked,
             memo,
@@ -179,14 +179,12 @@ impl EscrowContract {
         }
 
         if caller != escrow.seller {
-            if let Some(arb) = &escrow.arbitrator {
-                if caller != *arb {
+            match escrow.arbitrator {
+                Some(ref arb) if caller == *arb => {},
+                _ => {
                     reentrancy_guard_exit(&env);
                     panic_with_error!(env, EscrowError::NotAuthorized);
                 }
-            } else {
-                reentrancy_guard_exit(&env);
-                panic_with_error!(env, EscrowError::NotAuthorized);
             }
         }
 
@@ -234,9 +232,7 @@ impl EscrowContract {
         }
 
         let is_timeout = env.ledger().timestamp() >= escrow.created_at + 7 * 24 * 60 * 60;
-        let is_authorized =
-            caller == escrow.buyer ||
-            escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
+        let is_authorized = caller == escrow.buyer || escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
 
         if !is_authorized && !is_timeout {
             reentrancy_guard_exit(&env);
