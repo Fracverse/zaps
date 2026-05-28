@@ -62,6 +62,20 @@ lazy_static! {
     )
     .expect("Can't create db_pool_connections metric");
 
+    /// Database pool max size gauge
+    pub static ref DB_POOL_MAX_SIZE: Gauge = register_gauge!(
+        "db_pool_max_size",
+        "Configured maximum size of the database connection pool"
+    )
+    .expect("Can't create db_pool_max_size metric");
+
+    /// Database pool utilization percentage (0.0 - 100.0)
+    pub static ref DB_POOL_UTILIZATION: Gauge = register_gauge!(
+        "db_pool_utilization_percent",
+        "Current database pool utilization as a percentage"
+    )
+    .expect("Can't create db_pool_utilization_percent metric");
+
     pub static ref CACHE_EVENTS_TOTAL: CounterVec = register_counter_vec!(
         "cache_events_total",
         "Total cache events by operation and outcome",
@@ -422,7 +436,22 @@ pub struct AlertPayload {
 
     /// Update database pool metrics
     pub fn update_db_pool_metrics(active_connections: usize) {
+        // Backwards-compatible: treat argument as pool size when no active count available
         DB_POOL_CONNECTIONS.set(active_connections as f64);
+        DB_POOL_MAX_SIZE.set(active_connections as f64);
+        DB_POOL_UTILIZATION.set(100.0);
+    }
+
+    /// Update DB pool status with both configured max size and active connections
+    pub fn update_db_pool_status(pool_max_size: usize, active_connections: usize) {
+        DB_POOL_MAX_SIZE.set(pool_max_size as f64);
+        DB_POOL_CONNECTIONS.set(active_connections as f64);
+        let utilization = if pool_max_size == 0 {
+            0.0
+        } else {
+            (active_connections as f64 / pool_max_size as f64) * 100.0
+        };
+        DB_POOL_UTILIZATION.set(utilization);
     }
 
     pub fn record_cache_event(operation: &str, outcome: &str) {

@@ -1,6 +1,10 @@
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use std::str::FromStr;
 use tokio_postgres::NoTls;
+use tokio::time::{sleep, Duration};
+use crate::service::MetricsService;
+use std::sync::Arc;
+use std::cmp;
 
 pub type DbPool = Pool;
 
@@ -36,6 +40,104 @@ pub async fn run_migrations(database_url: &str) -> Result<(), Box<dyn std::error
 
     pool.close().await;
     Ok(())
+}
+
+/// Start a background task that monitors database connections and updates metrics.
+///
+/// - `database_url`: Postgres connection string used for monitoring queries.
+/// - `configured_max_size`: the configured pool max size from configuration.
+/// - `check_interval_secs`: how often to poll Postgres for connection counts.
+///
+/// Returns a JoinHandle for the spawned task. The task will run until cancelled.
+pub fn start_db_pool_monitoring(
+    database_url: String,
+    configured_max_size: usize,
+    check_interval_secs: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match tokio_postgres::Config::from_str(&database_url)
+                .and_then(|cfg| cfg.connect(NoTls))
+            {
+                Ok((client, connection)) => {
+                    // detach connection handling
+                    tokio::spawn(async move {
+                        if let Err(e) = connection.await {
+                            tracing::warn!(error = %e, "Postgres monitor connection error");
+                        }
+                    });
+
+                    // Query active connections for this database
+                    match client
+                        .query_one(
+                            "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()",
+                            &[],
+                        )
+                        .await
+                    {
+                        Ok(row) => {
+                            let active: i64 = row.get(0);
+                            let active_usize = cmp::min(active as usize, 1_000_000);
+                            MetricsService::update_db_pool_status(configured_max_size, active_usize);
+                        }
+                        Err(e) => tracing::warn!(error = %e, "Failed to query pg_stat_activity"),
+                    }
+
+                    let _ = client.close().await;
+                }
+                Err(e) => tracing::error!(error = %e, "Failed to connect to Postgres for monitoring"),
+            }
+
+            sleep(Duration::from_secs(check_interval_secs)).await;
+        }
+    })
+}
+
+/// Health check for database connectivity.
+pub async fn health_check_db(database_url: &str) -> bool {
+    match tokio_postgres::Config::from_str(database_url)
+        .and_then(|cfg| cfg.connect(NoTls))
+        .await
+    {
+        Ok((mut client, connection)) => {
+            // drive connection
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+
+            let res = client.query_one("SELECT 1", &[]).await.is_ok();
+            let _ = client.close().await;
+            res
+        }
+        Err(_) => false,
+    }
+}
+
+/// Recommend a new pool size based on current utilization and configuration.
+/// This function does not mutate or rebuild the pool; it only suggests a size.
+pub fn recommend_pool_size(
+    current_max: usize,
+    active_connections: usize,
+    min_pool_size: usize,
+    resize_step: usize,
+    high_threshold: f64,
+    low_threshold: f64,
+) -> usize {
+    if current_max == 0 {
+        return current_max;
+    }
+
+    let utilization = (active_connections as f64 / current_max as f64) * 100.0;
+
+    if utilization >= high_threshold {
+        // scale up
+        current_max.saturating_add(resize_step)
+    } else if utilization <= low_threshold && current_max > min_pool_size {
+        // scale down but not below min
+        current_max.saturating_sub(resize_step).max(min_pool_size)
+    } else {
+        current_max
+    }
 }
 
 /// Reset migrations for testing purposes

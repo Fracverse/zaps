@@ -287,6 +287,36 @@ fn test_vote_resolution_duplicate_vote_fails() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_submit_evidence_and_appeal_flow() {
+    let (env, client, buyer, seller, token) = setup();
+
+    let resolver = Address::generate(&env);
+    let escrow_id = make_id(&env, 30);
+
+    client.lock_funds(&escrow_id, &buyer, &seller, &token, &400_000, &1_000_000, &zero_memo(&env));
+    client.initiate_dispute(&escrow_id, &buyer, &resolver);
+
+    // Submit evidence from both parties
+    let ev1 = make_id(&env, 31);
+    let ev2 = make_id(&env, 32);
+    client.submit_evidence(&escrow_id, &buyer, &ev1);
+    client.submit_evidence(&escrow_id, &seller, &ev2);
+
+    // Votes disagree
+    client.vote_resolution(&escrow_id, &buyer, &true);
+    client.vote_resolution(&escrow_id, &seller, &false);
+    assert_eq!(client.get_state(&escrow_id), EscrowState::Disputed);
+
+    // Buyer files an appeal
+    let reason = make_id(&env, 33);
+    client.appeal(&escrow_id, &buyer, &reason);
+
+    let stored = client.get_escrow(&escrow_id);
+    assert_eq!(stored.appeal_count, 1);
+    assert_eq!(stored.evidence_count, 2);
+}
+
 // ─── Reentrancy guard tests ───────────────────────────────────────────────────
 //
 // Soroban's execution model is single-threaded and atomic within a transaction,

@@ -33,10 +33,34 @@ pub struct DatabaseConfig {
     pub url: String,
     #[serde(default = "default_database_pool_size")]
     pub max_pool_size: usize,
+    #[serde(default = "default_database_min_pool_size")]
+    pub min_pool_size: usize,
+    #[serde(default = "default_pool_resize_threshold_high")]
+    pub resize_threshold_high: f64,
+    #[serde(default = "default_pool_resize_threshold_low")]
+    pub resize_threshold_low: f64,
+    #[serde(default = "default_pool_resize_step")]
+    pub pool_resize_step: usize,
 }
 
 fn default_database_pool_size() -> usize {
     16
+}
+
+fn default_database_min_pool_size() -> usize {
+    4
+}
+
+fn default_pool_resize_threshold_high() -> f64 {
+    75.0
+}
+
+fn default_pool_resize_threshold_low() -> f64 {
+    25.0
+}
+
+fn default_pool_resize_step() -> usize {
+    2
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +240,10 @@ impl Default for Config {
             database: DatabaseConfig {
                 url: "postgres://localhost/BLINKS".to_string(),
                 max_pool_size: 16,
+                min_pool_size: 4,
+                resize_threshold_high: 75.0,
+                resize_threshold_low: 25.0,
+                pool_resize_step: 2,
             },
             server: ServerConfig { port: 3000 },
             jwt: JwtConfig {

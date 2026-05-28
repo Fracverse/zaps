@@ -61,8 +61,11 @@ pub async fn prometheus_metrics() -> impl IntoResponse {
 /// - errorRate: number (percentage)
 pub async fn json_metrics(State(services): State<Arc<ServiceContainer>>) -> Json<MetricsResponse> {
     // Update database pool metrics
-    let db_pool_size = services.db_pool.status().size;
-    MetricsService::update_db_pool_metrics(db_pool_size);
+    let status = services.db_pool.status();
+    let db_pool_size = status.size;
+    // active connections = size - available (deadpool status exposes `available`)
+    let active_connections = db_pool_size.saturating_sub(status.available);
+    MetricsService::update_db_pool_status(db_pool_size, active_connections);
 
     let detailed = MetricsService::get_detailed_metrics();
 

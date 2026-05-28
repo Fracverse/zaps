@@ -50,9 +50,11 @@ pub struct Escrow {
     pub memo: BytesN<32>,
     pub created_at: u64,
     pub timeout_ledger: u32,
-    pub dispute_resolver: Option<Address>,
-    pub buyer_vote: Option<bool>,
-    pub seller_vote: Option<bool>,
+        pub dispute_resolver: Option<Address>,
+        pub buyer_vote: Option<bool>,
+        pub seller_vote: Option<bool>,
+        pub evidence_count: u32,
+        pub appeal_count: u32,
 }
 
 #[contracttype]
@@ -137,6 +139,8 @@ impl EscrowContract {
             dispute_resolver: Option::None,
             buyer_vote: Option::None,
             seller_vote: Option::None,
+            evidence_count: 0,
+            appeal_count: 0,
         };
         env.storage().persistent().set(&key, &escrow);
 
@@ -301,6 +305,113 @@ impl EscrowContract {
         reentrancy_guard_exit(&env);
     }
 
+    /// Submit evidence for a dispute. Evidence is stored on-chain as a
+    /// small fixed-size blob reference (e.g. a hash or CID). Anyone may
+    /// submit evidence while the escrow is disputed.
+    pub fn submit_evidence(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+        evidence: BytesN<32>,
+    ) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        if escrow.state != EscrowState::Disputed {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, EscrowError::NotDisputed);
+        }
+
+        // Evidence map key per-escrow
+        let evidence_key = (symbol_short!("evidence"), escrow_id.clone());
+        let mut map: soroban_sdk::Map<u32, BytesN<32>> = env.storage().persistent()
+            .get(&evidence_key)
+            .unwrap_or(soroban_sdk::Map::new(&env));
+
+        let idx = escrow.evidence_count;
+        map.set(idx, evidence.clone());
+        env.storage().persistent().set(&evidence_key, &map);
+
+        escrow.evidence_count = escrow.evidence_count.saturating_add(1);
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("evidence_submitted")),
+            (escrow_id, caller, evidence)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Allow buyer or seller to nominate an arbitrator. The nominated
+    /// address becomes the `arbitrator` for the escrow. This is a simple
+    /// on-chain nomination; off-chain agreements are expected for final
+    /// arbitration.
+    pub fn set_arbitrator(env: Env, escrow_id: BytesN<32>, caller: Address, arbitrator: Address) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        if caller != escrow.buyer && caller != escrow.seller {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, EscrowError::NotAuthorized);
+        }
+
+        escrow.arbitrator = Some(arbitrator.clone());
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("arbitrator_set")),
+            (escrow_id, caller, arbitrator)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// File an appeal. If an appeal is filed after an initial resolution it
+    /// will move the escrow back to `Disputed` and clear the previous votes
+    /// so a fresh decision can be made (e.g. via an arbitrator).
+    pub fn appeal(env: Env, escrow_id: BytesN<32>, caller: Address, reason: BytesN<32>) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        // Only involved parties or arbitrator may appeal
+        let is_party_or_arb = caller == escrow.buyer
+            || caller == escrow.seller
+            || escrow.arbitrator.as_ref().map_or(false, |a| *a == caller);
+
+        if !is_party_or_arb {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, EscrowError::NotAuthorized);
+        }
+
+        // Reset votes and mark disputed again
+        escrow.state = EscrowState::Disputed;
+        escrow.buyer_vote = Option::None;
+        escrow.seller_vote = Option::None;
+        escrow.appeal_count = escrow.appeal_count.saturating_add(1);
+
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("appeal_filed")),
+            (escrow_id, caller, reason)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
     /// Cast a vote to resolve a dispute.
     ///
     /// Both buyer and seller must vote.  When their votes agree the funds are
@@ -347,12 +458,22 @@ impl EscrowContract {
         // Determine final state before any external call.
         if let (Some(buyer_vote), Some(seller_vote)) = (escrow.buyer_vote, escrow.seller_vote) {
             if buyer_vote == seller_vote {
-                // Agreement reached – update state first, then transfer.
-                if resolve_to_seller {
+                // Agreement reached – determine winner and update state first
+                if buyer_vote {
                     escrow.state = EscrowState::Released;
                 } else {
                     escrow.state = EscrowState::Refunded;
                 }
+
+                // Reputation impact: winner +1, loser -1
+                let (winner, loser) = if buyer_vote {
+                    (escrow.seller.clone(), escrow.buyer.clone())
+                } else {
+                    (escrow.buyer.clone(), escrow.seller.clone())
+                };
+                // Apply reputation changes (best-effort)
+                let _ = adjust_reputation(&env, &winner, 1);
+                let _ = adjust_reputation(&env, &loser, -1);
             }
         }
 
@@ -416,6 +537,22 @@ impl EscrowContract {
 
 fn escrow_key(id: &BytesN<32>) -> (Symbol, BytesN<32>) {
     (symbol_short!("escrow"), id.clone())
+}
+
+fn reputation_key(addr: &Address) -> (Symbol, Address) {
+    (symbol_short!("reputation"), addr.clone())
+}
+
+/// Adjust reputation score for an address by `delta` (can be negative).
+/// Returns the new reputation score.
+fn adjust_reputation(env: &Env, addr: &Address, delta: i32) -> i32 {
+    let key = reputation_key(addr);
+    let current: i32 = env.storage().persistent().get(&key).unwrap_or(0);
+    let next = current.saturating_add(delta);
+    env.storage().persistent().set(&key, &next);
+    // Emit event for external indexing
+    env.events().publish((symbol_short!("reputation"), symbol_short!("changed")), (addr.clone(), next));
+    next
 }
 
 mod test;
