@@ -55,7 +55,10 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <BlinkLogo width={80} height={38} />
-        <TouchableOpacity style={styles.notificationBtn}>
+        <TouchableOpacity
+          style={styles.notificationBtn}
+          onPress={() => router.push("/(personal)/settings")}
+        >
           <Ionicons
             name="notifications-outline"
             size={24}

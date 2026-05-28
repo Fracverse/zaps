@@ -1,4 +1,5 @@
-import { Stack } from "expo-router";
+import React from "react";
+import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
 import { COLORS } from "../src/constants/colors";
@@ -12,10 +13,58 @@ import {
 import { ErrorBoundary } from "../src/components/ErrorBoundary";
 import { ToastManager } from "../src/components/Toast";
 import { useOfflineDetection } from "../src/hooks/useNetworkStatus";
+import {
+  getStoredNotificationPreference,
+  handleNotificationResponse,
+  initNotificationCategoriesAsync,
+  registerForPushNotificationsAsync,
+} from "../src/services/notificationService";
+import * as Notifications from "expo-notifications";
 import "../src/locales/i18n"; // Initialize i18n
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+  }),
+});
+
 function LayoutContent() {
+  const router = useRouter();
   useOfflineDetection();
+
+  React.useEffect(() => {
+    async function setupNotifications() {
+      await initNotificationCategoriesAsync();
+
+      const enabled = await getStoredNotificationPreference();
+      if (enabled) {
+        await registerForPushNotificationsAsync();
+      }
+    }
+
+    setupNotifications();
+  }, []);
+
+  React.useEffect(() => {
+    const receivedListener = Notifications.addNotificationReceivedListener(
+      () => {
+        // Receipt can be used for analytics or local display enhancements.
+      }
+    );
+
+    const responseListener = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        handleNotificationResponse(response, router);
+      }
+    );
+
+    return () => {
+      receivedListener.remove();
+      responseListener.remove();
+    };
+  }, [router]);
 
   return (
     <View style={{ flex: 1 }}>

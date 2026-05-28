@@ -11,6 +11,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { COLORS } from "../../../src/constants/colors";
 import { useRouter } from "expo-router";
+import { useNotificationPreferences } from "../../../src/hooks/useNotificationPreferences";
 
 const SettingsItem = ({
   icon,
@@ -52,8 +53,22 @@ const SettingsItem = ({
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const [notifications, setNotifications] = useState(true);
   const [biometrics, setBiometrics] = useState(true);
+  const {
+    enabled,
+    permissionStatus,
+    loading,
+    toggleNotifications,
+    openSystemSettings,
+  } = useNotificationPreferences();
+
+  const notificationSublabel = loading
+    ? "Loading notification preferences..."
+    : permissionStatus === "denied"
+    ? "Notifications are blocked. Open system settings."
+    : enabled
+    ? "Push notifications enabled"
+    : "Push notifications disabled";
 
   return (
     <SafeAreaView style={styles.container}>
@@ -85,12 +100,22 @@ export default function SettingsScreen() {
         <View style={styles.settingsList}>
           <SettingsItem
             icon="notifications-outline"
-            label="Notification"
-            sublabel="Enable or disable push notifications"
+            label="Notifications"
+            sublabel={notificationSublabel}
             hasToggle={true}
-            value={notifications}
-            onToggle={setNotifications}
+            value={enabled}
+            onToggle={toggleNotifications}
           />
+          {permissionStatus === "denied" ? (
+            <TouchableOpacity
+              style={styles.settingsFooterButton}
+              onPress={openSystemSettings}
+            >
+              <Text style={styles.settingsFooterText}>
+                Open system notification settings
+              </Text>
+            </TouchableOpacity>
+          ) : null}
           <SettingsItem
             icon="lock-closed-outline"
             label="Password"
@@ -202,6 +227,16 @@ const styles = StyleSheet.create({
   },
   settingsTextContent: {
     flex: 1,
+  },
+  settingsFooterButton: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  settingsFooterText: {
+    fontSize: 13,
+    color: COLORS.primary,
+    fontFamily: "Outfit_500Medium",
   },
   settingsLabel: {
     fontSize: 16,
