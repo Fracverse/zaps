@@ -1,28 +1,63 @@
-import React from "react";
+import React, { useRef } from "react";
 import {
   TextInput,
   View,
   Text,
   StyleSheet,
   TextInputProps,
+  TouchableOpacity,
 } from "react-native";
 import { COLORS } from "../constants/colors";
 
 interface InputProps extends TextInputProps {
   label?: string;
   error?: string;
+  /** Accessibility hint for screen readers. */
+  accessibilityHint?: string;
 }
 
-export const Input = ({ label, error, style, ...props }: InputProps) => {
+export const Input = ({
+  label,
+  error,
+  style,
+  accessibilityHint,
+  ...props
+}: InputProps) => {
+  const inputRef = useRef<TextInput>(null);
+  const errorId = error ? `${props.testID ?? "input"}-error` : undefined;
+
   return (
     <View style={styles.container}>
-      {label && <Text style={styles.label}>{label}</Text>}
+      {label && (
+        <TouchableOpacity
+          accessible={false}
+          onPress={() => inputRef.current?.focus()}
+        >
+          <Text style={styles.label}>{label}</Text>
+        </TouchableOpacity>
+      )}
       <TextInput
+        ref={inputRef}
         style={[styles.input, error ? styles.inputError : null, style]}
         placeholderTextColor="#999"
+        accessible
+        accessibilityLabel={label}
+        accessibilityHint={accessibilityHint}
+        accessibilityInvalid={!!error}
+        // Link error message to input for screen readers
+        {...(errorId ? { accessibilityDescribedBy: errorId } : {})}
         {...props}
       />
-      {error && <Text style={styles.errorText}>{error}</Text>}
+      {error && (
+        <Text
+          nativeID={errorId}
+          style={styles.errorText}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+        >
+          {error}
+        </Text>
+      )}
     </View>
   );
 };
@@ -39,9 +74,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
+    // Minimum 44pt height for touch target (WCAG 2.5.5)
+    minHeight: 44,
     height: 56,
     backgroundColor: "#FFFFFF",
-    borderRadius: 28, // Fully rounded as per design
+    borderRadius: 28,
     paddingHorizontal: 24,
     fontSize: 16,
     fontFamily: "Outfit_400Regular",
@@ -50,10 +87,12 @@ const styles = StyleSheet.create({
     borderColor: "#eee",
   },
   inputError: {
-    borderColor: "red",
+    // High-contrast error border (WCAG 1.4.3)
+    borderColor: "#CC0000",
+    borderWidth: 2,
   },
   errorText: {
-    color: "red",
+    color: "#CC0000",
     fontSize: 12,
     fontFamily: "Outfit_400Regular",
     marginTop: 4,

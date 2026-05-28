@@ -17,6 +17,9 @@ members = [
     "payment-recovery",
     "payment-analytics",
     "payment-escrow",
+    "price-oracle",
+    "payment-tagging",
+    "payment-approval",
 ]
 
 [workspace.dependencies]
