@@ -16,13 +16,13 @@ interface InputProps extends TextInputProps {
   accessibilityHint?: string;
 }
 
-export const Input = ({
+export const Input = React.memo(function Input({
   label,
   error,
   style,
   accessibilityHint,
   ...props
-}: InputProps) => {
+}: InputProps) {
   const inputRef = useRef<TextInput>(null);
   const errorId = error ? `${props.testID ?? "input"}-error` : undefined;
 
@@ -60,7 +60,7 @@ export const Input = ({
       )}
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {

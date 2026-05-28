@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { ErrorBoundary } from "../src/components/ErrorBoundary";
 import {
   View,
   Text,
@@ -253,7 +254,7 @@ function PreviewRow({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
-export default function ScanScreen() {
+function ScanScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const { granted, denied, undetermined, loading, requestPermission } =
@@ -931,3 +932,11 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
   },
 });
+
+export default function ScanScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <ScanScreen />
+    </ErrorBoundary>
+  );
+}

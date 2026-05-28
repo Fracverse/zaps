@@ -1,5 +1,5 @@
 import React from "react";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
 import { COLORS } from "../src/constants/colors";
@@ -21,6 +21,7 @@ import {
 } from "../src/services/notificationService";
 import * as Notifications from "expo-notifications";
 import "../src/locales/i18n"; // Initialize i18n
+import { logNavigation, startNavigation } from "../src/utils/performance";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -32,7 +33,13 @@ Notifications.setNotificationHandler({
 
 function LayoutContent() {
   const router = useRouter();
+  const pathname = usePathname();
   useOfflineDetection();
+
+  React.useEffect(() => {
+    startNavigation(pathname);
+    return () => { logNavigation(pathname); };
+  }, [pathname]);
 
   React.useEffect(() => {
     async function setupNotifications() {
@@ -101,6 +108,13 @@ function LayoutContent() {
             animation: "slide_from_right",
           }}
         />
+
+        {/* Non-critical info screens — deferred animation for faster perceived load */}
+        <Stack.Screen name="faq" options={{ animation: "fade" }} />
+        <Stack.Screen name="terms-of-service" options={{ animation: "fade" }} />
+        <Stack.Screen name="privacy-policy" options={{ animation: "fade" }} />
+        <Stack.Screen name="about-blinks" options={{ animation: "fade" }} />
+        <Stack.Screen name="help-support" options={{ animation: "fade" }} />
       </Stack>
       <ToastManager />
     </View>

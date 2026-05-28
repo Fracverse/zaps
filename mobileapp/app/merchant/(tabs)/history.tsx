@@ -59,48 +59,52 @@ const TRANSACTION_DATA = [
   },
 ];
 
-const FilterTab = ({ label, active, onPress }: any) => (
-  <TouchableOpacity
-    style={[styles.filterTab, active && styles.filterTabActive]}
-    onPress={onPress}
-  >
-    <Text style={[styles.filterText, active && styles.filterTextActive]}>
-      {label}
-    </Text>
-  </TouchableOpacity>
-);
-
-const TransactionItem = ({ item }: any) => (
-  <View style={styles.transactionCard}>
-    <View
-      style={[
-        styles.statusIcon,
-        item.type === "received" ? styles.receivedIcon : styles.transferIcon,
-      ]}
+const FilterTab = React.memo(function FilterTab({ label, active, onPress }: any) {
+  return (
+    <TouchableOpacity
+      style={[styles.filterTab, active && styles.filterTabActive]}
+      onPress={onPress}
     >
-      <Feather
-        name="repeat"
-        size={16}
-        color={item.type === "received" ? "#4CAF50" : "#FF5252"}
-        style={{
-          transform: [{ rotate: item.type === "received" ? "180deg" : "0deg" }],
-        }}
-      />
-    </View>
-    <View style={styles.transactionInfo}>
-      <Text style={styles.address} numberOfLines={1}>
-        {item.address}
+      <Text style={[styles.filterText, active && styles.filterTextActive]}>
+        {label}
       </Text>
-      <Text style={styles.dateTime}>
-        {item.time} . {item.date}
-      </Text>
+    </TouchableOpacity>
+  );
+});
+
+const TransactionItem = React.memo(function TransactionItem({ item }: any) {
+  return (
+    <View style={styles.transactionCard}>
+      <View
+        style={[
+          styles.statusIcon,
+          item.type === "received" ? styles.receivedIcon : styles.transferIcon,
+        ]}
+      >
+        <Feather
+          name="repeat"
+          size={16}
+          color={item.type === "received" ? "#4CAF50" : "#FF5252"}
+          style={{
+            transform: [{ rotate: item.type === "received" ? "180deg" : "0deg" }],
+          }}
+        />
+      </View>
+      <View style={styles.transactionInfo}>
+        <Text style={styles.address} numberOfLines={1}>
+          {item.address}
+        </Text>
+        <Text style={styles.dateTime}>
+          {item.time} . {item.date}
+        </Text>
+      </View>
+      <View style={styles.amountInfo}>
+        <Text style={styles.amount}>{item.amount}</Text>
+        <Text style={styles.value}>{item.value}</Text>
+      </View>
     </View>
-    <View style={styles.amountInfo}>
-      <Text style={styles.amount}>{item.amount}</Text>
-      <Text style={styles.value}>{item.value}</Text>
-    </View>
-  </View>
-);
+  );
+});
 
 export default function HistoryScreen() {
   const router = useRouter();
@@ -148,6 +152,9 @@ export default function HistoryScreen() {
         renderItem={({ item }) => <TransactionItem item={item} />}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        initialNumToRender={10}
+        windowSize={5}
+        removeClippedSubviews
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>No transactions found</Text>

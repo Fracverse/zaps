@@ -24,7 +24,7 @@ interface ButtonProps {
   accessibilityHint?: string;
 }
 
-export const Button = ({
+export const Button = React.memo(function Button({
   title,
   onPress,
   variant = "primary",
@@ -35,7 +35,7 @@ export const Button = ({
   icon,
   accessibilityLabel,
   accessibilityHint,
-}: ButtonProps) => {
+}: ButtonProps) {
   const getBackgroundColor = () => {
     switch (variant) {
       case "primary":
@@ -104,7 +104,7 @@ export const Button = ({
       )}
     </TouchableOpacity>
   );
-};
+});
 
 const styles = StyleSheet.create({
   button: {

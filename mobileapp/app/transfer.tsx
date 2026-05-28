@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { ErrorBoundary } from "../src/components/ErrorBoundary";
 import {
   View,
   Text,
@@ -82,7 +83,7 @@ const TokenSelectCard = ({
   </TouchableOpacity>
 );
 
-export default function TransferScreen() {
+function TransferScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [transferType, setTransferType] = useState<
@@ -543,3 +544,11 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === "ios" ? 40 : 20,
   },
 });
+
+export default function TransferScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <TransferScreen />
+    </ErrorBoundary>
+  );
+}

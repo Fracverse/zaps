@@ -13,6 +13,9 @@ const CACHE_KEY = "tx_cache_v1";
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const PAGE_SIZE = 20;
 
+// 30-second in-memory cache to deduplicate rapid identical requests
+const memCache = new Map<string, { data: TransactionPage; expiresAt: number }>();
+
 // ── Mock data (replace with real API base URL from config) ────────────────────
 const MOCK_TRANSACTIONS: Transaction[] = [
   {
@@ -185,6 +188,10 @@ export async function fetchTransactions(
   filters: TransactionFilters,
   cursor: string | null
 ): Promise<TransactionPage> {
+  const cacheKey = JSON.stringify({ filters, cursor });
+  const cached = memCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+
   // In production replace this block with a real API call:
   // const res = await fetchWithRetry(`${API_BASE}/transactions?cursor=${cursor}&...`);
   // const json = await res.json();
@@ -249,7 +256,9 @@ export async function fetchTransactions(
   // Update cache with latest full list
   await writeCache(all);
 
-  return { items: page, nextCursor, total: filtered.length };
+  const result: TransactionPage = { items: page, nextCursor, total: filtered.length };
+  memCache.set(cacheKey, { data: result, expiresAt: Date.now() + 30_000 });
+  return result;
 }
 
 /** Fetch a single transaction by id (cache-first). */
@@ -266,5 +275,6 @@ export async function fetchTransactionById(
 
 /** Invalidate the local cache (call after a new transaction is submitted). */
 export async function invalidateTransactionCache(): Promise<void> {
+  memCache.clear();
   await AsyncStorage.removeItem(CACHE_KEY);
 }
