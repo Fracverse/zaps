@@ -40,3 +40,27 @@ groups:
           severity: critical
         annotations:
           summary: BLINKS backend Prometheus scrape target is down
+
+      - alert: PaymentSuccessRateLow
+        expr: (sum(rate(payment_transactions_total{status="completed"}[10m])) / clamp_min(sum(rate(payment_transactions_total{status="created"}[10m])), 1)) < 0.9
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: BLINKS payment success rate is below 90% over 10m
+
+      - alert: MerchantPaymentSuccessRateLow
+        expr: (sum(rate(payment_transactions_total{status="completed"}[10m])) by (merchant_id) / clamp_min(sum(rate(payment_transactions_total{status="created"}[10m])) by (merchant_id), 1)) < 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: BLINKS merchant payment success rate is below 90% over 10m
+
+      - alert: NoPaymentsCreated
+        expr: increase(payment_transactions_total{status="created"}[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: No payments created in the last 15 minutes

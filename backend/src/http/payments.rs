@@ -4,6 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::{
@@ -77,6 +78,7 @@ pub async fn create_payment(
     State(services): State<Arc<ServiceContainer>>,
     Json(request): Json<CreatePaymentRequest>,
 ) -> Result<Json<PaymentResponse>, ApiError> {
+    let start = Instant::now();
     // Get user from auth context (would need to implement proper auth extraction)
     // For now, using a placeholder address
     let from_address = "GEXAMPLE_ADDRESS".to_string();
@@ -131,6 +133,14 @@ pub async fn create_payment(
         .await;
 
     MetricsService::record_business_event("payment", "created");
+    MetricsService::record_payment_transaction(
+        &payment.merchant_id,
+        "created",
+        "api",
+        &payment.send_asset,
+        payment.send_amount,
+    );
+    MetricsService::record_payment_processing_duration("api", "created", start.elapsed().as_secs_f64());
 
     Ok(Json(PaymentResponse {
         id: Uuid::parse_str(&payment.id).unwrap_or_default(),

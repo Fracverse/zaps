@@ -4,6 +4,7 @@ use prometheus::{
     register_histogram_vec, CounterVec, Encoder, Gauge, GaugeVec, HistogramVec, TextEncoder,
 };
 use serde::Serialize;
+use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -144,6 +145,14 @@ lazy_static! {
     )
     .expect("Can't create payment_processing_duration_seconds metric");
 
+    /// Payment transaction lifecycle counter
+    pub static ref PAYMENT_TRANSACTIONS_TOTAL: CounterVec = register_counter_vec!(
+        "payment_transactions_total",
+        "Total payment transactions by merchant, status, method and currency",
+        &["merchant_id", "status", "payment_method", "currency"]
+    )
+    .expect("Can't create payment_transactions_total metric");
+
     /// Application start time (Unix timestamp)
     static ref APP_START_TIME: AtomicU64 = AtomicU64::new(
         SystemTime::now()
@@ -151,6 +160,9 @@ lazy_static! {
             .unwrap()
             .as_secs()
     );
+
+    /// In-memory counters for computing success rate gauge (process lifetime).
+    static ref PAYMENT_OUTCOME_COUNTS: DashMap<String, (u64, u64, u64)> = DashMap::new();
 }
 
 /// Metrics payload as specified in the issue
@@ -275,6 +287,7 @@ pub struct AlertPayload {
         let _ = &*PAYMENT_VOLUME_TOTAL;
         let _ = &*PAYMENT_SUCCESS_RATE;
         let _ = &*PAYMENT_PROCESSING_DURATION_SECONDS;
+        let _ = &*PAYMENT_TRANSACTIONS_TOTAL;
 
         tracing::info!("Metrics service initialized");
     }
@@ -302,6 +315,55 @@ pub struct AlertPayload {
         PAYMENT_PROCESSING_DURATION_SECONDS
             .with_label_values(&[payment_method, status])
             .observe(duration_secs);
+    }
+
+    fn currency_label_from_asset(asset: &str) -> String {
+        if asset.eq_ignore_ascii_case("XLM") {
+            return "XLM".to_string();
+        }
+
+        // Expected format: CODE:ISSUER
+        asset.split(':').next().unwrap_or(asset).to_string()
+    }
+
+    /// Record a payment lifecycle event and refresh derived gauges.
+    pub fn record_payment_transaction(
+        merchant_id: &str,
+        status: &str,
+        payment_method: &str,
+        send_asset: &str,
+        amount: i64,
+    ) {
+        let currency = Self::currency_label_from_asset(send_asset);
+
+        PAYMENT_TRANSACTIONS_TOTAL
+            .with_label_values(&[merchant_id, status, payment_method, &currency])
+            .inc();
+
+        // Treat volume as "requested" unless status indicates a finalized successful payment.
+        if status == "created" || status == "completed" {
+            Self::record_payment_volume(merchant_id, &currency, amount as f64);
+        }
+
+        let mut entry = PAYMENT_OUTCOME_COUNTS
+            .entry(merchant_id.to_string())
+            .or_insert((0, 0, 0));
+
+        match status {
+            "created" => entry.value_mut().0 = entry.value().0.saturating_add(1),
+            "completed" => entry.value_mut().1 = entry.value().1.saturating_add(1),
+            "failed" => entry.value_mut().2 = entry.value().2.saturating_add(1),
+            _ => {}
+        }
+
+        let (created, completed, failed) = *entry.value();
+        let denom = created.saturating_add(failed);
+        let success_rate_percent = if denom == 0 {
+            0.0
+        } else {
+            (completed as f64 / denom as f64) * 100.0
+        };
+        Self::update_payment_success_rate(merchant_id, success_rate_percent);
     }
 
     /// Get application uptime in seconds
@@ -604,6 +666,43 @@ pub struct AlertPayload {
         //     .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod payment_metrics_tests {
+    use super::*;
+
+    #[test]
+    fn record_payment_transaction_updates_counters_and_success_rate() {
+        MetricsService::init();
+
+        MetricsService::record_payment_transaction("m1", "created", "api", "XLM", 100);
+        MetricsService::record_payment_transaction("m1", "completed", "stellar_indexer", "XLM", 100);
+
+        // Counter exists and has been incremented.
+        let families = PAYMENT_TRANSACTIONS_TOTAL.collect();
+        let total: f64 = families
+            .first()
+            .unwrap()
+            .get_metric()
+            .iter()
+            .map(|m| m.get_counter().get_value())
+            .sum();
+        assert!(total >= 2.0);
+
+        // Derived gauge is updated for merchant.
+        let gauge_families = PAYMENT_SUCCESS_RATE.collect();
+        let merchant_gauge = gauge_families
+            .first()
+            .unwrap()
+            .get_metric()
+            .iter()
+            .find(|m| m.get_label().iter().any(|l| l.get_name() == "merchant_id" && l.get_value() == "m1"))
+            .unwrap()
+            .get_gauge()
+            .get_value();
+        assert!(merchant_gauge > 0.0);
     }
 }
 

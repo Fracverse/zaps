@@ -64,7 +64,8 @@ pub async fn json_metrics(State(services): State<Arc<ServiceContainer>>) -> Json
     let status = services.db_pool.status();
     let db_pool_size = status.size;
     // active connections = size - available (deadpool status exposes `available`)
-    let active_connections = db_pool_size.saturating_sub(status.available);
+    let available = usize::try_from(status.available).unwrap_or(0);
+    let active_connections = db_pool_size.saturating_sub(available);
     MetricsService::update_db_pool_status(db_pool_size, active_connections);
 
     let detailed = MetricsService::get_detailed_metrics();

@@ -1,5 +1,6 @@
 use crate::api_error::ApiError;
 use crate::config::Config;
+use crate::service::MetricsService;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
 use reqwest::Client;
@@ -282,16 +283,37 @@ impl IndexerService {
 
             // Update corresponding payment record if it exists
             if let Some(_dest) = destination {
-                let update_result = client
-                    .execute(
-                        "UPDATE payments SET tx_hash = $1, status = 'completed', updated_at = NOW()
-                         WHERE from_address = $2 AND status = 'processing'
+                // Find the most recent matching payment and update it by id to avoid UPDATE ... LIMIT
+                let payment_row = client
+                    .query_opt(
+                        "SELECT id, merchant_id, send_asset, send_amount, created_at
+                         FROM payments
+                         WHERE from_address = $1 AND status IN ('pending','processing')
+                         ORDER BY created_at DESC
                          LIMIT 1",
-                        &[&tx_hash, &source],
+                        &[&source],
                     )
                     .await?;
 
-                if update_result > 0 {
+                if let Some(payment_row) = payment_row {
+                    let payment_id: String = payment_row.get("id");
+                    let merchant_id: String = payment_row.get("merchant_id");
+                    let send_asset: String = payment_row.get("send_asset");
+                    let send_amount: i64 = payment_row.get("send_amount");
+                    let created_at: chrono::DateTime<chrono::Utc> = payment_row.get("created_at");
+
+                    let update_result = client
+                        .execute(
+                            "UPDATE payments SET tx_hash = $1, status = 'completed', updated_at = NOW()
+                             WHERE id = $2",
+                            &[&tx_hash, &payment_id],
+                        )
+                        .await?;
+
+                    if update_result == 0 {
+                        continue;
+                    }
+
                     // Mark event as processed
                     client
                         .execute(
@@ -301,6 +323,20 @@ impl IndexerService {
                         .await?;
 
                     processed += 1;
+                    let duration_secs =
+                        (chrono::Utc::now() - created_at).num_milliseconds() as f64 / 1000.0;
+                    MetricsService::record_payment_transaction(
+                        &merchant_id,
+                        "completed",
+                        "stellar_indexer",
+                        &send_asset,
+                        send_amount,
+                    );
+                    MetricsService::record_payment_processing_duration(
+                        "stellar_indexer",
+                        "completed",
+                        duration_secs.max(0.0),
+                    );
                     info!(tx_hash = %tx_hash, "Payment event processed");
                 }
             }

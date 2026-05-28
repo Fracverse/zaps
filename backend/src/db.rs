@@ -3,7 +3,6 @@ use std::str::FromStr;
 use tokio_postgres::NoTls;
 use tokio::time::{sleep, Duration};
 use crate::service::MetricsService;
-use std::sync::Arc;
 use std::cmp;
 
 pub type DbPool = Pool;
@@ -56,10 +55,9 @@ pub fn start_db_pool_monitoring(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            match tokio_postgres::Config::from_str(&database_url)
-                .and_then(|cfg| cfg.connect(NoTls))
-            {
-                Ok((client, connection)) => {
+            match tokio_postgres::Config::from_str(&database_url) {
+                Ok(cfg) => match cfg.connect(NoTls).await {
+                    Ok((client, connection)) => {
                     // detach connection handling
                     tokio::spawn(async move {
                         if let Err(e) = connection.await {
@@ -83,9 +81,13 @@ pub fn start_db_pool_monitoring(
                         Err(e) => tracing::warn!(error = %e, "Failed to query pg_stat_activity"),
                     }
 
-                    let _ = client.close().await;
                 }
-                Err(e) => tracing::error!(error = %e, "Failed to connect to Postgres for monitoring"),
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        "Failed to connect to Postgres for monitoring"
+                    ),
+                },
+                Err(e) => tracing::error!(error = %e, "Invalid Postgres config for monitoring"),
             }
 
             sleep(Duration::from_secs(check_interval_secs)).await;
@@ -95,20 +97,19 @@ pub fn start_db_pool_monitoring(
 
 /// Health check for database connectivity.
 pub async fn health_check_db(database_url: &str) -> bool {
-    match tokio_postgres::Config::from_str(database_url)
-        .and_then(|cfg| cfg.connect(NoTls))
-        .await
-    {
-        Ok((mut client, connection)) => {
+    match tokio_postgres::Config::from_str(database_url) {
+        Ok(cfg) => match cfg.connect(NoTls).await {
+            Ok((mut client, connection)) => {
             // drive connection
             tokio::spawn(async move {
                 let _ = connection.await;
             });
 
             let res = client.query_one("SELECT 1", &[]).await.is_ok();
-            let _ = client.close().await;
             res
         }
+            Err(_) => false,
+        },
         Err(_) => false,
     }
 }
