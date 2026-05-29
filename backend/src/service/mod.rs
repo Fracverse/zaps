@@ -19,6 +19,7 @@ pub mod reconciliation_service;
 pub mod session_service;
 pub mod soroban_service;
 pub mod storage_service;
+pub mod webhook_service;
 
 pub use anchor_service::AnchorService;
 pub use analytics_service::{
@@ -48,6 +49,7 @@ pub use reconciliation_service::{
 pub use session_service::SessionService;
 pub use soroban_service::SorobanService;
 pub use storage_service::StorageService;
+pub use webhook_service::{WebhookDelivery, WebhookEndpoint, WebhookService};
 
 use crate::config::Config;
 use deadpool_postgres::Pool;
@@ -75,6 +77,7 @@ pub struct ServiceContainer {
     pub storage: StorageService,
     pub batch: BatchService,
     pub session: SessionService,
+    pub webhook: WebhookService,
     pub config: Config,
     pub db_pool: Arc<Pool>,
 }
@@ -103,6 +106,7 @@ impl ServiceContainer {
         let storage = StorageService::new(config.clone());
         let batch = BatchService::new(db_pool.clone(), config.clone());
         let session = SessionService::new(db_pool.clone(), config.clone());
+        let webhook = WebhookService::new(db_pool.clone(), config.clone());
 
         Ok(Self {
             identity,
@@ -125,6 +129,7 @@ impl ServiceContainer {
             storage,
             batch,
             session,
+            webhook,
             config,
             db_pool,
         })

@@ -12,7 +12,7 @@ use crate::{
     http::{
         admin, analytics, audit, auth, batches, currency, disputes, files, health, identity, jobs,
         metrics as metrics_http, notifications, payments, payouts, profiles, transfers, version as version_http,
-        withdrawals,
+        withdrawals, webhooks,
     },
     http::{
         get_reconciliation_audit_log, get_reconciliations, resolve_reconciliation,
@@ -208,6 +208,15 @@ pub async fn create_app(
             get(disputes::list_evidence),
         );
 
+    // -------------------- Webhooks --------------------
+    let webhook_routes = Router::new()
+        .route("/webhooks", post(webhooks::register_webhook))
+        .route("/webhooks/:merchant_id", get(webhooks::list_webhooks))
+        .route("/webhooks/:merchant_id/:endpoint_id", delete(webhooks::delete_webhook))
+        .route("/webhooks/:endpoint_id/deliveries", get(webhooks::get_webhook_deliveries))
+        .route("/webhooks/:merchant_id/dashboard", get(webhooks::get_webhook_dashboard))
+        .route("/webhooks/:merchant_id/test", post(webhooks::test_webhook));
+
     // -------------------- Jobs --------------------
     let _job_routes = jobs::create_job_routes();
 
@@ -230,7 +239,8 @@ pub async fn create_app(
         .nest("/audit", audit_routes)
         .nest("/", currency_routes)
         .nest("/", analytics_routes)
-        .nest("/", reconciliation_routes);
+        .nest("/", reconciliation_routes)
+        .nest("/", webhook_routes);
 
     // v2-only protected routes (disputes)
     let v2_only_protected = Router::new()

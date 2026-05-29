@@ -19,6 +19,7 @@ pub mod reconciliation;
 pub mod transfers;
 pub mod version;
 pub mod withdrawals;
+pub mod webhooks;
 
 pub use admin::*;
 pub use analytics::*;
@@ -44,3 +45,4 @@ pub use reconciliation::{
 pub use transfers::*;
 pub use version::*;
 pub use withdrawals::*;
+pub use webhooks::*;
