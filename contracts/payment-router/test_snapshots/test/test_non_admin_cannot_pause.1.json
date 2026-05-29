@@ -259,7 +259,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000003"
               },
               {
-                "symbol": "get_version"
+                "symbol": "is_paused"
               }
             ],
             "data": "void"
@@ -280,11 +280,11 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_version"
+                "symbol": "is_paused"
               }
             ],
             "data": {
-              "u32": 1
+              "bool": false
             }
           }
         }

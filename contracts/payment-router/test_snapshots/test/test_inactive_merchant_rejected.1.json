@@ -38,7 +38,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 1000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -251,7 +251,7 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
             "key": {
-              "bytes": "696e616374697665"
+              "bytes": "6d657263685f64656164"
             },
             "durability": "persistent"
           }
@@ -264,7 +264,7 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
                 "key": {
-                  "bytes": "696e616374697665"
+                  "bytes": "6d657263685f64656164"
                 },
                 "durability": "persistent",
                 "val": {
@@ -471,7 +471,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 1000000
+                          "lo": 10000000
                         }
                       }
                     },
@@ -782,7 +782,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 1000000
+                    "lo": 10000000
                   }
                 }
               ]
@@ -816,7 +816,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 1000000
+                "lo": 10000000
               }
             }
           }
@@ -866,7 +866,7 @@
             "data": {
               "vec": [
                 {
-                  "bytes": "696e616374697665"
+                  "bytes": "6d657263685f64656164"
                 },
                 {
                   "map": [
@@ -1012,7 +1012,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "bytes": "696e616374697665"
+                  "bytes": "6d657263685f64656164"
                 },
                 {
                   "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
@@ -1055,7 +1055,7 @@
               }
             ],
             "data": {
-              "bytes": "696e616374697665"
+              "bytes": "6d657263685f64656164"
             }
           }
         }
@@ -1149,7 +1149,7 @@
                     "symbol": "merchant_id"
                   },
                   "val": {
-                    "bytes": "696e616374697665"
+                    "bytes": "6d657263685f64656164"
                   }
                 },
                 {
@@ -1318,7 +1318,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                     },
                     {
-                      "bytes": "696e616374697665"
+                      "bytes": "6d657263685f64656164"
                     },
                     {
                       "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
