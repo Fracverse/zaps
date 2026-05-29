@@ -120,6 +120,47 @@ pub struct ComplianceConfig {
     pub risk_thresholds: RiskThresholds,
     #[serde(default = "default_compliance_alert_webhook")]
     pub alert_webhook_url: Option<String>,
+    #[serde(default)]
+    pub ml_config: MLComplianceConfig,
+    #[serde(default)]
+    pub behavioral_config: BehavioralAnalysisConfig,
+    #[serde(default)]
+    pub case_management_enabled: bool,
+    #[serde(default)]
+    pub multiple_sanctions_providers: Vec<SanctionsProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MLComplianceConfig {
+    pub enabled: bool,
+    pub model_version: String,
+    pub model_endpoint: Option<String>,
+    pub confidence_threshold: f64, // 0-1.0, minimum confidence to trust ML predictions
+    pub behavioral_weight: f64,    // weight in final risk score calculation
+    pub network_weight: f64,
+    pub geographic_weight: f64,
+    pub temporal_weight: f64,
+    pub device_weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BehavioralAnalysisConfig {
+    pub enabled: bool,
+    pub transaction_frequency_threshold: f64, // transactions per day
+    pub amount_deviation_threshold: f64,      // standard deviations
+    pub geographic_anomaly_threshold: f64,    // 0-1.0
+    pub time_pattern_threshold: f64,          // 0-1.0
+    pub device_anomaly_threshold: f64,        // 0-1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SanctionsProviderConfig {
+    pub provider_type: String, // "ofac", "un", "eu", "fca"
+    pub enabled: bool,
+    pub api_url: String,
+    pub api_key: String,
+    pub priority: i32,
+    pub timeout_seconds: u32,
 }
 
 fn default_compliance_alert_webhook() -> Option<String> {
@@ -286,6 +327,44 @@ impl Default for Config {
                     medium_risk_amount: 1_000_000, // 1,000 USD
                     suspicious_patterns: vec![],
                 },
+                ml_config: MLComplianceConfig {
+                    enabled: true,
+                    model_version: "v1.0".to_string(),
+                    model_endpoint: None,
+                    confidence_threshold: 0.7,
+                    behavioral_weight: 0.25,
+                    network_weight: 0.20,
+                    geographic_weight: 0.20,
+                    temporal_weight: 0.15,
+                    device_weight: 0.20,
+                },
+                behavioral_config: BehavioralAnalysisConfig {
+                    enabled: true,
+                    transaction_frequency_threshold: 10.0, // transactions per day
+                    amount_deviation_threshold: 3.0,       // 3 standard deviations
+                    geographic_anomaly_threshold: 0.7,
+                    time_pattern_threshold: 0.7,
+                    device_anomaly_threshold: 0.7,
+                },
+                case_management_enabled: true,
+                multiple_sanctions_providers: vec![
+                    SanctionsProviderConfig {
+                        provider_type: "ofac".to_string(),
+                        enabled: true,
+                        api_url: "https://api.ofac.example.com".to_string(),
+                        api_key: "ofac-key".to_string(),
+                        priority: 1,
+                        timeout_seconds: 5,
+                    },
+                    SanctionsProviderConfig {
+                        provider_type: "un".to_string(),
+                        enabled: true,
+                        api_url: "https://api.un-sanctions.example.com".to_string(),
+                        api_key: "un-key".to_string(),
+                        priority: 2,
+                        timeout_seconds: 5,
+                    },
+                ],
             },
             environment: EnvironmentType::Development,
             queue_config: QueueConfig {

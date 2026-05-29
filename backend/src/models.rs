@@ -753,3 +753,115 @@ pub struct PayoutReconciliation {
     pub reconciled_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
+
+// =============================================================================
+// ML-Based Compliance & Risk Assessment Models
+// =============================================================================
+
+/// Behavioral profile tracking user transaction patterns
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehavioralProfile {
+    pub user_id: String,
+    pub average_transaction_amount: f64,
+    pub transaction_frequency: f64, // transactions per day
+    pub total_transactions: i64,
+    pub high_risk_transaction_count: i64,
+    pub geographic_diversity_score: f64, // 0.0 to 1.0
+    pub time_pattern_score: f64,         // 0.0 to 1.0 (1.0 = unusual time patterns)
+    pub device_diversity_score: f64,     // 0.0 to 1.0
+    pub merchant_category_diversity: f64, // 0.0 to 1.0
+    pub last_update: DateTime<Utc>,
+}
+
+/// Multiple sanctions database provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SanctionsProvider {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String, // e.g., "ofac", "un", "eu", "fca"
+    pub api_url: String,
+    pub api_key: String,
+    pub enabled: bool,
+    pub priority: i32, // higher = checked first
+    pub timeout_seconds: u32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// ML-based risk score calculation result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MLRiskScore {
+    pub assessment_id: String,
+    pub model_version: String,
+    pub base_risk_score: f64,     // 0-100
+    pub behavioral_risk: f64,     // 0-100
+    pub network_risk: f64,        // 0-100
+    pub geographic_risk: f64,     // 0-100
+    pub temporal_risk: f64,       // 0-100
+    pub device_risk: f64,         // 0-100
+    pub final_ml_score: f64,      // 0-100 (weighted combination)
+    pub confidence_level: f64,    // 0-1.0 (model confidence)
+    pub risk_factors: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Risk indicator for specific transaction behaviors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskIndicator {
+    pub id: String,
+    pub assessment_id: String,
+    pub indicator_type: String, // e.g., "structured_transaction", "circular_flow", "layering"
+    pub severity: String,        // "low", "medium", "high", "critical"
+    pub description: String,
+    pub detected_at: DateTime<Utc>,
+}
+
+/// Compliance case for manual review and investigation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplianceCase {
+    pub id: String,
+    pub user_id: String,
+    pub assessment_id: Option<String>,
+    pub case_type: String, // e.g., "high_risk_transaction", "behavioral_anomaly", "sanctions_hit"
+    pub status: String,    // "open", "under_investigation", "escalated", "resolved", "closed"
+    pub priority: String,  // "low", "medium", "high", "critical"
+    pub risk_score: f64,
+    pub assigned_analyst: Option<String>,
+    pub description: String,
+    pub findings: Option<String>,
+    pub resolution: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// Case activity log
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaseActivityLog {
+    pub id: String,
+    pub case_id: String,
+    pub activity_type: String, // "created", "assigned", "updated", "commented", "escalated", "resolved"
+    pub performed_by: String,
+    pub details: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Compliance report aggregating metrics and findings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplianceReport {
+    pub id: String,
+    pub report_period: String, // "daily", "weekly", "monthly"
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    pub total_transactions_screened: i64,
+    pub high_risk_transactions: i64,
+    pub blocked_transactions: i64,
+    pub sanctioned_addresses_detected: i64,
+    pub suspicious_patterns_detected: i64,
+    pub cases_opened: i64,
+    pub cases_resolved: i64,
+    pub cases_escalated: i64,
+    pub total_amount_flagged: i64,
+    pub ml_model_performance: serde_json::Value, // precision, recall, f1-score
+    pub recommendations: Vec<String>,
+    pub created_at: DateTime<Utc>,
+}
