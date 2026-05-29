@@ -23,6 +23,7 @@ members = [
     "payment-splitter",
     "loyalty-points",
     "payment-insurance",
+    "payment-scheduler",
 ]
 
 [workspace.dependencies]
