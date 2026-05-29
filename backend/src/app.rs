@@ -11,7 +11,7 @@ use crate::{
     config::Config,
     http::{
         admin, analytics, audit, auth, batches, currency, disputes, files, health, identity, jobs,
-        metrics as metrics_http, notifications, payments, profiles, transfers, version as version_http,
+        metrics as metrics_http, notifications, payments, payouts, profiles, transfers, version as version_http,
         withdrawals,
     },
     http::{
@@ -83,6 +83,14 @@ pub async fn create_app(
         .route("/payments/:id/status", get(payments::get_payment_status))
         .route("/qr/generate", post(payments::generate_qr))
         .route("/nfc/validate", post(payments::validate_nfc));
+
+    // -------------------- Payouts --------------------
+    let payout_routes = Router::new()
+        .route("/payouts", post(payouts::create_payout))
+        .route("/payouts/:id", get(payouts::get_payout))
+        .route("/payouts/batch", post(payouts::create_payout_batch))
+        .route("/payouts/batch/:batch_id", get(payouts::get_payout_batch))
+        .route("/payouts/:id/retry", post(payouts::retry_payout));
 
     // -------------------- Transfers --------------------
     let transfer_routes = Router::new()
@@ -211,6 +219,7 @@ pub async fn create_app(
     let shared_protected = Router::new()
         .nest("/identity", identity_routes)
         .nest("/payments", payment_routes)
+        .nest("/payouts", payout_routes)
         .nest("/transfers", transfer_routes)
         .nest("/withdrawals", withdrawal_routes)
         .nest("/notifications", notification_routes)

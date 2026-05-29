@@ -662,3 +662,94 @@ pub struct ReconciliationAuditLog {
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+// =============================================================================
+// Merchant Payout Models
+// =============================================================================
+
+/// Payout status lifecycle
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PayoutStatus {
+    Pending,
+    Scheduled,
+    Processing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl FromStr for PayoutStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "scheduled" => PayoutStatus::Scheduled,
+            "processing" => PayoutStatus::Processing,
+            "completed" => PayoutStatus::Completed,
+            "failed" => PayoutStatus::Failed,
+            "cancelled" => PayoutStatus::Cancelled,
+            _ => PayoutStatus::Pending,
+        })
+    }
+}
+
+impl fmt::Display for PayoutStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            PayoutStatus::Pending => "pending",
+            PayoutStatus::Scheduled => "scheduled",
+            PayoutStatus::Processing => "processing",
+            PayoutStatus::Completed => "completed",
+            PayoutStatus::Failed => "failed",
+            PayoutStatus::Cancelled => "cancelled",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Individual payout record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Payout {
+    pub id: String,
+    pub merchant_id: String,
+    pub batch_id: Option<String>,
+    pub amount: i64,
+    pub currency: String,
+    pub destination_address: String,
+    pub status: PayoutStatus,
+    pub tx_hash: Option<String>,
+    pub failure_reason: Option<String>,
+    pub retry_count: i32,
+    pub scheduled_at: Option<DateTime<Utc>>,
+    pub processed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Payout batch for bulk processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayoutBatch {
+    pub id: String,
+    pub merchant_id: String,
+    pub total_amount: i64,
+    pub currency: String,
+    pub payout_count: i32,
+    pub status: PayoutStatus,
+    pub scheduled_at: DateTime<Utc>,
+    pub processed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Payout reconciliation record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayoutReconciliation {
+    pub id: String,
+    pub payout_id: String,
+    pub anchor_tx_id: Option<String>,
+    pub status: String,
+    pub discrepancy: Option<String>,
+    pub reconciled_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}

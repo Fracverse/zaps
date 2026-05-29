@@ -13,6 +13,7 @@ pub mod jobs;
 pub mod metrics;
 pub mod notifications;
 pub mod payments;
+pub mod payouts;
 pub mod profiles;
 pub mod reconciliation;
 pub mod transfers;
@@ -34,6 +35,7 @@ pub use jobs::*;
 pub use metrics::*;
 pub use notifications::*;
 pub use payments::*;
+pub use payouts::*;
 pub use profiles::*;
 pub use reconciliation::{
     get_audit_log as get_reconciliation_audit_log, get_reconciliations,

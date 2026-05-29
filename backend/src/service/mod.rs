@@ -12,6 +12,7 @@ pub mod indexer_service;
 pub mod metrics_service;
 pub mod notification_service;
 pub mod payment_service;
+pub mod payout_service;
 pub mod profile_service;
 pub mod rate_limit_service;
 pub mod reconciliation_service;
@@ -38,6 +39,7 @@ pub use metrics_service::{
 };
 pub use notification_service::NotificationService;
 pub use payment_service::PaymentService;
+pub use payout_service::PayoutService;
 pub use profile_service::ProfileService;
 pub use rate_limit_service::RateLimitService;
 pub use reconciliation_service::{
@@ -55,6 +57,7 @@ use std::sync::Arc;
 pub struct ServiceContainer {
     pub identity: IdentityService,
     pub payment: PaymentService,
+    pub payout: PayoutService,
     pub dispute: DisputeService,
     pub bridge: BridgeService,
     pub anchor: AnchorService,
@@ -82,6 +85,7 @@ impl ServiceContainer {
 
         let identity = IdentityService::new(db_pool.clone(), config.clone());
         let payment = PaymentService::new(db_pool.clone(), config.clone());
+        let payout = PayoutService::new(db_pool.clone(), config.clone());
         let dispute = DisputeService::new(db_pool.clone(), config.clone());
         let bridge = BridgeService::new(db_pool.clone(), config.clone());
         let anchor = AnchorService::new(db_pool.clone(), config.clone());
@@ -103,6 +107,7 @@ impl ServiceContainer {
         Ok(Self {
             identity,
             payment,
+            payout,
             dispute,
             bridge,
             anchor,
