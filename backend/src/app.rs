@@ -114,7 +114,11 @@ pub async fn create_app(
         .route("/me", get(profiles::get_my_profile))
         .route("/:user_id", get(profiles::get_profile))
         .route("/:user_id", patch(profiles::update_profile))
-        .route("/:user_id", delete(profiles::delete_profile));
+        .route("/:user_id", delete(profiles::delete_profile))
+        .route("/avatar", post(profiles::upload_avatar))
+        .route("/preferences", get(profiles::get_preferences).put(profiles::update_preferences))
+        .route("/:user_id/verify", patch(profiles::update_verification))
+        .route("/:user_id/activity", get(profiles::get_profile_activity));
 
     // -------------------- Files --------------------
     let files_routes = Router::new()

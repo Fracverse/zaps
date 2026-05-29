@@ -405,6 +405,7 @@ pub struct TransactionRiskAssessment {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserProfile {
+    pub verification_status: String,
     pub id: String,
     pub user_id: String,
     pub display_name: String,

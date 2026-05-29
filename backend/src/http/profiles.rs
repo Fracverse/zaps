@@ -81,6 +81,7 @@ pub struct UpdateUserProfileDto {
 
 #[derive(Debug, Serialize)]
 pub struct UserProfileResponseDto {
+    pub verification_status: String,
     pub id: String,
     pub user_id: String,
     pub display_name: String,
@@ -263,4 +264,412 @@ pub async fn get_my_profile(
         created_at: profile.created_at,
         updated_at: profile.updated_at,
     }))
+}
+// =============================================================================
+// Profile Avatar Upload
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAvatarDto {
+    pub avatar_url: String,
+}
+
+pub async fn upload_avatar(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(request): Json<UpdateAvatarDto>,
+) -> Result<Json<UserProfileResponseDto>, ApiError> {
+    if request.avatar_url.len() > 2048 {
+        return Err(ApiError::Validation("Avatar URL must be 2048 characters or less".into()));
+    }
+    if !request.avatar_url.starts_with("http://") && !request.avatar_url.starts_with("https://") && !request.avatar_url.starts_with("/") {
+        return Err(ApiError::Validation("Avatar URL must be a valid HTTP/HTTPS URL or relative path".into()));
+    }
+
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let profile = services.profile.update_avatar(user_uuid, request.avatar_url).await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        user_uuid,
+        "avatar_updated",
+        Some("Profile avatar updated"),
+        None,
+    ).await;
+
+    Ok(Json(UserProfileResponseDto {
+        id: profile.id,
+        user_id: user.user_id,
+        display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
+        bio: profile.bio,
+        country: profile.country,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+    }))
+}
+
+// =============================================================================
+// Profile Verification
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateVerificationDto {
+    pub verification_status: String,
+}
+
+pub async fn update_verification(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(target_user_id): Path<String>,
+    Json(request): Json<UpdateVerificationDto>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Admin only
+    if user.role != Role::Admin {
+        return Err(ApiError::Authorization("Only admins can update verification status".into()));
+    }
+
+    let valid_statuses = ["unverified", "pending", "verified", "rejected"];
+    if !valid_statuses.contains(&request.verification_status.as_str()) {
+        return Err(ApiError::Validation(
+            "verification_status must be one of: unverified, pending, verified, rejected".into(),
+        ));
+    }
+
+    let user_model = services.identity.get_user_by_id(&target_user_id).await?;
+    let target_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let profile = services
+        .profile
+        .update_verification_status(target_uuid, &request.verification_status)
+        .await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        target_uuid,
+        "verification_updated",
+        Some(&format!("Verification status changed to {}", request.verification_status)),
+        None,
+    ).await;
+
+    Ok(Json(json!({
+        "user_id": target_user_id,
+        "verification_status": profile.verification_status,
+        "updated_at": profile.updated_at,
+    })))
+}
+
+// =============================================================================
+// User Preferences
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePreferencesDto {
+    pub preferences: serde_json::Value,
+}
+
+pub async fn get_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let prefs = services.profile.get_preferences(user_uuid).await?;
+
+    match prefs {
+        Some(p) => Ok(Json(json!({
+            "user_id": user.user_id,
+            "preferences": p.preferences,
+            "updated_at": p.updated_at,
+        }))),
+        None => Ok(Json(json!({
+            "user_id": user.user_id,
+            "preferences": {},
+            "updated_at": null,
+        }))),
+    }
+}
+
+pub async fn update_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(request): Json<UpdatePreferencesDto>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let prefs = services
+        .profile
+        .upsert_preferences(user_uuid, request.preferences)
+        .await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        user_uuid,
+        "preferences_updated",
+        Some("User preferences updated"),
+        None,
+    ).await;
+
+    Ok(Json(json!({
+        "user_id": user.user_id,
+        "preferences": prefs.preferences,
+        "updated_at": prefs.updated_at,
+    })))
+}
+
+// =============================================================================
+// Profile Activity History
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ActivityQueryParams {
+    #[serde(default = "default_activity_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_activity_limit() -> i64 {
+    20
+}
+
+pub async fn get_profile_activity(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(user_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<ActivityQueryParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let (activities, total) = services
+        .profile
+        .get_activity(user_uuid, params.limit, params.offset)
+        .await?;
+
+    Ok(Json(json!({
+        "user_id": user_id,
+        "activities": activities.iter().map(|a| json!({
+            "id": a.id,
+            "activity_type": a.activity_type,
+            "description": a.description,
+            "metadata": a.metadata,
+            "created_at": a.created_at,
+        })).collect::<Vec<_>>(),
+        "total": total,
+        "limit": params.limit,
+        "offset": params.offset,
+    })))
+}
+// =============================================================================
+// Profile Avatar Upload
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAvatarDto {
+    pub avatar_url: String,
+}
+
+pub async fn upload_avatar(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(request): Json<UpdateAvatarDto>,
+) -> Result<Json<UserProfileResponseDto>, ApiError> {
+    if request.avatar_url.len() > 2048 {
+        return Err(ApiError::Validation("Avatar URL must be 2048 characters or less".into()));
+    }
+    if !request.avatar_url.starts_with("http://") && !request.avatar_url.starts_with("https://") && !request.avatar_url.starts_with("/") {
+        return Err(ApiError::Validation("Avatar URL must be a valid HTTP/HTTPS URL or relative path".into()));
+    }
+
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let profile = services.profile.update_avatar(user_uuid, request.avatar_url).await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        user_uuid,
+        "avatar_updated",
+        Some("Profile avatar updated"),
+        None,
+    ).await;
+
+    Ok(Json(UserProfileResponseDto {
+        id: profile.id,
+        user_id: user.user_id,
+        display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
+        bio: profile.bio,
+        country: profile.country,
+        created_at: profile.created_at,
+        updated_at: profile.updated_at,
+    }))
+}
+
+// =============================================================================
+// Profile Verification
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateVerificationDto {
+    pub verification_status: String,
+}
+
+pub async fn update_verification(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(target_user_id): Path<String>,
+    Json(request): Json<UpdateVerificationDto>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Admin only
+    if user.role != Role::Admin {
+        return Err(ApiError::Authorization("Only admins can update verification status".into()));
+    }
+
+    let valid_statuses = ["unverified", "pending", "verified", "rejected"];
+    if !valid_statuses.contains(&request.verification_status.as_str()) {
+        return Err(ApiError::Validation(
+            "verification_status must be one of: unverified, pending, verified, rejected".into(),
+        ));
+    }
+
+    let user_model = services.identity.get_user_by_id(&target_user_id).await?;
+    let target_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let profile = services
+        .profile
+        .update_verification_status(target_uuid, &request.verification_status)
+        .await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        target_uuid,
+        "verification_updated",
+        Some(&format!("Verification status changed to {}", request.verification_status)),
+        None,
+    ).await;
+
+    Ok(Json(json!({
+        "user_id": target_user_id,
+        "verification_status": profile.verification_status,
+        "updated_at": profile.updated_at,
+    })))
+}
+
+// =============================================================================
+// User Preferences
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePreferencesDto {
+    pub preferences: serde_json::Value,
+}
+
+pub async fn get_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let prefs = services.profile.get_preferences(user_uuid).await?;
+
+    match prefs {
+        Some(p) => Ok(Json(json!({
+            "user_id": user.user_id,
+            "preferences": p.preferences,
+            "updated_at": p.updated_at,
+        }))),
+        None => Ok(Json(json!({
+            "user_id": user.user_id,
+            "preferences": {},
+            "updated_at": null,
+        }))),
+    }
+}
+
+pub async fn update_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(request): Json<UpdatePreferencesDto>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user.user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let prefs = services
+        .profile
+        .upsert_preferences(user_uuid, request.preferences)
+        .await?;
+
+    // Log activity
+    let _ = services.profile.log_activity(
+        user_uuid,
+        "preferences_updated",
+        Some("User preferences updated"),
+        None,
+    ).await;
+
+    Ok(Json(json!({
+        "user_id": user.user_id,
+        "preferences": prefs.preferences,
+        "updated_at": prefs.updated_at,
+    })))
+}
+
+// =============================================================================
+// Profile Activity History
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct ActivityQueryParams {
+    #[serde(default = "default_activity_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_activity_limit() -> i64 {
+    20
+}
+
+pub async fn get_profile_activity(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(user_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<ActivityQueryParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_model = services.identity.get_user_by_id(&user_id).await?;
+    let user_uuid = Uuid::parse_str(&user_model.id)
+        .map_err(|_| ApiError::Validation("Invalid user internal ID".into()))?;
+
+    let (activities, total) = services
+        .profile
+        .get_activity(user_uuid, params.limit, params.offset)
+        .await?;
+
+    Ok(Json(json!({
+        "user_id": user_id,
+        "activities": activities.iter().map(|a| json!({
+            "id": a.id,
+            "activity_type": a.activity_type,
+            "description": a.description,
+            "metadata": a.metadata,
+            "created_at": a.created_at,
+        })).collect::<Vec<_>>(),
+        "total": total,
+        "limit": params.limit,
+        "offset": params.offset,
+    })))
 }
