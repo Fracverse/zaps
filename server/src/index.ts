@@ -4,6 +4,7 @@ import { startWorkers, stopWorkers } from './workers';
 import eventBridgeService from './services/event-bridge.service';
 import evmBridgeMonitorService from './services/evm-bridge-monitor.service';
 import stellarMonitorService from './services/stellar-monitor.service';
+import contractMonitoringService from './services/contract-monitoring.service';
 import logger from './utils/logger';
 
 const PORT = config.port || 3001;
@@ -12,6 +13,7 @@ startWorkers();
 eventBridgeService.start();
 evmBridgeMonitorService.start();
 void stellarMonitorService.start();
+void contractMonitoringService.start();
 
 const server = app.listen(PORT, () => {
     logger.info(`Server is running on port ${PORT}`);
@@ -22,6 +24,7 @@ const shutdown = async () => {
     eventBridgeService.stop();
     evmBridgeMonitorService.stop();
     stellarMonitorService.stop();
+    contractMonitoringService.stop();
     server.close(() => {
         logger.info('HTTP server closed.');
         process.exit(0);

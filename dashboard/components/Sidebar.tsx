@@ -9,6 +9,7 @@ const nav = [
   { href: "/dashboard/payouts", label: "Payouts", icon: "💸" },
   { href: "/dashboard/qr", label: "QR Codes", icon: "⬜" },
   { href: "/dashboard/analytics", label: "Analytics", icon: "📈" },
+  { href: "/dashboard/contracts", label: "Contracts", icon: "🔗" },
 ];
 
 export default function Sidebar() {

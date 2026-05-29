@@ -16,6 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 import metricsService from './services/metrics.service';
+import contractMonitoringService from './services/contract-monitoring.service';
 
 // ... (existing middleware)
 app.use(rateLimit(100));
@@ -51,6 +52,12 @@ app.use('/api/v1', routes);
 // Health check
 app.get('/health', (req: Request, res: Response) => {
     res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Prometheus scrape target for contract metrics
+app.get('/metrics/contracts', (_req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.status(200).send(contractMonitoringService.getPrometheusMetrics());
 });
 
 // Error handling middleware

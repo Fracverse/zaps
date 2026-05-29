@@ -1,6 +1,7 @@
 import prisma from '../utils/prisma';
 import redisClient from '../utils/redis';
 import sorobanService from './soroban.service';
+import contractMonitoringService from './contract-monitoring.service';
 
 /**
  * Blueprint for Metrics & System Health.
@@ -76,15 +77,24 @@ class MetricsService {
             sorobanRpc = 'error';
         }
 
-        const isHealthy = database === 'connected' && redis === 'connected' && sorobanRpc === 'connected';
+        const contractHealth = contractMonitoringService.getHealth();
+        const contractAlerts = contractMonitoringService.getAlerts();
+
+        const isHealthy =
+            database === 'connected' &&
+            redis === 'connected' &&
+            sorobanRpc === 'connected' &&
+            contractHealth.status === 'healthy';
 
         return {
             status: isHealthy ? 'healthy' : 'unhealthy',
             services: {
                 database,
                 redis,
-                sorobanRpc
-            }
+                sorobanRpc,
+            },
+            contracts: contractHealth,
+            contractAlerts: contractAlerts.length,
         };
     }
 }

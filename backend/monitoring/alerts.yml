@@ -64,3 +64,53 @@ groups:
           severity: warning
         annotations:
           summary: No payments created in the last 15 minutes
+
+  - name: blinks-contracts
+    rules:
+      - alert: SorobanRpcDown
+        expr: soroban_rpc_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Soroban RPC is unreachable for contract operations
+
+      - alert: SorobanEventPollLag
+        expr: soroban_event_poll_lag_ledgers > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Contract event indexer is lagging behind the network
+
+      - alert: SorobanEventPollStalled
+        expr: soroban_event_poll_lag_ledgers > 200
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Contract event indexer is critically stalled
+
+      - alert: ContractPaused
+        expr: contract_paused == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: A Soroban contract is paused and blocking payments
+
+      - alert: ContractPaymentFailureSpike
+        expr: contract_payment_failure_rate_percent > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: On-chain payment failure rate exceeds 10%
+
+      - alert: ContractUnreachable
+        expr: contract_reachable == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A monitored Soroban contract failed health checks

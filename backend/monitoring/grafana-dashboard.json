@@ -111,6 +111,40 @@
           "expr": "histogram_quantile(0.95, sum(rate(payment_processing_duration_seconds_bucket[5m])) by (le, payment_method, status))"
         }
       ]
+    },
+    {
+      "type": "stat",
+      "title": "Soroban RPC up",
+      "targets": [{ "expr": "soroban_rpc_up" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Soroban RPC latency (ms)",
+      "targets": [{ "expr": "soroban_rpc_latency_ms" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Contract event poll lag (ledgers)",
+      "targets": [{ "expr": "soroban_event_poll_lag_ledgers" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Soroban contract events / sec",
+      "targets": [
+        {
+          "expr": "sum(rate(soroban_events_total[5m])) by (event_type)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Contract paused",
+      "targets": [{ "expr": "max(contract_paused)" }]
+    },
+    {
+      "type": "stat",
+      "title": "On-chain payment failure rate %",
+      "targets": [{ "expr": "contract_payment_failure_rate_percent" }]
     }
   ]
 }

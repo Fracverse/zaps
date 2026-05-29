@@ -1,4 +1,5 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+const SERVER_BASE = process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:3000";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -59,7 +60,31 @@ export const api = {
 
   // Profile
   myProfile: () => req<Profile>("/profiles/me"),
+
+  // Contract monitoring (Node server)
+  contractHealth: () =>
+    serverReq<ContractHealthResponse>("/api/v1/admin/contracts/health"),
+
+  contractMetrics: () =>
+    serverReq<ContractMetricsResponse>("/api/v1/admin/contracts/metrics"),
+
+  contractAlerts: () =>
+    serverReq<{ alerts: ContractAlert[] }>("/api/v1/admin/contracts/alerts"),
 };
+
+async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const res = await fetch(`${SERVER_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -128,4 +153,49 @@ export interface PayoutRequest {
   asset: string;
   bankAccountId: string;
   anchorId: string;
+}
+
+export interface ContractHealthStatus {
+  name: string;
+  contractId: string;
+  configured: boolean;
+  reachable: boolean;
+  paused?: boolean;
+  lastChecked: string;
+  error?: string;
+}
+
+export interface ContractHealthResponse {
+  status: string;
+  contracts: ContractHealthStatus[];
+  sorobanRpc: string;
+  latestLedger: number;
+}
+
+export interface ContractMetricsResponse {
+  sorobanRpcLatencyMs: number;
+  latestLedger: number;
+  eventPollLagLedgers: number;
+  lastEventPollAt: string | null;
+  eventsTotal: {
+    initiated: number;
+    settled: number;
+    failed: number;
+    other: number;
+  };
+  simulationCount: number;
+  simulationErrorCount: number;
+  avgSimulationMs: number;
+  uptimeSeconds: number;
+}
+
+export interface ContractAlert {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  metric: string;
+  value: number;
+  threshold: number;
+  timestamp: string;
 }

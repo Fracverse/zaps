@@ -9,6 +9,7 @@ import {
     Account,
     Contract,
     BASE_FEE,
+    scValToNative,
 } from '@stellar/stellar-sdk';
 import config from '../config';
 import logger from '../utils/logger';
@@ -209,21 +210,59 @@ class SorobanService {
         return getResponse;
     }
 
-    async getEvents(startLedger: number) {
+    /**
+     * Simulates a read-only contract call and returns the native result value.
+     */
+    async simulateContractRead(
+        contractId: string,
+        method: string,
+        args: xdr.ScVal[] = [],
+    ): Promise<unknown> {
+        const txXdr = await this.buildContractCall(READ_ONLY_SOURCE, contractId, method, args);
+        const tx = TransactionBuilder.fromXDR(txXdr, networkPassphrase) as Transaction;
+        const simResponse = await this.server.simulateTransaction(tx);
+
+        if (SorobanRpc.Api.isSimulationError(simResponse)) {
+            throw new ApiError(
+                400,
+                `Contract read failed: ${simResponse.error}`,
+                'CONTRACT_READ_FAILED',
+            );
+        }
+
+        if (!SorobanRpc.Api.isSimulationSuccess(simResponse)) {
+            throw new ApiError(400, 'Contract read returned unexpected state', 'CONTRACT_READ_UNEXPECTED');
+        }
+
+        const retval = simResponse.result?.retval;
+        return retval ? scValToNative(retval) : null;
+    }
+
+    async getEvents(
+        startLedger: number,
+        filters: Array<{ type: 'contract'; contractIds?: string[] }> = [],
+    ) {
+        const resolvedFilters =
+            filters.length > 0
+                ? filters
+                : config.stellar.paymentRouterContract
+                  ? [
+                        {
+                            type: 'contract' as const,
+                            contractIds: [config.stellar.paymentRouterContract],
+                        },
+                    ]
+                  : [{ type: 'contract' as const }];
+
         return this.server.getEvents({
             startLedger,
-            filters: [], 
-            limit: 100 // Reasonable limit per poll
-            filters: [
-                {
-                    type: 'contract',
-                    contractIds: config.stellar.paymentRouterContract
-                        ? [config.stellar.paymentRouterContract]
-                        : [],
-                },
-            ],
+            filters: resolvedFilters,
+            limit: 100,
         });
     }
 }
+
+/** Null account used for read-only contract simulations. */
+const READ_ONLY_SOURCE = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 
 export default new SorobanService();

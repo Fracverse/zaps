@@ -58,49 +58,6 @@ class QueueService {
 
     public getBlockchainTxQueue(): Queue {
         return this.blockchainTxQueue;
-    private queue: Queue;
-
-    constructor() {
-        this.queue = new Queue(workerConfig.defaultQueue, {
-            connection: connection as any,
-            defaultJobOptions: DEFAULT_OPTIONS,
-        });
-    }
-
-    public getQueue(): Queue {
-        return this.queue;
-    }
-
-    public async addEmailJob(data: EmailJobPayload, options?: JobsOptions) {
-        return this.queue.add(JobType.EMAIL, data, {
-            ...DEFAULT_OPTIONS,
-            ...options,
-            jobId: options?.jobId,
-        });
-    }
-
-    public async addNotificationJob(data: NotificationJobPayload, options?: JobsOptions) {
-        return this.queue.add(JobType.NOTIFICATION, data, {
-            ...DEFAULT_OPTIONS,
-            ...options,
-            jobId: options?.jobId,
-        });
-    }
-
-    public async addSyncJob(data: SyncJobPayload, options?: JobsOptions) {
-        return this.queue.add(JobType.SYNC, data, {
-            ...DEFAULT_OPTIONS,
-            ...options,
-            jobId: options?.jobId,
-        });
-    }
-
-    public async addBlockchainTxJob(data: BlockchainTxJobPayload, options?: JobsOptions) {
-        return this.queue.add(JobType.BLOCKCHAIN_TX, data, {
-            ...DEFAULT_OPTIONS,
-            ...options,
-            jobId: options?.jobId,
-        });
     }
 
     /** Generic add for backwards compatibility - validates payload structure */
@@ -126,12 +83,8 @@ class QueueService {
             case JobType.BLOCKCHAIN_TX:
                 return this.blockchainTxQueue.add(JobType.BLOCKCHAIN_TX, payload.data, finalOptions);
             default:
-                throw new Error(`Unknown job type: ${payload.type}`);
+                throw new Error(`Unknown job type: ${(payload as JobPayload).type}`);
         }
-        return this.queue.add(payload.type, payload.data, {
-            ...DEFAULT_OPTIONS,
-            ...options,
-        });
     }
 }
 

@@ -11,3 +11,9 @@ scrape_configs:
     static_configs:
       - targets:
           - blinks-backend:3000
+
+  - job_name: zaps-contracts
+    metrics_path: /metrics/contracts
+    static_configs:
+      - targets:
+          - zaps-server:3000

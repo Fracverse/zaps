@@ -2,6 +2,16 @@ import sorobanService from './soroban.service';
 import prisma from '../utils/prisma';
 import logger from '../utils/logger';
 import queueService, { JobType } from './queue.service';
+import { extractTopicStrings } from '../utils/soroban-events';
+
+const eventBridgeConfig = {
+    pollIntervalMs: 10_000,
+    errorBackoffMs: 5_000,
+    contractIds: [
+        process.env.PAYMENT_ROUTER_CONTRACT,
+        process.env.REGISTRY_CONTRACT,
+    ].filter((id): id is string => Boolean(id)),
+};
 
 interface SorobanEvent {
     id?: string;
@@ -112,59 +122,45 @@ class EventBridgeService {
     }
 
     private async processEvent(event: SorobanEvent) {
-        const topic0 = event.topic?.[0];
-        const topic1 = event.topic?.[1];
+        const topics = event.topic ?? [];
+        const topic0 = topics[0];
+        const topic1 = topics[1];
         const value = event.value ?? {};
 
-        try {
-            // Port logic from indexer_service.rs
-            // Checks if event is a contract event and has the expected structure
-            if (event.type === 'contract' && event.topic) {
-                // Topic decoding would happen here using scValToNative
-                // For now assuming existing string topics for simplicity or raw match
-                // In production, use scValToNative(xdr.ScVal.fromXDR(event.topic[0], 'base64'))
+        if (event.type !== 'contract' || !topics.length) return;
 
-                // Simplified matching for topic strings if they are not XDR encoded in this mock/stub
-                const topic = event.topic[0];
-
-                if (topic === 'PAY_DONE' || topic === 'TRANSFER_DONE') {
-                    const paymentId = event.value?.paymentId; // Need to decode value too
-
-                    if (paymentId) {
-                        await queueService.addJob({
-                            type: JobType.SYNC,
-                            data: {
-                                syncType: 'ON_CHAIN_COMPLETION',
-                                eventType: topic,
-                                paymentId: paymentId,
-                                rawEvent: event
-                            }
-                        });
-                        logger.info(`Queued SYNC job for ${topic} event: ${paymentId}`);
-                    }
-                }
-                await prisma.payment.update({
-                    where: { id: paymentId },
-                    data: { status: 'COMPLETED' },
+        if (topic0 === 'payment' && topic1 === 'PaymentSettled') {
+            await this.handlePaymentSettled(event, value);
+        } else if (topic0 === 'payment' && topic1 === 'PaymentFailed') {
+            await this.handlePaymentFailed(event, value);
+        } else if (topic0 === 'payment' && topic1 === 'PaymentInitiated') {
+            await this.handlePaymentInitiated(event, value);
+        } else if (topic0 === 'PAY_DONE' || topic0 === 'TRANSFER_DONE') {
+            const paymentId = value.paymentId as string | undefined;
+            if (paymentId) {
+                await queueService.addJob({
+                    type: JobType.SYNC,
+                    data: {
+                        syncType: 'ON_CHAIN_COMPLETION',
+                        eventType: topic0,
+                        paymentId,
+                        rawEvent: event,
+                    },
                 });
-                logger.info(`Payment ${paymentId} completed on-chain via Event Bridge`);
             }
-        } else {
-            logger.warn('PaymentSettled: no matching pending payment', { merchantId, payer });
         }
     }
 
-    private async handlePaymentFailed(event: SorobanEvent, value: Record<string, unknown>) {
+    private async handlePaymentSettled(event: SorobanEvent, value: Record<string, unknown>) {
         const payer = value.payer as string | undefined;
-        const merchantIdBytes = value.merchant_id;
-        const merchantId = this.decodeMerchantId(merchantIdBytes);
+        const merchantId = this.decodeMerchantId(value.merchant_id);
         if (!merchantId) return;
 
         const payment = await prisma.payment.findFirst({
             where: {
                 merchantId,
                 fromAddress: payer ?? undefined,
-                status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+                status: { in: ['PENDING', 'PROCESSING'] },
             },
             orderBy: { createdAt: 'desc' },
         });
@@ -172,7 +168,35 @@ class EventBridgeService {
         if (payment) {
             await prisma.payment.update({
                 where: { id: payment.id },
-                data: { status: PaymentStatus.FAILED },
+                data: { status: 'COMPLETED' },
+            });
+            logger.info('Payment settled on-chain via EventBridge', {
+                component: 'event-bridge',
+                paymentId: payment.id,
+            });
+        } else {
+            logger.warn('PaymentSettled: no matching pending payment', { merchantId, payer });
+        }
+    }
+
+    private async handlePaymentFailed(event: SorobanEvent, value: Record<string, unknown>) {
+        const payer = value.payer as string | undefined;
+        const merchantId = this.decodeMerchantId(value.merchant_id);
+        if (!merchantId) return;
+
+        const payment = await prisma.payment.findFirst({
+            where: {
+                merchantId,
+                fromAddress: payer ?? undefined,
+                status: { in: ['PENDING', 'PROCESSING'] },
+            },
+            orderBy: { createdAt: 'desc' },
+        });
+
+        if (payment) {
+            await prisma.payment.update({
+                where: { id: payment.id },
+                data: { status: 'FAILED' },
             });
             logger.info('Payment failed on-chain via EventBridge', {
                 component: 'event-bridge',
