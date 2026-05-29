@@ -82,15 +82,75 @@ model UserProfile {
   updatedAt   DateTime @updatedAt
 }
 
+enum OnboardingStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum OnboardingStep {
+  BUSINESS_INFO
+  DOCUMENTS_UPLOADED
+  COMPLIANCE_CHECK
+  COMPLETED
+}
+
+enum DocumentType {
+  BUSINESS_REGISTRATION
+  PROOF_OF_ADDRESS
+  OWNER_ID
+  BANK_STATEMENT
+}
+
+enum DocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
 model Merchant {
-  id              String    @id @default(uuid())
-  merchantId      String    @unique
+  id              String              @id @default(uuid())
+  merchantId      String              @unique
   vaultAddress    String
   settlementAsset String
-  active          Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  active          Boolean             @default(false)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
   payments        Payment[]
+  onboarding      MerchantOnboarding?
+}
+
+model MerchantOnboarding {
+  id              String           @id @default(uuid())
+  merchantId      String           @unique
+  merchant        Merchant         @relation(fields: [merchantId], references: [merchantId])
+  status          OnboardingStatus @default(PENDING)
+  currentStep     OnboardingStep   @default(BUSINESS_INFO)
+  businessName    String
+  businessEmail   String
+  country         String
+  rejectionReason String?
+  submittedAt     DateTime?
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  documents       MerchantDocument[]
+}
+
+model MerchantDocument {
+  id           String             @id @default(uuid())
+  onboardingId String
+  onboarding   MerchantOnboarding @relation(fields: [onboardingId], references: [id])
+  type         DocumentType
+  status       DocumentStatus     @default(PENDING)
+  storageId    String
+  storageUrl   String
+  mimeType     String
+  size         Int
+  uploadedAt   DateTime           @default(now())
+  verifiedAt   DateTime?
 }
 
 model Payment {

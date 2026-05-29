@@ -7,11 +7,13 @@ import { processEmail } from './email.processor';
 import { processNotification } from './notification.processor';
 import { processSync } from './sync.processor';
 import { processBlockchainTx } from './blockchain-tx.processor';
+import { processOnboarding } from './onboarding.processor';
 import type {
     EmailJobPayload,
     NotificationJobPayload,
     SyncJobPayload,
     BlockchainTxJobPayload,
+    OnboardingJobPayload,
 } from '../types/job-payloads';
 
 export type ProcessorFn = (data: unknown) => Promise<void>;
@@ -21,6 +23,7 @@ const registry: Map<JobType, ProcessorFn> = new Map([
     [JobType.NOTIFICATION, (d) => processNotification(d as NotificationJobPayload)],
     [JobType.SYNC, (d) => processSync(d as SyncJobPayload)],
     [JobType.BLOCKCHAIN_TX, (d) => processBlockchainTx(d as BlockchainTxJobPayload)],
+    [JobType.ONBOARDING, (d) => processOnboarding(d as OnboardingJobPayload)],
 ]);
 
 export function getProcessor(jobType: JobType): ProcessorFn | undefined {
@@ -31,4 +34,4 @@ export function getAllJobTypes(): JobType[] {
     return Array.from(registry.keys());
 }
 
-export { processEmail, processNotification, processSync, processBlockchainTx };
+export { processEmail, processNotification, processSync, processBlockchainTx, processOnboarding };

@@ -41,8 +41,14 @@ export interface BlockchainTxJobPayload {
     transferId?: string;
 }
 
+export interface OnboardingJobPayload {
+    onboardingId: string;
+    merchantId: string;
+}
+
 export type TypedJobPayload =
     | { type: JobType.EMAIL; data: EmailJobPayload }
     | { type: JobType.NOTIFICATION; data: NotificationJobPayload }
     | { type: JobType.SYNC; data: SyncJobPayload }
-    | { type: JobType.BLOCKCHAIN_TX; data: BlockchainTxJobPayload };
+    | { type: JobType.BLOCKCHAIN_TX; data: BlockchainTxJobPayload }
+    | { type: JobType.ONBOARDING; data: OnboardingJobPayload };
