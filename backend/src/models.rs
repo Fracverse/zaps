@@ -339,6 +339,103 @@ pub struct Notification {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DeliveryStatus {
+    SENT,
+    DELIVERED,
+    FAILED,
+}
+
+impl FromStr for DeliveryStatus {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "DELIVERED" => DeliveryStatus::DELIVERED,
+            "FAILED" => DeliveryStatus::FAILED,
+            _ => DeliveryStatus::SENT,
+        })
+    }
+}
+
+impl fmt::Display for DeliveryStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DeliveryStatus::SENT => "SENT",
+            DeliveryStatus::DELIVERED => "DELIVERED",
+            DeliveryStatus::FAILED => "FAILED",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DeliveryChannel {
+    EMAIL,
+    SMS,
+    PUSH,
+    IN_APP,
+}
+
+impl FromStr for DeliveryChannel {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "SMS" => DeliveryChannel::SMS,
+            "PUSH" => DeliveryChannel::PUSH,
+            "IN_APP" => DeliveryChannel::IN_APP,
+            _ => DeliveryChannel::EMAIL,
+        })
+    }
+}
+
+impl fmt::Display for DeliveryChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            DeliveryChannel::EMAIL => "EMAIL",
+            DeliveryChannel::SMS => "SMS",
+            DeliveryChannel::PUSH => "PUSH",
+            DeliveryChannel::IN_APP => "IN_APP",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPreference {
+    pub id: String,
+    pub user_id: String,
+    pub email_enabled: bool,
+    pub sms_enabled: bool,
+    pub push_enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationTemplate {
+    pub id: String,
+    pub name: String,
+    pub subject_template: Option<String>,
+    pub body_template: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationDeliveryLog {
+    pub id: String,
+    pub notification_id: String,
+    pub channel: DeliveryChannel,
+    pub status: DeliveryStatus,
+    pub error_message: Option<String>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RateLimitScope {

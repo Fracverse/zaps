@@ -114,7 +114,10 @@ pub async fn create_app(
         .route(
             "/notifications/:id/read",
             patch(notifications::mark_notification_read),
-        );
+        )
+        .route("/notifications/preferences/:user_id", get(notifications::get_preferences))
+        .route("/notifications/preferences/:user_id", post(notifications::update_preferences))
+        .route("/notifications/:id/logs", get(notifications::get_delivery_logs));
 
     // -------------------- Profiles --------------------
     let profile_routes = Router::new()

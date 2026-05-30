@@ -9,7 +9,10 @@ use uuid::Uuid;
 
 use crate::{
     api_error::ApiError,
-    service::{notification_service::CreateNotificationRequest, ServiceContainer},
+    service::{
+        notification_service::{CreateNotificationRequest, UpdatePreferencesRequest},
+        ServiceContainer,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -20,6 +23,8 @@ pub struct CreateNotificationDto {
     pub title: String,
     pub message: String,
     pub metadata: Option<serde_json::Value>,
+    pub template_name: Option<String>,
+    pub template_vars: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,6 +38,24 @@ pub struct NotificationResponseDto {
     pub read: bool,
     pub metadata: Option<serde_json::Value>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreferenceResponseDto {
+    pub user_id: String,
+    pub email_enabled: bool,
+    pub sms_enabled: bool,
+    pub push_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryLogResponseDto {
+    pub channel: String,
+    pub status: String,
+    pub error_message: Option<String>,
+    pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +79,8 @@ pub async fn create_notification(
             title: request.title,
             message: request.message,
             metadata: request.metadata,
+            template_name: request.template_name,
+            template_vars: request.template_vars,
         })
         .await?;
 
@@ -99,15 +124,49 @@ pub async fn get_notifications(
 
 pub async fn mark_notification_read(
     State(services): State<Arc<ServiceContainer>>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
 ) -> Result<(), ApiError> {
-    let notification_uuid = Uuid::parse_str(&id)
-        .map_err(|_| ApiError::Validation("Invalid Notification ID".to_string()))?;
-
-    services
-        .notification
-        .mark_as_read(notification_uuid)
-        .await?;
-
+    services.notification.mark_as_read(id).await?;
     Ok(())
+}
+
+pub async fn get_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(user_id): Path<String>,
+) -> Result<Json<PreferenceResponseDto>, ApiError> {
+    let prefs = services.notification.get_preferences(&user_id).await?;
+    Ok(Json(PreferenceResponseDto {
+        user_id: prefs.user_id,
+        email_enabled: prefs.email_enabled,
+        sms_enabled: prefs.sms_enabled,
+        push_enabled: prefs.push_enabled,
+    }))
+}
+
+pub async fn update_preferences(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(user_id): Path<String>,
+    Json(request): Json<UpdatePreferencesRequest>,
+) -> Result<Json<PreferenceResponseDto>, ApiError> {
+    let prefs = services.notification.update_preferences(&user_id, request).await?;
+    Ok(Json(PreferenceResponseDto {
+        user_id: prefs.user_id,
+        email_enabled: prefs.email_enabled,
+        sms_enabled: prefs.sms_enabled,
+        push_enabled: prefs.push_enabled,
+    }))
+}
+
+pub async fn get_delivery_logs(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<DeliveryLogResponseDto>>, ApiError> {
+    let logs = services.notification.get_delivery_logs(&id).await?;
+    let response = logs.into_iter().map(|l| DeliveryLogResponseDto {
+        channel: l.channel.to_string(),
+        status: l.status.to_string(),
+        error_message: l.error_message,
+        delivered_at: l.delivered_at,
+    }).collect();
+    Ok(Json(response))
 }
