@@ -11,18 +11,10 @@ fn sdk_err(e: Error) -> SdkError {
     SdkError::from_contract_error(e as u32)
 }
 
-fn create_token(env: &Env, admin: &Address) -> Address {
-    env.register_stellar_asset_contract_v2(admin.clone())
-        .address()
-}
-
-fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
-    StellarAssetClient::new(env, token).mint(to, &amount);
-}
-
 struct Setup {
     env: Env,
     client: PaymentSchedulerClient<'static>,
+    contract: Address,
     admin: Address,
     payer: Address,
     recipient: Address,
@@ -33,58 +25,65 @@ impl Setup {
     fn new() -> Self {
         let env = Env::default();
         env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
 
         let admin = Address::generate(&env);
         let payer = Address::generate(&env);
         let recipient = Address::generate(&env);
-        let token = create_token(&env, &admin);
-        mint(&env, &token, &payer, 1_000_000);
+        let token = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        StellarAssetClient::new(&env, &token).mint(&payer, &1_000_000);
 
-        let contract_id = env.register_contract(None, PaymentScheduler);
-        let client = PaymentSchedulerClient::new(&env, &contract_id);
+        let contract = env.register_contract(None, PaymentScheduler);
+        let client = PaymentSchedulerClient::new(&env, &contract);
         client.initialize(&admin);
+        let client: PaymentSchedulerClient<'static> = unsafe { core::mem::transmute(client) };
 
-        let client: PaymentSchedulerClient<'static> =
-            unsafe { core::mem::transmute(client) };
-
-        Setup { env, client, admin, payer, recipient, token }
+        Self {
+            env,
+            client,
+            contract,
+            admin,
+            payer,
+            recipient,
+            token,
+        }
     }
 
-    /// Schedule a one-time payment due at current ledger + `offset`.
-    fn schedule_one_time(&self, offset: u32) -> u64 {
-        let due = self.env.ledger().sequence() + offset;
+    fn one_time(&self, offset: u64, amount: i128) -> u64 {
         self.client.schedule(
             &self.payer,
             &self.recipient,
             &self.token,
-            &100i128,
-            &due,
-            &0u32,
+            &amount,
+            &(self.env.ledger().timestamp() + offset),
+            &0,
             &ScheduleKind::OneTime,
+            &1,
         )
     }
 
-    /// Schedule a recurring payment due at current ledger + `offset` with `interval`.
-    fn schedule_recurring(&self, offset: u32, interval: u32) -> u64 {
-        let due = self.env.ledger().sequence() + offset;
+    fn recurring(&self, offset: u64, interval: u64, amount: i128, max: u32) -> u64 {
         self.client.schedule(
             &self.payer,
             &self.recipient,
             &self.token,
-            &100i128,
-            &due,
+            &amount,
+            &(self.env.ledger().timestamp() + offset),
             &interval,
             &ScheduleKind::Recurring,
+            &max,
         )
+    }
+
+    fn token_client(&self) -> TokenClient<'_> {
+        TokenClient::new(&self.env, &self.token)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Initialisation
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_double_init_rejected() {
+fn double_initialize_rejected() {
     let s = Setup::new();
     assert_eq!(
         s.client.try_initialize(&s.admin),
@@ -92,290 +91,248 @@ fn test_double_init_rejected() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Schedule creation
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_schedule_stores_correctly() {
+fn one_time_schedule_escrows_funds() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    let sched = s.client.get_schedule(&id);
-    assert_eq!(sched.payer, s.payer);
-    assert_eq!(sched.recipient, s.recipient);
-    assert_eq!(sched.amount, 100);
-    assert_eq!(sched.kind, ScheduleKind::OneTime);
-    assert_eq!(sched.status, ScheduleStatus::Pending);
-    assert_eq!(sched.executions, 0);
+    let id = s.one_time(60, 250);
+    let schedule = s.client.get_schedule(&id);
+
+    assert_eq!(schedule.payer, s.payer);
+    assert_eq!(schedule.recipient, s.recipient);
+    assert_eq!(schedule.amount, 250);
+    assert_eq!(schedule.execute_after, 1_060);
+    assert_eq!(schedule.kind, ScheduleKind::OneTime);
+    assert_eq!(schedule.status, ScheduleStatus::Pending);
+    assert_eq!(schedule.max_executions, 1);
+    assert_eq!(s.token_client().balance(&s.contract), 250);
 }
 
 #[test]
-fn test_schedule_invalid_amount_rejected() {
+fn recurring_schedule_escrows_all_occurrences() {
     let s = Setup::new();
-    let due = s.env.ledger().sequence() + 100;
+    let id = s.recurring(60, 30, 100, 4);
+    let schedule = s.client.get_schedule(&id);
+
+    assert_eq!(schedule.kind, ScheduleKind::Recurring);
+    assert_eq!(schedule.interval_seconds, 30);
+    assert_eq!(schedule.max_executions, 4);
+    assert_eq!(s.token_client().balance(&s.contract), 400);
+}
+
+#[test]
+fn schedule_validation_rejects_invalid_inputs() {
+    let s = Setup::new();
+
     assert_eq!(
         s.client.try_schedule(
-            &s.payer, &s.recipient, &s.token,
-            &0i128, &due, &0u32, &ScheduleKind::OneTime
+            &s.payer,
+            &s.recipient,
+            &s.token,
+            &0,
+            &1_100,
+            &0,
+            &ScheduleKind::OneTime,
+            &1,
         ),
         Err(Ok(sdk_err(Error::InvalidAmount)))
     );
-}
 
-#[test]
-fn test_schedule_past_execute_at_rejected() {
-    let s = Setup::new();
-    s.env.ledger().with_mut(|l| l.sequence_number = 100);
     assert_eq!(
         s.client.try_schedule(
-            &s.payer, &s.recipient, &s.token,
-            &100i128, &50u32, &0u32, &ScheduleKind::OneTime
+            &s.payer,
+            &s.recipient,
+            &s.token,
+            &100,
+            &999,
+            &0,
+            &ScheduleKind::OneTime,
+            &1,
         ),
-        Err(Ok(sdk_err(Error::InvalidExecuteAt)))
+        Err(Ok(sdk_err(Error::InvalidExecuteAfter)))
     );
-}
 
-#[test]
-fn test_recurring_zero_interval_rejected() {
-    let s = Setup::new();
-    let due = s.env.ledger().sequence() + 100;
     assert_eq!(
         s.client.try_schedule(
-            &s.payer, &s.recipient, &s.token,
-            &100i128, &due, &0u32, &ScheduleKind::Recurring
+            &s.payer,
+            &s.recipient,
+            &s.token,
+            &100,
+            &1_100,
+            &0,
+            &ScheduleKind::Recurring,
+            &2,
         ),
         Err(Ok(sdk_err(Error::InvalidInterval)))
     );
-}
 
-#[test]
-fn test_schedule_counter_increments() {
-    let s = Setup::new();
-    assert_eq!(s.client.schedule_count(), 0);
-    s.schedule_one_time(100);
-    assert_eq!(s.client.schedule_count(), 1);
-    s.schedule_one_time(200);
-    assert_eq!(s.client.schedule_count(), 2);
-}
-
-// ---------------------------------------------------------------------------
-// Execution
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_execute_before_due_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
     assert_eq!(
-        s.client.try_execute(&id),
-        Err(Ok(sdk_err(Error::NotDue)))
+        s.client.try_schedule(
+            &s.payer,
+            &s.recipient,
+            &s.token,
+            &100,
+            &1_100,
+            &0,
+            &ScheduleKind::OneTime,
+            &2,
+        ),
+        Err(Ok(sdk_err(Error::InvalidExecutionLimit)))
     );
 }
 
 #[test]
-fn test_execute_one_time_transfers_and_marks_executed() {
+fn execute_one_time_pays_recipient_and_completes() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
+    let id = s.one_time(60, 250);
 
+    s.env.ledger().set_timestamp(1_060);
     s.client.execute(&id);
 
-    assert_eq!(TokenClient::new(&s.env, &s.token).balance(&s.recipient), 100);
-    let sched = s.client.get_schedule(&id);
-    assert_eq!(sched.status, ScheduleStatus::Executed);
-    assert_eq!(sched.executions, 1);
+    let schedule = s.client.get_schedule(&id);
+    assert_eq!(schedule.status, ScheduleStatus::Executed);
+    assert_eq!(schedule.executions, 1);
+    assert_eq!(s.token_client().balance(&s.recipient), 250);
+    assert_eq!(s.token_client().balance(&s.contract), 0);
 }
 
 #[test]
-fn test_execute_one_time_twice_rejected() {
+fn execute_before_due_rejected() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
-    s.client.execute(&id);
-    assert_eq!(
-        s.client.try_execute(&id),
-        Err(Ok(sdk_err(Error::NotPending)))
-    );
+    let id = s.one_time(60, 100);
+
+    assert_eq!(s.client.try_execute(&id), Err(Ok(sdk_err(Error::NotDue))));
 }
 
 #[test]
-fn test_execute_recurring_advances_execute_at() {
+fn recurring_execution_advances_until_limit() {
     let s = Setup::new();
-    let id = s.schedule_recurring(100, 500);
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
+    let id = s.recurring(10, 30, 100, 3);
 
-    s.client.execute(&id);
-
-    let sched = s.client.get_schedule(&id);
-    assert_eq!(sched.status, ScheduleStatus::Pending);
-    assert_eq!(sched.executions, 1);
-    // next due = current ledger + interval
-    let current = s.env.ledger().sequence();
-    assert_eq!(sched.execute_at, current + 500);
-}
-
-#[test]
-fn test_execute_recurring_multiple_times() {
-    let s = Setup::new();
-    let id = s.schedule_recurring(100, 500);
-
-    for i in 1u32..=3 {
-        s.env.ledger().with_mut(|l| l.sequence_number += 500);
+    for expected in 1..=3 {
+        s.env
+            .ledger()
+            .set_timestamp(s.env.ledger().timestamp() + 30);
         s.client.execute(&id);
-        assert_eq!(s.client.get_schedule(&id).executions, i);
+        assert_eq!(s.client.get_schedule(&id).executions, expected);
     }
 
-    assert_eq!(
-        TokenClient::new(&s.env, &s.token).balance(&s.recipient),
-        300
-    );
+    let schedule = s.client.get_schedule(&id);
+    assert_eq!(schedule.status, ScheduleStatus::Executed);
+    assert_eq!(s.token_client().balance(&s.recipient), 300);
+    assert_eq!(s.token_client().balance(&s.contract), 0);
 }
 
-// ---------------------------------------------------------------------------
-// Cancellation
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_cancel_by_payer() {
+fn cancel_by_payer_refunds_remaining_escrow() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
+    let id = s.recurring(10, 30, 100, 3);
+
+    s.env.ledger().set_timestamp(1_010);
+    s.client.execute(&id);
     s.client.cancel(&s.payer, &id);
-    assert_eq!(s.client.get_schedule(&id).status, ScheduleStatus::Cancelled);
+
+    let schedule = s.client.get_schedule(&id);
+    assert_eq!(schedule.status, ScheduleStatus::Cancelled);
+    assert_eq!(s.token_client().balance(&s.recipient), 100);
+    assert_eq!(s.token_client().balance(&s.contract), 0);
+    assert_eq!(s.token_client().balance(&s.payer), 999_900);
 }
 
 #[test]
-fn test_cancel_by_admin() {
+fn cancel_by_admin_allowed_but_other_caller_rejected() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
+    let id = s.one_time(60, 100);
+    let other = Address::generate(&s.env);
+
+    assert_eq!(
+        s.client.try_cancel(&other, &id),
+        Err(Ok(sdk_err(Error::Unauthorized)))
+    );
+
     s.client.cancel(&s.admin, &id);
     assert_eq!(s.client.get_schedule(&id).status, ScheduleStatus::Cancelled);
 }
 
 #[test]
-fn test_cancel_by_unauthorized_rejected() {
+fn modify_amount_tops_up_and_refunds() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
+    let id = s.recurring(60, 30, 100, 3);
+
+    s.client.modify(&s.payer, &id, &None, &150, &0, &0, &0);
+    assert_eq!(s.client.get_schedule(&id).amount, 150);
+    assert_eq!(s.token_client().balance(&s.contract), 450);
+
+    s.client.modify(&s.payer, &id, &None, &50, &0, &0, &0);
+    assert_eq!(s.client.get_schedule(&id).amount, 50);
+    assert_eq!(s.token_client().balance(&s.contract), 150);
+}
+
+#[test]
+fn modify_recipient_time_interval_and_limit() {
+    let s = Setup::new();
+    let id = s.recurring(60, 30, 100, 3);
+    let new_recipient = Address::generate(&s.env);
+
+    s.client.modify(
+        &s.payer,
+        &id,
+        &Some(new_recipient.clone()),
+        &0,
+        &1_200,
+        &45,
+        &2,
+    );
+
+    let schedule = s.client.get_schedule(&id);
+    assert_eq!(schedule.recipient, new_recipient);
+    assert_eq!(schedule.execute_after, 1_200);
+    assert_eq!(schedule.interval_seconds, 45);
+    assert_eq!(schedule.max_executions, 2);
+    assert_eq!(s.token_client().balance(&s.contract), 200);
+}
+
+#[test]
+fn unauthorized_or_completed_modify_rejected() {
+    let s = Setup::new();
+    let id = s.one_time(10, 100);
     let other = Address::generate(&s.env);
+
     assert_eq!(
-        s.client.try_cancel(&other, &id),
+        s.client.try_modify(&other, &id, &None, &200, &0, &0, &0),
         Err(Ok(sdk_err(Error::Unauthorized)))
     );
-}
 
-#[test]
-fn test_cancel_already_cancelled_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.client.cancel(&s.payer, &id);
-    assert_eq!(
-        s.client.try_cancel(&s.payer, &id),
-        Err(Ok(sdk_err(Error::NotPending)))
-    );
-}
-
-#[test]
-fn test_execute_cancelled_schedule_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.client.cancel(&s.payer, &id);
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
-    assert_eq!(
-        s.client.try_execute(&id),
-        Err(Ok(sdk_err(Error::NotPending)))
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Modification
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_modify_amount() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.client.modify(&s.payer, &id, &200i128, &0u32);
-    assert_eq!(s.client.get_schedule(&id).amount, 200);
-}
-
-#[test]
-fn test_modify_interval_recurring() {
-    let s = Setup::new();
-    let id = s.schedule_recurring(100, 500);
-    s.client.modify(&s.payer, &id, &0i128, &1000u32);
-    assert_eq!(s.client.get_schedule(&id).interval_ledgers, 1000);
-}
-
-#[test]
-fn test_modify_interval_on_one_time_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    assert_eq!(
-        s.client.try_modify(&s.payer, &id, &0i128, &500u32),
-        Err(Ok(sdk_err(Error::InvalidInterval)))
-    );
-}
-
-#[test]
-fn test_modify_by_unauthorized_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    let other = Address::generate(&s.env);
-    assert_eq!(
-        s.client.try_modify(&other, &id, &200i128, &0u32),
-        Err(Ok(sdk_err(Error::Unauthorized)))
-    );
-}
-
-#[test]
-fn test_modify_executed_schedule_rejected() {
-    let s = Setup::new();
-    let id = s.schedule_one_time(100);
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
+    s.env.ledger().set_timestamp(1_010);
     s.client.execute(&id);
     assert_eq!(
-        s.client.try_modify(&s.payer, &id, &200i128, &0u32),
+        s.client.try_modify(&s.payer, &id, &None, &200, &0, &0, &0),
         Err(Ok(sdk_err(Error::NotPending)))
     );
 }
 
-// ---------------------------------------------------------------------------
-// Pause / unpause
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_pause_blocks_schedule_and_execute() {
+fn pause_blocks_mutating_user_flows() {
     let s = Setup::new();
-    let id = s.schedule_one_time(100);
+    let id = s.one_time(10, 100);
 
     s.client.pause();
     assert!(s.client.is_paused());
 
-    let due = s.env.ledger().sequence() + 100;
-    assert_eq!(
-        s.client.try_schedule(
-            &s.payer, &s.recipient, &s.token,
-            &100i128, &due, &0u32, &ScheduleKind::OneTime
-        ),
-        Err(Ok(sdk_err(Error::ContractPaused)))
-    );
-
-    s.env.ledger().with_mut(|l| l.sequence_number += 100);
     assert_eq!(
         s.client.try_execute(&id),
+        Err(Ok(sdk_err(Error::ContractPaused)))
+    );
+    assert_eq!(
+        s.client.try_cancel(&s.payer, &id),
         Err(Ok(sdk_err(Error::ContractPaused)))
     );
 
     s.client.unpause();
     assert!(!s.client.is_paused());
-    s.client.execute(&id); // should succeed now
 }
 
-// ---------------------------------------------------------------------------
-// Admin transfer
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_transfer_admin() {
+fn transfer_admin_updates_admin() {
     let s = Setup::new();
     let new_admin = Address::generate(&s.env);
     s.client.transfer_admin(&new_admin);

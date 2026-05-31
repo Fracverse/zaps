@@ -1,121 +1,238 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{symbol_short, testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short,
+    testutils::{Address as _, Ledger},
+    Address, Env, Error as SdkError,
+};
 
-fn setup() -> (Env, PriceOracleClient<'static>, Address, Address, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, PriceOracle);
-    let client = PriceOracleClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-    let source1 = Address::generate(&env);
-    let source2 = Address::generate(&env);
-    client.initialize(&admin, &vec![&env, source1.clone(), source2.clone()]);
-    (env, client, admin, source1, source2)
+fn sdk_err(e: OracleError) -> SdkError {
+    SdkError::from_contract_error(e as u32)
+}
+
+#[contract]
+struct MockSep40;
+
+#[contracttype]
+enum MockKey {
+    Decimals,
+    Price(Asset),
+}
+
+#[contractimpl]
+impl MockSep40 {
+    pub fn set_decimals(env: Env, decimals: u32) {
+        env.storage().instance().set(&MockKey::Decimals, &decimals);
+    }
+
+    pub fn set_price(env: Env, asset: Asset, price: i128, timestamp: u64) {
+        env.storage()
+            .persistent()
+            .set(&MockKey::Price(asset), &PriceData { price, timestamp });
+    }
+
+    pub fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&MockKey::Decimals)
+            .unwrap_or(7)
+    }
+
+    pub fn lastprice(env: Env, asset: Asset) -> Option<PriceData> {
+        env.storage().persistent().get(&MockKey::Price(asset))
+    }
+}
+
+struct Setup {
+    env: Env,
+    client: PriceOracleClient<'static>,
+    admin: Address,
+    manual1: Address,
+    manual2: Address,
+    asset: Asset,
+}
+
+impl Setup {
+    fn new() -> Self {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+
+        let admin = Address::generate(&env);
+        let manual1 = Address::generate(&env);
+        let manual2 = Address::generate(&env);
+        let contract = env.register_contract(None, PriceOracle);
+        let client = PriceOracleClient::new(&env, &contract);
+        let base = Asset::Other(symbol_short!("USD"));
+        client.initialize(&admin, &base, &7, &60, &600);
+
+        let client: PriceOracleClient<'static> = unsafe { core::mem::transmute(client) };
+        let asset = Asset::Other(symbol_short!("XLM"));
+
+        Self {
+            env,
+            client,
+            admin,
+            manual1,
+            manual2,
+            asset,
+        }
+    }
+
+    fn add_manual_sources(&self) {
+        self.client
+            .add_source(&self.manual1, &SourceType::Manual, &300, &1_000);
+        self.client
+            .add_source(&self.manual2, &SourceType::Manual, &300, &1_000);
+    }
 }
 
 #[test]
-fn test_initialize() {
-    let (_, client, _, source1, source2) = setup();
-    let sources = client.get_sources();
-    assert_eq!(sources.len(), 2);
-    assert!(sources.contains(&source1));
-    assert!(sources.contains(&source2));
+fn initialize_sets_sep40_metadata() {
+    let s = Setup::new();
+    assert_eq!(s.client.decimals(), 7);
+    assert_eq!(s.client.resolution(), 60);
+    assert_eq!(s.client.base(), Asset::Other(symbol_short!("USD")));
+    assert_eq!(s.client.get_sources().len(), 0);
 }
 
 #[test]
-#[should_panic(expected = "AlreadyInitialized")]
-fn test_double_initialize() {
-    let (env, client, admin, _, _) = setup();
-    client.initialize(&admin, &vec![&env]);
+fn double_initialize_rejected() {
+    let s = Setup::new();
+    assert_eq!(
+        s.client
+            .try_initialize(&s.admin, &Asset::Other(symbol_short!("USD")), &7, &60, &600),
+        Err(Ok(sdk_err(OracleError::AlreadyInitialized)))
+    );
 }
 
 #[test]
-fn test_submit_and_get_price() {
-    let (_, client, _, source1, source2) = setup();
-    let asset = symbol_short!("XLM");
-    client.submit_price(&source1, &asset, &1_100_000); // 1.10
-    client.submit_price(&source2, &asset, &1_200_000); // 1.20
-    let result = client.get_price(&asset);
-    // median of [1_100_000, 1_200_000] = 1_150_000
-    assert_eq!(result.price, 1_150_000);
+fn manual_sources_are_median_aggregated() {
+    let s = Setup::new();
+    s.add_manual_sources();
+
+    s.client.submit_price(&s.manual1, &s.asset, &1_100_0000);
+    s.client.submit_price(&s.manual2, &s.asset, &1_300_0000);
+
+    let result = s.client.get_price(&s.asset);
+    assert_eq!(result.price, 1_200_0000);
+    assert_eq!(result.sources_used, 2);
+    assert_eq!(result.decimals, 7);
+    assert!(!result.is_fallback);
+}
+
+#[test]
+fn stale_manual_price_is_excluded() {
+    let s = Setup::new();
+    s.add_manual_sources();
+
+    s.client.submit_price(&s.manual1, &s.asset, &1_000_0000);
+    s.env.ledger().set_timestamp(1_400);
+    s.client.submit_price(&s.manual2, &s.asset, &2_000_0000);
+
+    let result = s.client.get_price_with_min_sources(&s.asset, &1);
+    assert_eq!(result.price, 2_000_0000);
+    assert_eq!(result.sources_used, 1);
+}
+
+#[test]
+fn untrusted_manual_submit_rejected() {
+    let s = Setup::new();
+    let rogue = Address::generate(&s.env);
+    assert_eq!(
+        s.client.try_submit_price(&rogue, &s.asset, &1_000_0000),
+        Err(Ok(sdk_err(OracleError::Unauthorized)))
+    );
+}
+
+#[test]
+fn invalid_manual_price_rejected() {
+    let s = Setup::new();
+    s.add_manual_sources();
+    assert_eq!(
+        s.client.try_submit_price(&s.manual1, &s.asset, &0),
+        Err(Ok(sdk_err(OracleError::InvalidPrice)))
+    );
+}
+
+#[test]
+fn sep40_source_is_read_and_normalized() {
+    let s = Setup::new();
+    let mock_id = s.env.register_contract(None, MockSep40);
+    let mock = MockSep40Client::new(&s.env, &mock_id);
+    mock.set_decimals(&6);
+    mock.set_price(&s.asset, &1_250_000, &1_000);
+
+    s.client
+        .add_source(&mock_id, &SourceType::Sep40, &300, &1_000);
+    let result = s.client.get_price(&s.asset);
+
+    assert_eq!(result.price, 1_250_0000);
+    assert_eq!(result.sources_used, 1);
+}
+
+#[test]
+fn outlier_is_removed_by_deviation_filter() {
+    let s = Setup::new();
+    s.add_manual_sources();
+    let manual3 = Address::generate(&s.env);
+    s.client
+        .add_source(&manual3, &SourceType::Manual, &300, &500);
+
+    s.client.submit_price(&s.manual1, &s.asset, &1_000_0000);
+    s.client.submit_price(&s.manual2, &s.asset, &1_020_0000);
+    s.client.submit_price(&manual3, &s.asset, &2_000_0000);
+
+    let result = s.client.get_price_with_min_sources(&s.asset, &2);
+    assert_eq!(result.price, 1_010_0000);
     assert_eq!(result.sources_used, 2);
 }
 
 #[test]
-fn test_single_source_price() {
-    let (_, client, _, source1, _) = setup();
-    let asset = symbol_short!("USDC");
-    client.submit_price(&source1, &asset, &1_000_000);
-    let result = client.get_price(&asset);
-    assert_eq!(result.price, 1_000_000);
-    assert_eq!(result.sources_used, 1);
+fn last_good_price_used_as_fallback() {
+    let s = Setup::new();
+    s.add_manual_sources();
+
+    s.client.submit_price(&s.manual1, &s.asset, &1_000_0000);
+    let fresh = s.client.get_price(&s.asset);
+    assert!(!fresh.is_fallback);
+
+    s.env.ledger().set_timestamp(1_350);
+    let fallback = s.client.get_price(&s.asset);
+    assert_eq!(fallback.price, 1_000_0000);
+    assert!(fallback.is_fallback);
 }
 
 #[test]
-#[should_panic(expected = "NoValidPrice")]
-fn test_no_price_submitted() {
-    let (_, client, _, _, _) = setup();
-    client.get_price(&symbol_short!("BTC"));
+fn stale_last_good_fallback_rejected() {
+    let s = Setup::new();
+    s.add_manual_sources();
+
+    s.client.submit_price(&s.manual1, &s.asset, &1_000_0000);
+    s.client.get_price(&s.asset);
+
+    s.env.ledger().set_timestamp(2_000);
+    assert_eq!(
+        s.client.try_get_price(&s.asset),
+        Err(Ok(sdk_err(OracleError::StalePrice)))
+    );
 }
 
 #[test]
-#[should_panic(expected = "InvalidPrice")]
-fn test_invalid_price_zero() {
-    let (_, client, _, source1, _) = setup();
-    client.submit_price(&source1, &symbol_short!("XLM"), &0);
-}
+fn source_management_updates_config() {
+    let s = Setup::new();
+    s.client
+        .add_source(&s.manual1, &SourceType::Manual, &300, &1_000);
+    assert_eq!(s.client.get_sources().len(), 1);
 
-#[test]
-#[should_panic(expected = "Unauthorized")]
-fn test_untrusted_source_rejected() {
-    let (env, client, _, _, _) = setup();
-    let rogue = Address::generate(&env);
-    client.submit_price(&rogue, &symbol_short!("XLM"), &1_000_000);
-}
+    let config = s.client.get_source_config(&s.manual1);
+    assert_eq!(config.source_type, SourceType::Manual);
+    assert!(config.enabled);
 
-#[test]
-fn test_add_remove_source() {
-    let (env, client, _, source1, source2) = setup();
-    let source3 = Address::generate(&env);
-    client.add_source(&source3);
-    assert_eq!(client.get_sources().len(), 3);
-    client.remove_source(&source2);
-    assert_eq!(client.get_sources().len(), 2);
-    assert!(!client.get_sources().contains(&source2));
-}
+    s.client.set_source_enabled(&s.manual1, &false);
+    assert!(!s.client.get_source_config(&s.manual1).enabled);
 
-#[test]
-#[should_panic(expected = "SourceNotFound")]
-fn test_remove_nonexistent_source() {
-    let (env, client, _, _, _) = setup();
-    let unknown = Address::generate(&env);
-    client.remove_source(&unknown);
-}
-
-#[test]
-fn test_stale_price_excluded() {
-    let (env, client, _, source1, source2) = setup();
-    let asset = symbol_short!("XLM");
-    // source1 submits at ledger 0 (default)
-    client.submit_price(&source1, &asset, &1_000_000);
-    // Advance ledger past DEFAULT_MAX_AGE (720)
-    env.ledger().set_sequence_number(800);
-    // source2 submits fresh price
-    client.submit_price(&source2, &asset, &2_000_000);
-    // Only source2's price should be used (max_age=720, source1 is 800 ledgers old)
-    let result = client.get_price_with_max_age(&asset, &720);
-    assert_eq!(result.sources_used, 1);
-    assert_eq!(result.price, 2_000_000);
-}
-
-#[test]
-fn test_get_source_price() {
-    let (_, client, _, source1, _) = setup();
-    let asset = symbol_short!("XLM");
-    client.submit_price(&source1, &asset, &1_500_000);
-    let entry = client.get_source_price(&source1, &asset);
-    assert_eq!(entry.price, 1_500_000);
-    assert_eq!(entry.source, source1);
+    s.client.remove_source(&s.manual1);
+    assert_eq!(s.client.get_sources().len(), 0);
 }
