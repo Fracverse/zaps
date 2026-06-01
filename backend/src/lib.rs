@@ -2,6 +2,7 @@ pub mod api_error;
 pub mod app;
 pub mod auth;
 pub mod config;
+pub mod contracts;
 pub mod db;
 pub mod http;
 pub mod job_processors;
