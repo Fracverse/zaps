@@ -144,6 +144,19 @@ pub async fn create_app(
         .route("/transactions", get(admin::get_transactions))
         .route("/users/:user_id/activity", get(admin::get_user_activity))
         .route("/system/health", get(admin::get_system_health))
+        // Compliance dashboard
+        .route("/compliance/metrics", get(admin::get_compliance_metrics))
+        .route("/compliance/alerts", get(admin::get_high_risk_alerts))
+        .route("/compliance/cases", get(admin::get_compliance_cases))
+        .route("/compliance/cases/:case_id", patch(admin::update_compliance_case))
+        .route("/compliance/ml/:assessment_id", get(admin::get_ml_risk_analysis))
+        .route("/compliance/patterns", get(admin::get_suspicious_patterns))
+        .route("/compliance/report", get(admin::get_compliance_report))
+        .route("/compliance/sanctions", get(admin::list_sanctions_providers))
+        .route("/compliance/sanctions/:provider_id", patch(admin::update_sanctions_provider))
+        .route("/compliance/users/:user_id/risk", get(admin::get_user_risk_summary))
+        .route("/compliance/users/:user_id/cases", get(admin::get_user_compliance_cases))
+        .route("/compliance/users/:user_id/behavioral", get(admin::get_behavioral_profile))
         .layer(middleware::from_fn(role_guard::require_role(Role::Admin)));
 
     // -------------------- Audit --------------------

@@ -3,7 +3,7 @@ use crate::{
     config::Config,
     models::{
         AuditLogEntry, BehavioralProfile, ComplianceCase, MLRiskScore, RiskIndicator, RiskLevel,
-        TransactionRiskAssessment,
+        TransactionRiskAssessment, SanctionsProvider,
     },
     service::MetricsService,
 };
@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
+use std::time::Instant;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -108,7 +109,8 @@ impl ComplianceService {
         address: &str,
         amount: i64,
     ) -> Result<TransactionRiskAssessment, ApiError> {
-        let sanctions = self.screen_address(address).await?;
+        // Use multiple sanctions providers instead of single provider
+        let sanctions = self.screen_address_multiple_providers(user_id, address).await?;
         let velocity_ok = self.check_velocity_limits(user_id, amount).await?;
         let thresholds = &self.config.compliance_config.risk_thresholds;
 
@@ -163,6 +165,46 @@ impl ComplianceService {
 
         self.persist_assessment(&assessment).await?;
 
+        // Compute ML-based risk score
+        let assessment_id = Uuid::new_v4().to_string();
+        let ml_score = self
+            .compute_ml_risk_score(
+                &assessment_id,
+                user_id,
+                address,
+                amount,
+                assessment.risk_score,
+            )
+            .await?;
+
+        // Detect suspicious patterns and create risk indicators
+        let indicators = self.detect_suspicious_patterns(user_id).await?;
+        for indicator in &indicators {
+            self.persist_risk_indicator(indicator).await?;
+        }
+
+        // If high risk, create a compliance case for review
+        if matches!(assessment.risk_level, RiskLevel::High | RiskLevel::Blocked) {
+            let _ = self
+                .create_compliance_case(
+                    user_id,
+                    Some(&assessment_id),
+                    "high_risk_transaction",
+                    if assessment.risk_level == RiskLevel::Blocked {
+                        "critical"
+                    } else {
+                        "high"
+                    },
+                    ml_score.final_ml_score,
+                    &format!(
+                        "High-risk transaction detected: {} (ML Score: {:.2})",
+                        assessment.reasons.join(", "),
+                        ml_score.final_ml_score
+                    ),
+                )
+                .await;
+        }
+
         let decision = if assessment.risk_level == RiskLevel::Blocked {
             "blocked"
         } else if assessment.risk_level == RiskLevel::High {
@@ -182,6 +224,7 @@ impl ComplianceService {
                 address = %assessment.address,
                 amount = assessment.amount,
                 risk_score = assessment.risk_score,
+                ml_score = ml_score.final_ml_score,
                 risk_level = %assessment.risk_level,
                 reasons = ?assessment.reasons,
                 "Compliance screening flagged transaction"
@@ -249,6 +292,191 @@ impl ComplianceService {
             .json::<SanctionsApiResponse>()
             .await
             .map_err(|error| ApiError::Compliance(format!("Invalid sanctions response: {}", error)))
+    }
+
+    // ======================================================================================
+    // MULTIPLE SANCTIONS DATABASE SCREENING
+    // ======================================================================================
+
+    /// Screen an address against multiple sanctions databases concurrently
+    pub async fn screen_address_multiple_providers(
+        &self,
+        user_id: &str,
+        address: &str,
+    ) -> Result<SanctionsApiResponse, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        // Get enabled sanctions providers ordered by priority
+        let providers = client
+            .query(
+                r#"
+                SELECT id, name, provider_type, api_url, api_key, timeout_seconds
+                FROM sanctions_providers
+                WHERE enabled = TRUE
+                ORDER BY priority DESC
+                "#,
+                &[],
+            )
+            .await?;
+
+        if providers.is_empty() {
+            return Err(ApiError::Compliance(
+                "No sanctions providers configured".to_string(),
+            ));
+        }
+
+        let mut all_sanctioned = false;
+        let mut combined_risk_score = 0u8;
+        let mut all_reasons = Vec::new();
+        let mut screening_results = Vec::new();
+
+        // Screen against multiple providers concurrently
+        let mut handles = Vec::new();
+
+        for row in providers {
+            let provider_id: uuid::Uuid = row.get("id");
+            let provider_name: String = row.get("name");
+            let api_url: String = row.get("api_url");
+            let api_key: String = row.get("api_key");
+            let timeout_seconds: i32 = row.get("timeout_seconds");
+            let address = address.to_string();
+            let http = self.http.clone();
+
+            let handle = tokio::spawn(async move {
+                let start = Instant::now();
+                let result = self::screen_against_provider(
+                    &http,
+                    &api_url,
+                    &api_key,
+                    &address,
+                    timeout_seconds,
+                )
+                .await;
+                let response_time_ms = start.elapsed().as_millis() as i32;
+
+                (provider_id, provider_name, result, response_time_ms)
+            });
+
+            handles.push(handle);
+        }
+
+        // Collect results from all providers
+        for handle in handles {
+            match handle.await {
+                Ok((provider_id, provider_name, result, response_time_ms)) => {
+                    match result {
+                        Ok((sanctioned, risk_score, reasons, http_status)) => {
+                            screening_results.push((
+                                provider_id,
+                                sanctioned,
+                                risk_score,
+                                response_time_ms,
+                                http_status,
+                                None,
+                            ));
+
+                            if sanctioned {
+                                all_sanctioned = true;
+                                all_reasons.push(format!("{}: sanctioned", provider_name));
+                            }
+
+                            if let Some(score) = risk_score {
+                                combined_risk_score = combined_risk_score.max(score);
+                            }
+
+                            if !reasons.is_empty() {
+                                all_reasons.extend(reasons);
+                            }
+                        }
+                        Err(error) => {
+                            screening_results.push((
+                                provider_id,
+                                false,
+                                None,
+                                response_time_ms,
+                                Some(500),
+                                Some(error),
+                            ));
+                            all_reasons.push(format!(
+                                "{}: screening failed",
+                                provider_name
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to await sanctions provider screening");
+                    all_reasons.push("provider_timeout".to_string());
+                }
+            }
+        }
+
+        // Store screening results in history
+        for (provider_id, sanctioned, risk_score, response_time_ms, http_status, error) in screening_results {
+            let _ = self.store_sanctions_screening_history(
+                user_id,
+                address,
+                provider_id,
+                sanctioned,
+                risk_score,
+                &all_reasons,
+                response_time_ms,
+                http_status,
+                error.as_deref(),
+            )
+            .await;
+        }
+
+        Ok(SanctionsApiResponse {
+            sanctioned: all_sanctioned,
+            risk_score: if combined_risk_score > 0 {
+                Some(combined_risk_score)
+            } else {
+                None
+            },
+            reasons: all_reasons,
+        })
+    }
+
+    /// Store sanctions screening history for audit and analysis
+    async fn store_sanctions_screening_history(
+        &self,
+        user_id: &str,
+        address: &str,
+        provider_id: uuid::Uuid,
+        sanctioned: bool,
+        risk_score: Option<u8>,
+        reasons: &[String],
+        response_time_ms: i32,
+        http_status: Option<i32>,
+        error_message: Option<&str>,
+    ) -> Result<(), ApiError> {
+        let client = self.db_pool.get().await?;
+
+        client
+            .execute(
+                r#"
+                INSERT INTO sanctions_screening_history (
+                    user_id, address, provider_id, sanctioned, risk_score,
+                    reasons, response_time_ms, http_status_code, error_message
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "#,
+                &[
+                    &user_id,
+                    &address,
+                    &provider_id,
+                    &sanctioned,
+                    &(risk_score.map(|s| s as i32)),
+                    &json!(reasons),
+                    &response_time_ms,
+                    &http_status,
+                    &error_message,
+                ],
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn persist_assessment(
@@ -587,6 +815,7 @@ impl ComplianceService {
     pub async fn detect_suspicious_patterns(&self, user_id: &str) -> Result<Vec<RiskIndicator>, ApiError> {
         let client = self.db_pool.get().await?;
         let mut indicators = Vec::new();
+        let assessment_id = Uuid::new_v4().to_string();
 
         // Detect structuring: multiple transactions just below high-risk threshold
         let structuring_count: i64 = client
@@ -606,7 +835,7 @@ impl ComplianceService {
         if structuring_count > 5 {
             indicators.push(RiskIndicator {
                 id: Uuid::new_v4().to_string(),
-                assessment_id: user_id.to_string(),
+                assessment_id: assessment_id.clone(),
                 indicator_type: "structured_transaction".to_string(),
                 severity: "high".to_string(),
                 description: format!("Detected {} potential structuring transactions", structuring_count),
@@ -632,10 +861,37 @@ impl ComplianceService {
         if circular_count > 2 {
             indicators.push(RiskIndicator {
                 id: Uuid::new_v4().to_string(),
-                assessment_id: user_id.to_string(),
+                assessment_id: assessment_id.clone(),
                 indicator_type: "circular_flow".to_string(),
                 severity: "high".to_string(),
                 description: format!("Detected circular money flows with {} addresses", circular_count),
+                detected_at: chrono::Utc::now(),
+            });
+        }
+
+        // Detect rapid transaction escalation (layering)
+        let rapid_escalation: i64 = client
+            .query_one(
+                r#"
+                SELECT COUNT(*) FROM payments
+                WHERE from_address = $1
+                AND created_at >= NOW() - INTERVAL '1 hour'
+                "#,
+                &[&user_id],
+            )
+            .await?
+            .get(0);
+
+        if rapid_escalation > 10 {
+            indicators.push(RiskIndicator {
+                id: Uuid::new_v4().to_string(),
+                assessment_id: assessment_id.clone(),
+                indicator_type: "layering".to_string(),
+                severity: "critical".to_string(),
+                description: format!(
+                    "Detected potential layering: {} transactions in 1 hour",
+                    rapid_escalation
+                ),
                 detected_at: chrono::Utc::now(),
             });
         }
@@ -841,6 +1097,49 @@ impl ComplianceService {
         Ok(())
     }
 
+    async fn persist_risk_indicator(
+        &self,
+        indicator: &RiskIndicator,
+    ) -> Result<(), ApiError> {
+        let client = self.db_pool.get().await?;
+
+        // Get user_id from the assessment
+        let assessment_row = client
+            .query_one(
+                r#"
+                SELECT user_id FROM transaction_risk_assessments
+                WHERE id = $1
+                LIMIT 1
+                "#,
+                &[&indicator.assessment_id],
+            )
+            .await?;
+        let user_id: String = assessment_row.get("user_id");
+
+        client
+            .execute(
+                r#"
+                INSERT INTO risk_indicators (
+                    id, assessment_id, user_id, indicator_type, severity,
+                    description, detected_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "#,
+                &[
+                    &indicator.id,
+                    &indicator.assessment_id,
+                    &user_id,
+                    &indicator.indicator_type,
+                    &indicator.severity,
+                    &indicator.description,
+                    &indicator.detected_at,
+                ],
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn persist_compliance_case(
         &self,
         compliance_case: &ComplianceCase,
@@ -877,5 +1176,307 @@ impl ComplianceService {
             .await?;
 
         Ok(())
+    }
+
+    // ======================================================================================
+    // SANCTIONS PROVIDER MANAGEMENT
+    // ======================================================================================
+
+    /// Get all sanctions providers
+    pub async fn get_sanctions_providers(&self) -> Result<Vec<SanctionsProvider>, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        let rows = client
+            .query(
+                r#"
+                SELECT id, name, provider_type, api_url, api_key, enabled, priority,
+                       timeout_seconds, health_status, last_check_at, failure_count, created_at
+                FROM sanctions_providers
+                ORDER BY priority DESC
+                "#,
+                &[],
+            )
+            .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| SanctionsProvider {
+                id: row.get::<_, uuid::Uuid>(0).to_string(),
+                name: row.get("name"),
+                provider_type: row.get("provider_type"),
+                api_url: row.get("api_url"),
+                api_key: row.get("api_key"),
+                enabled: row.get("enabled"),
+                priority: row.get("priority"),
+                timeout_seconds: row.get("timeout_seconds"),
+                created_at: row.get("created_at"),
+            })
+            .collect())
+    }
+
+    /// Update sanctions provider configuration
+    pub async fn update_sanctions_provider(
+        &self,
+        provider_id: &str,
+        enabled: bool,
+        priority: i32,
+    ) -> Result<(), ApiError> {
+        let client = self.db_pool.get().await?;
+        let now = chrono::Utc::now();
+
+        client
+            .execute(
+                r#"
+                UPDATE sanctions_providers
+                SET enabled = $1, priority = $2, updated_at = $3
+                WHERE id = $4
+                "#,
+                &[&enabled, &priority, &now, &provider_id.parse::<uuid::Uuid>()?],
+            )
+            .await?;
+
+        tracing::info!(
+            provider_id = %provider_id,
+            enabled = enabled,
+            priority = priority,
+            "Sanctions provider updated"
+        );
+
+        Ok(())
+    }
+
+    /// Update sanctions provider health status
+    pub async fn update_provider_health_status(
+        &self,
+        provider_id: &str,
+        health_status: &str,
+    ) -> Result<(), ApiError> {
+        let client = self.db_pool.get().await?;
+        let now = chrono::Utc::now();
+
+        client
+            .execute(
+                r#"
+                UPDATE sanctions_providers
+                SET health_status = $1, last_check_at = $2
+                WHERE id = $3
+                "#,
+                &[&health_status, &now, &provider_id.parse::<uuid::Uuid>()?],
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    // ======================================================================================
+    // REAL-TIME RISK SCORING UPDATES
+    // ======================================================================================
+
+    /// Update user's behavioral profile and risk trend
+    pub async fn update_user_risk_profile(&self, user_id: &str) -> Result<BehavioralProfile, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        // Calculate current risk metrics
+        let profile = self.analyze_behavioral_pattern(user_id).await?;
+
+        // Get previous risk trend
+        let prev_profile: Option<(f64, f64)> = client
+            .query_opt(
+                r#"
+                SELECT high_risk_transaction_count, total_transactions
+                FROM behavioral_profiles
+                WHERE user_id = $1
+                "#,
+                &[&user_id],
+            )
+            .await?
+            .map(|row| (row.get::<_, i64>(0) as f64, row.get::<_, i64>(1) as f64));
+
+        // Determine trend
+        let risk_trend = if let Some((prev_high, prev_total)) = prev_profile {
+            let current_high_rate = if profile.total_transactions > 0 {
+                profile.high_risk_transaction_count as f64 / profile.total_transactions as f64
+            } else {
+                0.0
+            };
+
+            let prev_high_rate = if prev_total > 0 {
+                prev_high / prev_total
+            } else {
+                0.0
+            };
+
+            if current_high_rate > prev_high_rate * 1.2 {
+                "increasing"
+            } else if current_high_rate < prev_high_rate * 0.8 {
+                "decreasing"
+            } else {
+                "stable"
+            }
+        } else {
+            "stable"
+        };
+
+        // Update profile with trend
+        let is_high_risk = profile.high_risk_transaction_count > 10
+            || profile.geographic_diversity_score < 0.2
+            || profile.transaction_frequency > 50.0;
+
+        client
+            .execute(
+                r#"
+                INSERT INTO behavioral_profiles (
+                    user_id, average_transaction_amount, transaction_frequency,
+                    total_transactions, high_risk_transaction_count,
+                    geographic_diversity_score, time_pattern_score,
+                    device_diversity_score, merchant_category_diversity,
+                    is_high_risk, risk_score_trend, last_update
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    average_transaction_amount = $2,
+                    transaction_frequency = $3,
+                    total_transactions = $4,
+                    high_risk_transaction_count = $5,
+                    geographic_diversity_score = $6,
+                    time_pattern_score = $7,
+                    device_diversity_score = $8,
+                    merchant_category_diversity = $9,
+                    is_high_risk = $10,
+                    risk_score_trend = $11,
+                    last_update = $12
+                "#,
+                &[
+                    &user_id,
+                    &profile.average_transaction_amount,
+                    &profile.transaction_frequency,
+                    &profile.total_transactions,
+                    &profile.high_risk_transaction_count,
+                    &profile.geographic_diversity_score,
+                    &profile.time_pattern_score,
+                    &profile.device_diversity_score,
+                    &profile.merchant_category_diversity,
+                    &is_high_risk,
+                    &risk_trend,
+                    &chrono::Utc::now(),
+                ],
+            )
+            .await?;
+
+        Ok(profile)
+    }
+
+    /// Get real-time risk score updates for a user
+    pub async fn get_user_risk_summary(&self, user_id: &str) -> Result<serde_json::Value, ApiError> {
+        let client = self.db_pool.get().await?;
+
+        let profile_row = client
+            .query_opt(
+                r#"
+                SELECT average_transaction_amount, transaction_frequency, total_transactions,
+                       high_risk_transaction_count, geographic_diversity_score,
+                       is_high_risk, risk_score_trend, last_update
+                FROM behavioral_profiles
+                WHERE user_id = $1
+                "#,
+                &[&user_id],
+            )
+            .await?;
+
+        if let Some(row) = profile_row {
+            let recent_assessments: Vec<_> = client
+                .query(
+                    r#"
+                    SELECT risk_score, risk_level, created_at FROM transaction_risk_assessments
+                    WHERE user_id = $1
+                    ORDER BY created_at DESC
+                    LIMIT 10
+                    "#,
+                    &[&user_id],
+                )
+                .await?;
+
+            let recent_ml_scores: Vec<_> = client
+                .query(
+                    r#"
+                    SELECT final_ml_score, confidence_level, created_at
+                    FROM ml_risk_scores
+                    WHERE assessment_id IN (
+                        SELECT id FROM transaction_risk_assessments WHERE user_id = $1
+                    )
+                    ORDER BY created_at DESC
+                    LIMIT 5
+                    "#,
+                    &[&user_id],
+                )
+                .await?;
+
+            let avg_recent_score = if !recent_assessments.is_empty() {
+                recent_assessments
+                    .iter()
+                    .map(|r| r.get::<_, i32>(0) as f64)
+                    .sum::<f64>()
+                    / recent_assessments.len() as f64
+            } else {
+                0.0
+            };
+
+            Ok(json!({
+                "user_id": user_id,
+                "behavioral_profile": {
+                    "average_transaction_amount": row.get::<_, f64>(0),
+                    "transaction_frequency": row.get::<_, f64>(1),
+                    "total_transactions": row.get::<_, i64>(2),
+                    "high_risk_transaction_count": row.get::<_, i64>(3),
+                    "geographic_diversity_score": row.get::<_, f64>(4),
+                    "is_high_risk": row.get::<_, bool>(5),
+                    "risk_score_trend": row.get::<_, String>(6),
+                    "last_update": row.get::<_, chrono::DateTime<chrono::Utc>>(7),
+                },
+                "recent_assessment_score": avg_recent_score,
+                "recent_assessments_count": recent_assessments.len(),
+                "recent_ml_scores_count": recent_ml_scores.len(),
+            }))
+        } else {
+            Ok(json!({
+                "user_id": user_id,
+                "message": "No behavioral profile found for user",
+            }))
+        }
+    }
+}
+
+async fn screen_against_provider(
+    http: &reqwest::Client,
+    api_url: &str,
+    api_key: &str,
+    address: &str,
+    timeout_seconds: i32,
+) -> Result<(bool, Option<u8>, Vec<String>, u16), String> {
+    let timeout = std::time::Duration::from_secs(timeout_seconds as u64);
+
+    match tokio::time::timeout(
+        timeout,
+        http.post(api_url)
+            .bearer_auth(api_key)
+            .json(&json!({ "address": address }))
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(response)) => {
+            let status = response.status().as_u16();
+            match response.json::<SanctionsApiResponse>().await {
+                Ok(api_response) => Ok((
+                    api_response.sanctioned,
+                    api_response.risk_score,
+                    api_response.reasons,
+                    status,
+                )),
+                Err(e) => Err(format!("Failed to parse response: {}", e)),
+            }
+        }
+        Ok(Err(e)) => Err(format!("Request failed: {}", e)),
+        Err(_) => Err("Request timeout".to_string()),
     }
 }
