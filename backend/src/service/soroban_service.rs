@@ -77,6 +77,44 @@ impl StellarClient {
         Err(format!("unexpected rpc response: {}", text))
     }
 
+    /// Simulate a transaction via JSON-RPC `simulate_transaction`.
+    /// Returns the raw simulation JSON on success.
+    pub async fn simulate_transaction(&self, tx_envelope: &str) -> Result<JsonValue, String> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "simulate_transaction",
+            "params": [tx_envelope, {"latestLedger":"true"}]
+        });
+
+        let res = self
+            .http
+            .post(&self.rpc_url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("rpc request failed: {}", e))?;
+
+        let status = res.status();
+        let text = res
+            .text()
+            .await
+            .map_err(|e| format!("reading response failed: {}", e))?;
+
+        if !status.is_success() {
+            return Err(format!("rpc returned {}: {}", status, text));
+        }
+
+        let v: JsonValue = serde_json::from_str(&text)
+            .map_err(|e| format!("invalid json from rpc: {} -- {}", e, text))?;
+
+        if let Some(err) = v.get("error") {
+            return Err(format!("rpc error: {}", err));
+        }
+
+        Ok(v)
+    }
+
     /// Query transaction status via JSON-RPC `get_transaction` and return raw JSON.
     pub async fn get_transaction(&self, hash: &str) -> Result<JsonValue, String> {
         let body = json!({
@@ -314,29 +352,45 @@ impl SorobanService {
 
     // Simulate a transaction to estimate fee and footprint (mocked)
     pub async fn simulate_transaction(&self, tx_xdr_base64: &str) -> Result<(u32, u32), ApiError> {
-        // In production: call /simulate on RPC to get accurate fee/footprint
-        // Here, decode and give basic estimates
+        // Try to call the RPC simulate endpoint for a better estimate.
         if tx_xdr_base64.is_empty() {
             return Err(ApiError::Validation("Empty transaction XDR".to_string()));
         }
 
-        // Simple heuristic: native payments cheaper than issued
-        let decoded = general_purpose::STANDARD
-            .decode(tx_xdr_base64)
-            .map_err(|_| ApiError::Validation("Invalid XDR encoding".to_string()))?;
-        let s = String::from_utf8_lossy(&decoded);
-        let fee = if s.contains("\"asset\":\"XLM\"") {
-            100
-        } else {
-            200
-        };
-        let footprint = if s.contains("\"asset\":\"XLM\"") {
-            1
-        } else {
-            2
-        };
+        match self.client.simulate_transaction(tx_xdr_base64).await {
+            Ok(json) => {
+                // Parse minResourceFee if present
+                let mut fee: u32 = 0;
+                let mut footprint: u32 = 0;
 
-        Ok((fee, footprint))
+                if let Some(result) = json.get("result") {
+                    if let Some(min_fee) = result.get("minResourceFee").and_then(|v| v.as_str()) {
+                        if let Ok(parsed) = min_fee.parse::<u32>() {
+                            fee = parsed;
+                        }
+                    }
+
+                    if let Some(txdata) = result.get("transactionData") {
+                        // footprint size heuristic
+                        if txdata.get("instructions").is_some() {
+                            footprint = 1;
+                        } else {
+                            footprint = 1;
+                        }
+                    }
+                }
+
+                if fee == 0 {
+                    fee = 100;
+                }
+                if footprint == 0 {
+                    footprint = 1;
+                }
+
+                Ok((fee, footprint))
+            }
+            Err(e) => Err(self.normalize_error(e)),
+        }
     }
 
     // Sign transaction as fee payer (fee sponsorship) using server-side signer
