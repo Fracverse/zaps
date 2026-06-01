@@ -347,19 +347,47 @@ impl SorobanService {
         }
     }
 
-    fn normalize_error(&self, _: String) -> ApiError {
-        // Normalize Soroban/Stellar errors into ApiError; keep it simple
-        // and surface the RPC message where available.
-        // Best-effort mapping: if message contains known keywords, map to
-        // Validation or Stellar error types.
-        let msg = _;
-        let lower = msg.to_lowercase();
+    fn normalize_error(&self, raw: String) -> ApiError {
+        // Try to parse structured RPC JSON first
+        if let Ok(json): Result<serde_json::Value, _> = serde_json::from_str(&raw) {
+            // JSON-RPC error object
+            if let Some(err) = json.get("error") {
+                // Try to extract a message/code
+                let msg = if let Some(m) = err.get("message") {
+                    m.as_str().unwrap_or(&err.to_string()).to_string()
+                } else {
+                    err.to_string()
+                };
+
+                let lower = msg.to_lowercase();
+                if lower.contains("validation") || lower.contains("invalid") || lower.contains("bad request") {
+                    return ApiError::Validation(msg);
+                }
+                return ApiError::Stellar(msg);
+            }
+
+            // Some RPCs place error info inside result.error
+            if let Some(result) = json.get("result") {
+                if let Some(err) = result.get("error") {
+                    let msg = err.as_str().unwrap_or(&err.to_string()).to_string();
+                    let lower = msg.to_lowercase();
+                    if lower.contains("validation") || lower.contains("invalid") || lower.contains("bad request") {
+                        return ApiError::Validation(msg);
+                    }
+                    return ApiError::Stellar(msg);
+                }
+            }
+        }
+
+        // Fallback: simple substring mapping on raw text
+        let lower = raw.to_lowercase();
         if lower.contains("validation") || lower.contains("invalid") || lower.contains("bad request") {
-            return ApiError::Validation(msg);
+            return ApiError::Validation(raw);
         }
-        if lower.contains("stellar") || lower.contains("soroban") || lower.contains("rpc") {
-            return ApiError::Stellar(msg);
+        if lower.contains("stellar") || lower.contains("soroban") || lower.contains("rpc") || lower.contains("tx failed") {
+            return ApiError::Stellar(raw);
         }
+
         ApiError::InternalServerError
     }
 
