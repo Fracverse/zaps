@@ -6,14 +6,17 @@ use crate::{
     models::{BuildTransactionDto, SignedTransactionResponse, TransactionStatus},
 };
 use base64::{engine::general_purpose, Engine as _};
-use serde_json::json;
+use reqwest::Client as HttpClient;
+use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
+use tokio::time::{sleep, Duration};
 
 // Mocking Stellar SDK types for now as we don't have the full crate docs loaded
 // In a real scenario, these would be imports from a Stellar SDK/crate
 pub struct StellarClient {
     pub network_passphrase: String,
     pub rpc_url: String,
+    http: HttpClient,
 }
 
 impl StellarClient {
@@ -21,12 +24,94 @@ impl StellarClient {
         Self {
             network_passphrase,
             rpc_url,
+            http: HttpClient::new(),
         }
     }
 
-    pub async fn submit_transaction(&self, _tx_envelope: &str) -> Result<String, String> {
-        // Mock submission
-        Ok("mock_tx_hash".to_string())
+    /// Submit a signed transaction XDR (base64) to the Soroban RPC using
+    /// the JSON-RPC `send_transaction` method. Returns the transaction hash
+    /// on success or an error message.
+    pub async fn submit_transaction(&self, tx_envelope: &str) -> Result<String, String> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "send_transaction",
+            "params": [tx_envelope]
+        });
+
+        let res = self
+            .http
+            .post(&self.rpc_url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("rpc request failed: {}", e))?;
+
+        let status = res.status();
+        let text = res
+            .text()
+            .await
+            .map_err(|e| format!("reading response failed: {}", e))?;
+
+        if !status.is_success() {
+            return Err(format!("rpc returned {}: {}", status, text));
+        }
+
+        let v: JsonValue = serde_json::from_str(&text)
+            .map_err(|e| format!("invalid json from rpc: {} -- {}", e, text))?;
+
+        if let Some(err) = v.get("error") {
+            return Err(format!("rpc error: {}", err));
+        }
+
+        // Try to extract a hash from result
+        if let Some(hash) = v.get("result").and_then(|r| r.get("hash")).and_then(|h| h.as_str()) {
+            return Ok(hash.to_string());
+        }
+
+        // Fallback: sometimes result may directly be a string hash
+        if let Some(s) = v.get("result").and_then(|r| r.as_str()) {
+            return Ok(s.to_string());
+        }
+
+        Err(format!("unexpected rpc response: {}", text))
+    }
+
+    /// Query transaction status via JSON-RPC `get_transaction` and return raw JSON.
+    pub async fn get_transaction(&self, hash: &str) -> Result<JsonValue, String> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "get_transaction",
+            "params": [hash]
+        });
+
+        let res = self
+            .http
+            .post(&self.rpc_url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("rpc request failed: {}", e))?;
+
+        let status = res.status();
+        let text = res
+            .text()
+            .await
+            .map_err(|e| format!("reading response failed: {}", e))?;
+
+        if !status.is_success() {
+            return Err(format!("rpc returned {}: {}", status, text));
+        }
+
+        let v: JsonValue = serde_json::from_str(&text)
+            .map_err(|e| format!("invalid json from rpc: {} -- {}", e, text))?;
+
+        if let Some(err) = v.get("error") {
+            return Err(format!("rpc error: {}", err));
+        }
+
+        Ok(v)
     }
 }
 
@@ -95,17 +180,86 @@ impl SorobanService {
         &self,
         signed_tx_xdr: String,
     ) -> Result<SignedTransactionResponse, ApiError> {
-        match self.client.submit_transaction(&signed_tx_xdr).await {
-            Ok(hash) => Ok(SignedTransactionResponse {
-                tx_hash: hash,
-                status: TransactionStatus::PENDING,
-            }),
-            Err(e) => Err(self.normalize_error(e)),
+        // Submit to RPC
+        let hash = self
+            .client
+            .submit_transaction(&signed_tx_xdr)
+            .await
+            .map_err(|e| self.normalize_error(e))?;
+
+        // Poll for final status with backoff
+        let mut attempts = 0u32;
+        loop {
+            attempts += 1;
+            // Query transaction status
+            match self.client.get_transaction(&hash).await {
+                Ok(json) => {
+                    // Try to interpret known status fields
+                    if let Some(result) = json.get("result") {
+                        // Many implementations return `status` or nested status
+                        if let Some(status_str) = result.get("status").and_then(|s| s.as_str()) {
+                            match status_str {
+                                "NOT_FOUND" | "not_found" => {
+                                    // keep polling
+                                }
+                                "SUCCESS" | "success" | "CONFIRMED" | "confirmed" => {
+                                    return Ok(SignedTransactionResponse {
+                                        tx_hash: hash,
+                                        status: TransactionStatus::CONFIRMED,
+                                    });
+                                }
+                                "FAILED" | "failed" => {
+                                    return Ok(SignedTransactionResponse {
+                                        tx_hash: hash,
+                                        status: TransactionStatus::FAILED,
+                                    });
+                                }
+                                _ => {
+                                    // Unexpected, continue polling a few times
+                                }
+                            }
+                        } else if let Some(status_val) = result.get("status") {
+                            // fallback: numeric or other
+                            let s = status_val.to_string();
+                            if s.to_lowercase().contains("failed") {
+                                return Ok(SignedTransactionResponse {
+                                    tx_hash: hash,
+                                    status: TransactionStatus::FAILED,
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    // treat RPC read errors as transient and retry
+                }
+            }
+
+            if attempts > 30 {
+                // timeout
+                return Ok(SignedTransactionResponse {
+                    tx_hash: hash,
+                    status: TransactionStatus::PENDING,
+                });
+            }
+
+            sleep(Duration::from_millis(1000)).await;
         }
     }
 
     fn normalize_error(&self, _: String) -> ApiError {
-        // Normalize Soroban/Stellar errors into ApiError
+        // Normalize Soroban/Stellar errors into ApiError; keep it simple
+        // and surface the RPC message where available.
+        // Best-effort mapping: if message contains known keywords, map to
+        // Validation or Stellar error types.
+        let msg = _;
+        let lower = msg.to_lowercase();
+        if lower.contains("validation") || lower.contains("invalid") || lower.contains("bad request") {
+            return ApiError::Validation(msg);
+        }
+        if lower.contains("stellar") || lower.contains("soroban") || lower.contains("rpc") {
+            return ApiError::Stellar(msg);
+        }
         ApiError::InternalServerError
     }
 
@@ -203,11 +357,19 @@ impl SorobanService {
 #[async_trait]
 impl TransactionBuilder for SorobanService {
     async fn build_transaction(&self, dto: BuildTransactionDto) -> Result<String, ApiError> {
-        // Mock transaction building for contract invocations
-        let tx_xdr = format!(
-            "mock_xdr_invoke_{}_{}_{:?}",
-            dto.contract_id, dto.method, dto.args
-        );
-        Ok(tx_xdr)
+        // Build a lightweight JSON representation of the contract invocation
+        // and return it as base64 so callers (clients) receive an opaque
+        // payload they can simulate/sign. This mirrors the earlier mock
+        // but provides structured data for potential RPC simulation.
+        let payload = json!({
+            "type": "contract_invoke",
+            "contract_id": dto.contract_id,
+            "method": dto.method,
+            "args": dto.args,
+        });
+
+        let raw = payload.to_string();
+        let encoded = general_purpose::STANDARD.encode(raw.as_bytes());
+        Ok(encoded)
     }
 }
