@@ -17,6 +17,7 @@ pub struct CreateBatchRequest {
     pub merchant_id: String,
     pub asset: String,
     pub batch_size: usize,
+    pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,6 +224,30 @@ pub async fn process_batch(
         total_amount: report.total_amount,
         status: report.status,
     }))
+}
+
+/// `GET /batches/:batch_id/items`
+/// List all items in a batch
+pub async fn get_batch_items(
+    State(services): State<Arc<ServiceContainer>>,
+    _auth: AuthenticatedUser,
+    Path(batch_id): Path<String>,
+) -> Result<Json<Vec<BatchItemResponse>>, ApiError> {
+    let items = services.batch.get_batch_items(&batch_id).await?;
+
+    Ok(Json(
+        items
+            .into_iter()
+            .map(|i| BatchItemResponse {
+                id: i.id,
+                batch_id: i.batch_id,
+                payment_id: i.payment_id,
+                status: i.status,
+                error_message: i.error_message,
+                retry_count: i.retry_count,
+            })
+            .collect(),
+    ))
 }
 
 /// `GET /batches/merchant/:merchant_id`

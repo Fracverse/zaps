@@ -177,6 +177,7 @@ pub async fn create_app(
         .route("/batches", post(batches::create_batch))
         .route("/batches/:batch_id", get(batches::get_batch))
         .route("/batches/:batch_id/items", post(batches::add_payment_to_batch))
+        .route("/batches/:batch_id/items", get(batches::get_batch_items))
         .route("/batches/:batch_id/report", get(batches::get_batch_report))
         .route("/batches/:batch_id/process", post(batches::process_batch))
         .route("/batches/merchant/:merchant_id", get(batches::get_merchant_batches));
