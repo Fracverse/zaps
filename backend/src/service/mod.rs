@@ -86,6 +86,7 @@ impl ServiceContainer {
     pub async fn new(db_pool: Pool, config: Config) -> Result<Self, Box<dyn std::error::Error>> {
         let db_pool = Arc::new(db_pool);
 
+        let cache = CacheService::new(config.clone()).await;
         let identity = IdentityService::new(db_pool.clone(), config.clone());
         let payment = PaymentService::new(db_pool.clone(), config.clone());
         let payout = PayoutService::new(db_pool.clone(), config.clone());
@@ -93,14 +94,13 @@ impl ServiceContainer {
         let bridge = BridgeService::new(db_pool.clone(), config.clone());
         let anchor = AnchorService::new(db_pool.clone(), config.clone());
         let compliance = ComplianceService::new(db_pool.clone(), config.clone());
-        let currency = CurrencyService::new(db_pool.clone(), config.clone());
+        let currency = CurrencyService::new(db_pool.clone(), config.clone(), cache.clone());
         let analytics = AnalyticsService::new((*db_pool).clone(), config.clone());
         let reconciliation = ReconciliationService::new((*db_pool).clone(), config.clone());
         let audit = AuditService::new(db_pool.clone(), config.clone());
         let indexer = IndexerService::new(db_pool.clone(), config.clone());
         let notification = NotificationService::new(db_pool.clone(), config.clone());
         let rate_limit = RateLimitService::new(config.clone()).await;
-        let cache = CacheService::new(config.clone()).await;
         let profile = ProfileService::new(db_pool.clone(), config.clone());
         let soroban = SorobanService::new(config.clone());
         let storage = StorageService::new(config.clone());

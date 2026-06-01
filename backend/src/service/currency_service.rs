@@ -1,4 +1,4 @@
-use crate::{api_error::ApiError, config::Config};
+use crate::{api_error::ApiError, config::Config, service::CacheService};
 use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -49,6 +49,7 @@ impl std::fmt::Display for Currency {
 pub struct CurrencyService {
     db_pool: Arc<Pool>,
     config: Config,
+    cache_service: CacheService,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,9 +86,24 @@ pub struct ConversionResponse {
     pub rate: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversionResult {
+    pub from_currency: Currency,
+    pub to_currency: Currency,
+    pub from_amount: i64,
+    pub raw_to_amount: i64,
+    pub fee_amount: i64,
+    pub to_amount: i64,
+    pub rate: f64,
+}
+
 impl CurrencyService {
-    pub fn new(db_pool: Arc<Pool>, config: Config) -> Self {
-        Self { db_pool, config }
+    pub fn new(db_pool: Arc<Pool>, config: Config, cache_service: CacheService) -> Self {
+        Self {
+            db_pool,
+            config,
+            cache_service,
+        }
     }
 
     /// Get exchange rate between two currencies
@@ -110,6 +126,19 @@ impl CurrencyService {
             });
         }
 
+        let cache_key = format!("exchange_rate:{}:{}", from, to);
+        if let Ok(Some(cached_rate)) = self.cache_service.get_json::<ExchangeRate>(&cache_key).await {
+            let now = chrono::Utc::now();
+            let age_secs = now.signed_duration_since(cached_rate.last_updated).num_seconds();
+            if age_secs > self.config.currency.max_rate_age_seconds as i64 {
+                return Err(ApiError::BadRequest(format!(
+                    "Exchange rate for {}/{} is stale (last updated {} seconds ago, limit is {} seconds)",
+                    from, to, age_secs, self.config.currency.max_rate_age_seconds
+                )));
+            }
+            return Ok(cached_rate);
+        }
+
         let client = self.db_pool.get().await?;
 
         let row = client
@@ -129,13 +158,60 @@ impl CurrencyService {
                 ))
             })?;
 
-        Ok(ExchangeRate {
+        let rate = ExchangeRate {
             id: row.get(0),
             from_currency: row.get(1),
             to_currency: row.get(2),
             rate: row.get(3),
             source: row.get(4),
             last_updated: row.get(5),
+        };
+
+        let now = chrono::Utc::now();
+        let age_secs = now.signed_duration_since(rate.last_updated).num_seconds();
+        if age_secs > self.config.currency.max_rate_age_seconds as i64 {
+            return Err(ApiError::BadRequest(format!(
+                "Exchange rate for {}/{} is stale in database (last updated {} seconds ago, limit is {} seconds)",
+                from, to, age_secs, self.config.currency.max_rate_age_seconds
+            )));
+        }
+
+        let _ = self
+            .cache_service
+            .set_json(
+                &cache_key,
+                &rate,
+                Some(self.config.currency.max_rate_age_seconds),
+            )
+            .await;
+
+        Ok(rate)
+    }
+
+    /// Convert amount with fee calculation
+    pub async fn convert_with_fee(
+        &self,
+        amount: i64,
+        from: Currency,
+        to: Currency,
+    ) -> Result<ConversionResult, ApiError> {
+        let rate = self.get_exchange_rate(from, to).await?;
+        let raw_to_amount = ((amount as f64 * rate.rate).round()) as i64;
+        let fee_amount = if from == to {
+            0
+        } else {
+            ((raw_to_amount as f64 * (self.config.currency.conversion_fee_bps as f64 / 10000.0)).round()) as i64
+        };
+        let to_amount = raw_to_amount - fee_amount;
+
+        Ok(ConversionResult {
+            from_currency: from,
+            to_currency: to,
+            from_amount: amount,
+            raw_to_amount,
+            fee_amount,
+            to_amount,
+            rate: rate.rate,
         })
     }
 
@@ -146,9 +222,8 @@ impl CurrencyService {
         from: Currency,
         to: Currency,
     ) -> Result<i64, ApiError> {
-        let rate = self.get_exchange_rate(from, to).await?;
-        let to_amount = ((amount as f64 * rate.rate).round()) as i64;
-        Ok(to_amount)
+        let result = self.convert_with_fee(amount, from, to).await?;
+        Ok(result.to_amount)
     }
 
     /// Update or create exchange rate
@@ -195,14 +270,20 @@ impl CurrencyService {
             )
             .await?;
 
-        Ok(ExchangeRate {
+        let rate = ExchangeRate {
             id: row.get(0),
             from_currency: row.get(1),
             to_currency: row.get(2),
             rate: row.get(3),
             source: row.get(4),
             last_updated: row.get(5),
-        })
+        };
+
+        // Invalidate the cache key
+        let cache_key = format!("exchange_rate:{}:{}", rate.from_currency, rate.to_currency);
+        let _ = self.cache_service.invalidate(&cache_key).await;
+
+        Ok(rate)
     }
 
     /// Get all supported currencies

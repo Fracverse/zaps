@@ -20,6 +20,8 @@ pub struct ConvertQuery {
 pub struct ConvertResponse {
     original_amount: i64,
     original_currency: Currency,
+    raw_converted_amount: i64,
+    fee_amount: i64,
     converted_amount: i64,
     converted_currency: Currency,
     rate: f64,
@@ -46,24 +48,20 @@ pub async fn convert_currency(
     let to = Currency::from_str(&query.to)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid 'to' currency".to_string()))?;
 
-    let converted_amount = services
+    let result = services
         .currency
-        .convert(query.amount, from, to)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let rate = services
-        .currency
-        .get_exchange_rate(from, to)
+        .convert_with_fee(query.amount, from, to)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(ConvertResponse {
-        original_amount: query.amount,
-        original_currency: from,
-        converted_amount,
-        converted_currency: to,
-        rate: rate.rate,
+        original_amount: result.from_amount,
+        original_currency: result.from_currency,
+        raw_converted_amount: result.raw_to_amount,
+        fee_amount: result.fee_amount,
+        converted_amount: result.to_amount,
+        converted_currency: result.to_currency,
+        rate: result.rate,
     }))
 }
 

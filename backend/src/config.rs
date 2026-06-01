@@ -26,6 +26,8 @@ pub struct Config {
     pub cache: CacheConfig,
     #[serde(default)]
     pub storage: StorageConfig,
+    #[serde(default)]
+    pub currency: CurrencyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +232,31 @@ impl Default for CacheConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurrencyConfig {
+    #[serde(default = "default_conversion_fee_bps")]
+    pub conversion_fee_bps: u64,
+    #[serde(default = "default_max_rate_age_seconds")]
+    pub max_rate_age_seconds: u64,
+}
+
+impl Default for CurrencyConfig {
+    fn default() -> Self {
+        Self {
+            conversion_fee_bps: 50,
+            max_rate_age_seconds: 300,
+        }
+    }
+}
+
+fn default_conversion_fee_bps() -> u64 {
+    50
+}
+
+fn default_max_rate_age_seconds() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     #[serde(default)]
     pub backend: StorageBackend,
@@ -387,6 +414,7 @@ impl Default for Config {
             observability: ObservabilityConfig::default(),
             cache: CacheConfig::default(),
             storage: StorageConfig::default(),
+            currency: CurrencyConfig::default(),
         }
     }
 }
