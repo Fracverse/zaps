@@ -10,6 +10,8 @@ use reqwest::Client as HttpClient;
 use serde_json::{json, Value as JsonValue};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 // Mocking Stellar SDK types for now as we don't have the full crate docs loaded
 // In a real scenario, these would be imports from a Stellar SDK/crate
@@ -184,9 +186,36 @@ impl CustodialSigner {
 #[async_trait]
 impl Signer for CustodialSigner {
     async fn sign_transaction(&self, tx_xdr: &str) -> Result<String, ApiError> {
-        // Mock signing logic
-        // In reality: Parse XDR, sign with key, return new XDR
-        Ok(format!("{}_signed_by_custodial", tx_xdr))
+        // Basic sponsorship wrapper: if the incoming payload is base64-encoded
+        // JSON (our builder returns base64 JSON), decode it and wrap it in a
+        // sponsored envelope signed with an HMAC using the configured secret.
+        // This avoids adding heavy XDR handling while providing a deterministic
+        // server-side sponsorship artifact that can be submitted or returned
+        // to clients.
+        let decoded = match general_purpose::STANDARD.decode(tx_xdr) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+            Err(_) => tx_xdr.to_string(),
+        };
+
+        // HMAC-SHA256 over the decoded payload using the secret as key
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(self.secret_key.as_bytes())
+            .map_err(|_| ApiError::InternalServerError)?;
+        mac.update(decoded.as_bytes());
+        let result = mac.finalize();
+        let sig_bytes = result.into_bytes();
+        let sig_b64 = general_purpose::STANDARD.encode(&sig_bytes);
+
+        let envelope = json!({
+            "type": "sponsored_transaction",
+            "sponsored_by": "fee_payer_custodial",
+            "envelope": decoded,
+            "signature": sig_b64,
+        });
+
+        let raw = envelope.to_string();
+        let out = general_purpose::STANDARD.encode(raw.as_bytes());
+        Ok(out)
     }
 }
 
