@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
+use hex as hex_crate;
 
 // Mocking Stellar SDK types for now as we don't have the full crate docs loaded
 // In a real scenario, these would be imports from a Stellar SDK/crate
@@ -197,11 +199,41 @@ impl Signer for CustodialSigner {
             Err(_) => tx_xdr.to_string(),
         };
 
-        // HMAC-SHA256 over the decoded payload using the secret as key
+        let decoded_bytes = decoded.into_bytes();
+
+        // Try hex seed ed25519 signing (32-byte seed in hex). If the
+        // configured secret parses as hex 32 bytes, perform ed25519
+        // signing and return envelope with `ed25519` signature. Otherwise
+        // fallback to HMAC-based sponsorship.
+        if let Ok(seed) = hex_crate::decode(&self.secret_key) {
+            if seed.len() == 32 {
+                let secret = SecretKey::from_bytes(&seed).map_err(|_| ApiError::InternalServerError)?;
+                let public = PublicKey::from(&secret);
+                let keypair = Keypair { secret, public };
+
+                let sig = keypair.sign(&decoded_bytes);
+                let sig_b64 = general_purpose::STANDARD.encode(sig.to_bytes());
+
+                let envelope = json!({
+                    "type": "sponsored_transaction",
+                    "sponsored_by": "fee_payer_custodial",
+                    "signature_type": "ed25519",
+                    "envelope": general_purpose::STANDARD.encode(&decoded_bytes),
+                    "signature": sig_b64,
+                    "pubkey": general_purpose::STANDARD.encode(public.as_bytes()),
+                });
+
+                let raw = envelope.to_string();
+                let out = general_purpose::STANDARD.encode(raw.as_bytes());
+                return Ok(out);
+            }
+        }
+
+        // Fallback HMAC-SHA256
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(self.secret_key.as_bytes())
             .map_err(|_| ApiError::InternalServerError)?;
-        mac.update(decoded.as_bytes());
+        mac.update(&decoded_bytes);
         let result = mac.finalize();
         let sig_bytes = result.into_bytes();
         let sig_b64 = general_purpose::STANDARD.encode(&sig_bytes);
@@ -209,7 +241,8 @@ impl Signer for CustodialSigner {
         let envelope = json!({
             "type": "sponsored_transaction",
             "sponsored_by": "fee_payer_custodial",
-            "envelope": decoded,
+            "signature_type": "hmac-sha256",
+            "envelope": general_purpose::STANDARD.encode(&decoded_bytes),
             "signature": sig_b64,
         });
 
