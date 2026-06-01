@@ -406,6 +406,41 @@ impl SorobanService {
         let signer = self.fee_payer_signer.as_ref().unwrap();
         signer.sign_transaction(tx_xdr_base64).await
     }
+
+    /// Simulate a read-only contract call and return the raw simulation `retval` JSON if present.
+    pub async fn simulate_contract_read(
+        &self,
+        contract_id: &str,
+        method: &str,
+        args: Vec<serde_json::Value>,
+    ) -> Result<Option<serde_json::Value>, ApiError> {
+        // Build the contract invocation payload (base64) using our builder
+        let dto = BuildTransactionDto {
+            contract_id: contract_id.to_string(),
+            method: method.to_string(),
+            args,
+        };
+
+        let tx_xdr = self.build_transaction(dto).await?;
+
+        let sim_json = self
+            .client
+            .simulate_transaction(&tx_xdr)
+            .await
+            .map_err(|e| self.normalize_error(e))?;
+
+        if let Some(result) = sim_json.get("result") {
+            if let Some(error) = result.get("error") {
+                return Err(ApiError::Stellar(format!("simulation error: {}", error)));
+            }
+
+            if let Some(retval) = result.get("retval") {
+                return Ok(Some(retval.clone()));
+            }
+        }
+
+        Ok(None)
+    }
 }
 
 #[async_trait]
