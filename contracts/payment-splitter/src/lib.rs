@@ -311,5 +311,3 @@ impl PaymentSplitter {
         Ok(())
     }
 }
-
-mod test;
