@@ -649,11 +649,228 @@ impl GovernanceContract {
             .get(&Key::VoteRecord(proposal_id, voter))
     }
 
-    /// Returns the address that `delegator` has delegated to, if any.
-    pub fn get_delegate(env: Env, delegator: Address) -> Option<Address> {
-        env.storage()
+    // -----------------------------------------------------------------------
+    // Advanced Governance Features
+    // -----------------------------------------------------------------------
+
+    /// Create a proposal with emergency fast-track option.
+    /// Emergency proposals have a shorter voting period and higher quorum.
+    pub fn propose_emergency(
+        env: Env,
+        proposer: Address,
+        payload: Bytes,
+        description: Bytes,
+    ) -> u64 {
+        proposer.require_auth();
+        bump_instance(&env);
+
+        let config = load_config(&env);
+        let power = effective_voting_power(&env, &proposer);
+
+        // Emergency proposals require 2x the normal threshold
+        if power < config.proposal_threshold * 2 {
+            panic_with_error!(env, GovError::InsufficientVotingPower);
+        }
+
+        let proposal_id: u64 = env
+            .storage()
+            .instance()
+            .get(&Key::ProposalCounter)
+            .unwrap_or(0);
+        let next_id = proposal_id + 1;
+
+        let current_ledger = env.ledger().sequence();
+        // Emergency proposals have half the voting period
+        let emergency_voting_period = config.voting_period_ledgers / 2;
+
+        let proposal = Proposal {
+            id: next_id,
+            proposer: proposer.clone(),
+            payload,
+            description,
+            vote_end_ledger: current_ledger + emergency_voting_period,
+            execute_after_ledger: 0,
+            for_votes: 0,
+            against_votes: 0,
+            abstain_votes: 0,
+            status: ProposalStatus::Active,
+        };
+
+        save_proposal(&env, &proposal);
+        env.storage().instance().set(&Key::ProposalCounter, &next_id);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("emg_prop")),
+            (next_id, proposer, emergency_voting_period),
+        );
+
+        next_id
+    }
+
+    /// Vote with delegation chain support. Allows voting on behalf of delegated power.
+    pub fn vote_delegated(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        choice: VoteChoice,
+        delegated_voters: soroban_sdk::Vec<Address>,
+    ) {
+        voter.require_auth();
+        bump_instance(&env);
+
+        let mut proposal = load_proposal(&env, proposal_id);
+
+        if proposal.status != ProposalStatus::Active {
+            panic_with_error!(env, GovError::ProposalNotActive);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger > proposal.vote_end_ledger {
+            panic_with_error!(env, GovError::VotingPeriodEnded);
+        }
+
+        // Prevent double voting.
+        let vote_key = Key::VoteRecord(proposal_id, voter.clone());
+        if env.storage().persistent().has(&vote_key) {
+            panic_with_error!(env, GovError::AlreadyVoted);
+        }
+
+        let mut total_power = effective_voting_power(&env, &voter);
+
+        // Add power from delegated voters
+        for delegated in delegated_voters.iter() {
+            let delegated_power: i128 = env
+                .storage()
+                .persistent()
+                .get(&Key::VotingPower(delegated.clone()))
+                .unwrap_or(0);
+            total_power += delegated_power;
+        }
+
+        match choice {
+            VoteChoice::For => proposal.for_votes += total_power,
+            VoteChoice::Against => proposal.against_votes += total_power,
+            VoteChoice::Abstain => proposal.abstain_votes += total_power,
+        }
+
+        env.storage().persistent().set(&vote_key, &choice);
+        bump_persistent(&env, &vote_key);
+
+        save_proposal(&env, &proposal);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("v_deleg")),
+            (proposal_id, voter, choice as u32, total_power),
+        );
+    }
+
+    /// Create a proposal with veto power for admin (emergency override).
+    pub fn veto_proposal(env: Env, proposal_id: u64) {
+        require_admin(&env);
+        bump_instance(&env);
+
+        let mut proposal = load_proposal(&env, proposal_id);
+
+        if proposal.status == ProposalStatus::Executed
+            || proposal.status == ProposalStatus::Cancelled
+        {
+            panic_with_error!(env, GovError::ProposalNotActive);
+        }
+
+        proposal.status = ProposalStatus::Cancelled;
+        save_proposal(&env, &proposal);
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("vetoed")),
+            (proposal_id,),
+        );
+    }
+
+    /// Batch vote on multiple proposals (gas optimization).
+    pub fn batch_vote(
+        env: Env,
+        voter: Address,
+        proposal_ids: soroban_sdk::Vec<u64>,
+        choices: soroban_sdk::Vec<VoteChoice>,
+    ) {
+        voter.require_auth();
+        bump_instance(&env);
+
+        if proposal_ids.len() != choices.len() {
+            panic_with_error!(env, GovError::InvalidConfig);
+        }
+
+        for i in 0..proposal_ids.len() {
+            let proposal_id = proposal_ids.get(i).unwrap();
+            let choice = choices.get(i).unwrap();
+
+            let mut proposal = load_proposal(&env, proposal_id);
+
+            if proposal.status != ProposalStatus::Active {
+                panic_with_error!(env, GovError::ProposalNotActive);
+            }
+
+            let current_ledger = env.ledger().sequence();
+            if current_ledger > proposal.vote_end_ledger {
+                panic_with_error!(env, GovError::VotingPeriodEnded);
+            }
+
+            let vote_key = Key::VoteRecord(proposal_id, voter.clone());
+            if env.storage().persistent().has(&vote_key) {
+                panic_with_error!(env, GovError::AlreadyVoted);
+            }
+
+            let power = effective_voting_power(&env, &voter);
+
+            match choice {
+                VoteChoice::For => proposal.for_votes += power,
+                VoteChoice::Against => proposal.against_votes += power,
+                VoteChoice::Abstain => proposal.abstain_votes += power,
+            }
+
+            env.storage().persistent().set(&vote_key, &choice);
+            bump_persistent(&env, &vote_key);
+            save_proposal(&env, &proposal);
+        }
+
+        env.events().publish(
+            (symbol_short!("gov"), symbol_short!("batch_v")),
+            (voter, proposal_ids.len() as u32),
+        );
+    }
+
+    /// Get proposal voting statistics.
+    pub fn get_proposal_stats(env: Env, proposal_id: u64) -> (i128, i128, i128, i128) {
+        let proposal = load_proposal(&env, proposal_id);
+        let config = load_config(&env);
+        let total_votes = proposal.for_votes + proposal.against_votes + proposal.abstain_votes;
+        (proposal.for_votes, proposal.against_votes, proposal.abstain_votes, total_votes)
+    }
+
+    /// Check if a proposal would pass based on current votes.
+    pub fn would_pass(env: Env, proposal_id: u64) -> bool {
+        let proposal = load_proposal(&env, proposal_id);
+        let config = load_config(&env);
+        let total_votes = proposal.for_votes + proposal.against_votes + proposal.abstain_votes;
+
+        total_votes >= config.quorum_votes && proposal.for_votes > proposal.against_votes
+    }
+
+    /// Get voting power breakdown for an address.
+    pub fn get_power_breakdown(env: Env, account: Address) -> (i128, i128) {
+        let own: i128 = env
+            .storage()
             .persistent()
-            .get(&Key::DelegateTarget(delegator))
+            .get(&Key::VotingPower(account.clone()))
+            .unwrap_or(0);
+
+        let delegated: i128 = env
+            .storage()
+            .persistent()
+            .get(&Key::DelegatedPower(account.clone()))
+            .unwrap_or(0);
+
+        (own, delegated)
     }
 }
 

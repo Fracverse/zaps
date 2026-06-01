@@ -551,4 +551,310 @@ fn adjust_reputation(env: &Env, addr: &Address, delta: i32) -> i32 {
     next
 }
 
+// ─── Advanced Dispute Resolution ─────────────────────────────────────────────
+//
+// Enhanced dispute resolution with multi-tier arbitration, evidence management,
+// and reputation-based arbitrator selection.
+
+#[contracttype]
+#[derive(Clone)]
+pub struct DisputeResolution {
+    pub escrow_id: BytesN<32>,
+    pub initiator: Address,
+    pub status: DisputeStatus,
+    pub tier: u32,
+    pub arbitrators: soroban_sdk::Vec<Address>,
+    pub selected_arbitrator: Option<Address>,
+    pub evidence_hashes: soroban_sdk::Vec<BytesN<32>>,
+    pub resolution_deadline: u64,
+    pub appeal_deadline: u64,
+    pub final_decision: Option<bool>, // true = release to seller, false = refund to buyer
+}
+
+#[contracttype]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DisputeStatus {
+    Pending = 1,
+    UnderReview = 2,
+    Resolved = 3,
+    Appealed = 4,
+    FinalResolution = 5,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DisputeError {
+    DisputeNotFound = 1,
+    InvalidArbitrator = 2,
+    AppealDeadlineExpired = 3,
+    NoArbitratorsAvailable = 4,
+    InsufficientReputation = 5,
+    DisputeAlreadyResolved = 6,
+}
+
+#[contractimpl]
+impl EscrowContract {
+    /// Initiate advanced dispute resolution with multi-tier arbitration.
+    pub fn initiate_advanced_dispute(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+        arbitrators: soroban_sdk::Vec<Address>,
+        resolution_deadline: u64,
+    ) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        if arbitrators.is_empty() {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::NoArbitratorsAvailable);
+        }
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        if escrow.state != EscrowState::Locked {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, EscrowError::InvalidState);
+        }
+
+        if caller != escrow.buyer && caller != escrow.seller {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, EscrowError::NotAuthorized);
+        }
+
+        escrow.state = EscrowState::Disputed;
+        env.storage().persistent().set(&key, &escrow);
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let dispute = DisputeResolution {
+            escrow_id: escrow_id.clone(),
+            initiator: caller.clone(),
+            status: DisputeStatus::Pending,
+            tier: 1,
+            arbitrators: arbitrators.clone(),
+            selected_arbitrator: None,
+            evidence_hashes: soroban_sdk::Vec::new(&env),
+            resolution_deadline,
+            appeal_deadline: 0,
+            final_decision: None,
+        };
+
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("adv_disp")),
+            (escrow_id, caller, arbitrators.len() as u32)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Submit evidence for advanced dispute resolution.
+    pub fn submit_dispute_evidence(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+        evidence_hash: BytesN<32>,
+    ) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let mut dispute: DisputeResolution = env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound));
+
+        if dispute.status == DisputeStatus::FinalResolution {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::DisputeAlreadyResolved);
+        }
+
+        dispute.evidence_hashes.push_back(evidence_hash.clone());
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("ev_sub")),
+            (escrow_id, caller, evidence_hash)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Select an arbitrator based on reputation score.
+    pub fn select_arbitrator(
+        env: Env,
+        escrow_id: BytesN<32>,
+        arbitrator: Address,
+    ) {
+        reentrancy_guard_enter(&env);
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let mut dispute: DisputeResolution = env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound));
+
+        // Verify arbitrator is in the list
+        let mut found = false;
+        for arb in dispute.arbitrators.iter() {
+            if arb == arbitrator {
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::InvalidArbitrator);
+        }
+
+        // Check reputation (minimum 50)
+        let rep_key = reputation_key(&arbitrator);
+        let reputation: i32 = env.storage().persistent().get(&rep_key).unwrap_or(0);
+        if reputation < 50 {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::InsufficientReputation);
+        }
+
+        dispute.selected_arbitrator = Some(arbitrator.clone());
+        dispute.status = DisputeStatus::UnderReview;
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("arb_sel")),
+            (escrow_id, arbitrator)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Arbitrator submits resolution decision.
+    pub fn submit_arbitration_decision(
+        env: Env,
+        escrow_id: BytesN<32>,
+        arbitrator: Address,
+        decision: bool, // true = release to seller, false = refund to buyer
+    ) {
+        reentrancy_guard_enter(&env);
+        arbitrator.require_auth();
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let mut dispute: DisputeResolution = env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound));
+
+        if dispute.selected_arbitrator.as_ref() != Some(&arbitrator) {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::InvalidArbitrator);
+        }
+
+        dispute.final_decision = Some(decision);
+        dispute.status = DisputeStatus::Resolved;
+        dispute.appeal_deadline = env.ledger().timestamp() + 7 * 24 * 60 * 60;
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        // Update arbitrator reputation
+        let _ = adjust_reputation(&env, &arbitrator, 2);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("arb_dec")),
+            (escrow_id, arbitrator, decision)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Appeal an arbitration decision within the appeal window.
+    pub fn appeal_arbitration(
+        env: Env,
+        escrow_id: BytesN<32>,
+        caller: Address,
+        reason: BytesN<32>,
+    ) {
+        reentrancy_guard_enter(&env);
+        caller.require_auth();
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let mut dispute: DisputeResolution = env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound));
+
+        if env.ledger().timestamp() > dispute.appeal_deadline {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::AppealDeadlineExpired);
+        }
+
+        dispute.status = DisputeStatus::Appealed;
+        dispute.tier = dispute.tier.saturating_add(1);
+        dispute.final_decision = None;
+        env.storage().persistent().set(&dispute_key, &dispute);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("app_arb")),
+            (escrow_id, caller, reason)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Execute final arbitration decision and transfer funds.
+    pub fn execute_arbitration_decision(
+        env: Env,
+        escrow_id: BytesN<32>,
+    ) {
+        reentrancy_guard_enter(&env);
+
+        let key = escrow_key(&escrow_id);
+        let mut escrow: Escrow = env.storage().persistent().get(&key)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::NotLocked));
+
+        let dispute_key = (symbol_short!("dispute"), escrow_id.clone());
+        let dispute: DisputeResolution = env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound));
+
+        if dispute.status != DisputeStatus::Resolved {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::DisputeNotFound);
+        }
+
+        if env.ledger().timestamp() <= dispute.appeal_deadline {
+            reentrancy_guard_exit(&env);
+            panic_with_error!(env, DisputeError::AppealDeadlineExpired);
+        }
+
+        let token_client = TokenClient::new(&env, &escrow.token);
+
+        if let Some(decision) = dispute.final_decision {
+            if decision {
+                escrow.state = EscrowState::Released;
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.seller,
+                    &escrow.amount,
+                );
+            } else {
+                escrow.state = EscrowState::Refunded;
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &escrow.buyer,
+                    &escrow.amount,
+                );
+            }
+        }
+
+        env.storage().persistent().set(&key, &escrow);
+
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("exec_dec")),
+            (escrow_id, dispute.final_decision)
+        );
+
+        reentrancy_guard_exit(&env);
+    }
+
+    /// Get dispute resolution details.
+    pub fn get_dispute(env: Env, escrow_id: BytesN<32>) -> DisputeResolution {
+        let dispute_key = (symbol_short!("dispute"), escrow_id);
+        env.storage().persistent().get(&dispute_key)
+            .unwrap_or_else(|| panic_with_error!(env, DisputeError::DisputeNotFound))
+    }
+}
+
 mod test;
