@@ -13,6 +13,7 @@ use crate::{
     service::MetricsService,
     service::{payment_service::CreatePaymentRequest, ServiceContainer},
 };
+use crate::service::schedule_service::ScheduleService;
 
 #[derive(Debug, Serialize)]
 pub struct PaymentResponse {
@@ -293,3 +294,153 @@ pub async fn validate_nfc(
         xdr_payload,
     }))
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateScheduleRequest {
+    pub merchant_id: String,
+    pub to_address: String,
+    pub send_asset: String,
+    pub send_amount: i64,
+    pub memo: Option<String>,
+    pub schedule_type: String, // ONE_TIME or RECURRING
+    pub interval_seconds: Option<i64>,
+    pub first_run: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn create_schedule(
+    State(services): State<Arc<ServiceContainer>>,
+    Json(request): Json<CreateScheduleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let db_pool = services.db_pool.clone();
+    let schedule_svc = ScheduleService::new(db_pool);
+
+    let first_run = request
+        .first_run
+        .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::seconds(10));
+
+    let schedule = if request.schedule_type == "ONE_TIME" {
+        schedule_svc
+            .create_one_time_schedule(
+                &request.merchant_id,
+                "GEXAMPLE_ADDRESS",
+                &request.to_address,
+                &request.send_asset,
+                request.send_amount,
+                request.memo.as_deref(),
+                first_run,
+            )
+            .await?
+    } else {
+        let interval = request.interval_seconds.unwrap_or(86400);
+        schedule_svc
+            .create_recurring_schedule(
+                &request.merchant_id,
+                "GEXAMPLE_ADDRESS",
+                &request.to_address,
+                &request.send_asset,
+                request.send_amount,
+                request.memo.as_deref(),
+                interval,
+                first_run,
+            )
+            .await?
+    };
+
+    Ok(Json(serde_json::json!({"schedule_id": schedule.id})))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModifyScheduleRequest {
+    pub interval_seconds: Option<i64>,
+    pub next_run: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn modify_schedule(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(schedule_id): Path<String>,
+    Json(request): Json<ModifyScheduleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let schedule_uuid = Uuid::parse_str(&schedule_id)
+        .map_err(|_| ApiError::Validation("Invalid Schedule ID".to_string()))?;
+
+    let db_pool = services.db_pool.clone();
+    let schedule_svc = ScheduleService::new(db_pool);
+
+    let schedule = schedule_svc
+        .modify_schedule(schedule_uuid, request.interval_seconds, request.next_run)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "schedule_id": schedule.id,
+        "next_run": schedule.next_run,
+        "interval_seconds": schedule.interval_seconds,
+    })))
+}
+
+pub async fn get_schedule(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let schedule_uuid = Uuid::parse_str(&schedule_id)
+        .map_err(|_| ApiError::Validation("Invalid Schedule ID".to_string()))?;
+
+    let db_pool = services.db_pool.clone();
+    let schedule_svc = ScheduleService::new(db_pool);
+    let schedule = schedule_svc.get_schedule(schedule_uuid).await?;
+
+    Ok(Json(serde_json::json!({
+        "schedule_id": schedule.id,
+        "merchant_id": schedule.merchant_id,
+        "from_address": schedule.from_address,
+        "to_address": schedule.to_address,
+        "send_asset": schedule.send_asset,
+        "send_amount": schedule.send_amount,
+        "memo": schedule.memo,
+        "schedule_type": schedule.schedule_type,
+        "interval_seconds": schedule.interval_seconds,
+        "next_run": schedule.next_run,
+        "status": schedule.status,
+        "retries": schedule.retries,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    })))
+}
+
+pub async fn get_schedule_runs(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let schedule_uuid = Uuid::parse_str(&schedule_id)
+        .map_err(|_| ApiError::Validation("Invalid Schedule ID".to_string()))?;
+
+    let db_pool = services.db_pool.clone();
+    let schedule_svc = ScheduleService::new(db_pool);
+    let runs = schedule_svc.list_schedule_runs(schedule_uuid).await?;
+
+    Ok(Json(serde_json::json!({
+        "schedule_id": schedule_uuid,
+        "runs": runs.iter().map(|run| serde_json::json!({
+            "id": run.id,
+            "attempted_at": run.attempted_at,
+            "success": run.success,
+            "error": run.error,
+            "external_payment_id": run.external_payment_id,
+        })).collect::<Vec<_>>()
+    })))
+}
+
+pub async fn cancel_schedule(
+    State(services): State<Arc<ServiceContainer>>,
+    Path(schedule_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let schedule_uuid = Uuid::parse_str(&schedule_id)
+        .map_err(|_| ApiError::Validation("Invalid Schedule ID".to_string()))?;
+
+    let db_pool = services.db_pool.clone();
+    let schedule_svc = ScheduleService::new(db_pool);
+
+    schedule_svc.cancel_schedule(schedule_uuid).await?;
+
+    Ok(Json(serde_json::json!({"cancelled": true})))
+}
+

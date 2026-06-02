@@ -20,6 +20,7 @@ pub mod session_service;
 pub mod soroban_service;
 pub mod storage_service;
 pub mod webhook_service;
+pub mod schedule_service;
 
 pub use anchor_service::AnchorService;
 pub use analytics_service::{

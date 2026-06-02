@@ -44,6 +44,67 @@ pub async fn create_app(
         }
     });
 
+    // Start payment scheduler background task
+    {
+        use crate::service::schedule_service::ScheduleService;
+        let services_clone = services.clone();
+        let worker_clone = Arc::clone(&job_worker);
+        tokio::spawn(async move {
+            let schedule_svc = ScheduleService::new(services_clone.db_pool.clone());
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                match schedule_svc.list_due_schedules(100).await {
+                    Ok(due) => {
+                        for s in due {
+                            let enqueue_result = crate::job_worker::enqueue_blockchain_tx_job(
+                                Arc::clone(&worker_clone),
+                                s.from_address.clone(),
+                                s.to_address.clone(),
+                                s.send_amount.to_string(),
+                                None,
+                            )
+                            .await;
+
+                            match enqueue_result {
+                                Ok(_) => {
+                                    let _ = schedule_svc
+                                        .mark_run_result(s.id, true, None, None)
+                                        .await;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to enqueue scheduled payment {}: {}", s.id, e);
+                                    let _ = schedule_svc
+                                        .mark_run_result(s.id, false, Some(e.to_string()), None)
+                                        .await;
+
+                                    let _ = services_clone.notification.create_notification(
+                                        crate::service::notification_service::CreateNotificationRequest {
+                                            user_id: s.merchant_id.clone(),
+                                            notification_type: crate::models::NotificationType::SYSTEM,
+                                            title: "Scheduled payment failed".to_string(),
+                                            message: format!(
+                                                "Scheduled payment to {} failed: {}. The system will retry shortly.",
+                                                s.to_address, e
+                                            ),
+                                            metadata: Some(serde_json::json!({
+                                                "schedule_id": s.id,
+                                                "error": e.to_string(),
+                                            })),
+                                            template_name: None,
+                                            template_vars: None,
+                                        },
+                                    ).await;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => tracing::error!("Schedule checker error: {}", e),
+                }
+            }
+        });
+    }
+
     // =========================================================================
     // Route definitions
     // =========================================================================
@@ -81,10 +142,13 @@ pub async fn create_app(
         .route("/payments", post(payments::create_payment))
         .route("/payments/:id", get(payments::get_payment))
         .route("/payments/:id/status", get(payments::get_payment_status))
+        .route("/payments/schedules", post(payments::create_schedule))
+        .route("/payments/schedules/:id", get(payments::get_schedule))
+        .route("/payments/schedules/:id", patch(payments::modify_schedule))
+        .route("/payments/schedules/:id/cancel", post(payments::cancel_schedule))
+        .route("/payments/schedules/:id/runs", get(payments::get_schedule_runs))
         .route("/qr/generate", post(payments::generate_qr))
         .route("/nfc/validate", post(payments::validate_nfc));
-
-    // -------------------- Payouts --------------------
     let payout_routes = Router::new()
         .route("/payouts", post(payouts::create_payout))
         .route("/payouts/:id", get(payouts::get_payout))
