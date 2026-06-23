@@ -36,12 +36,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
-pub fn social_routes() -> Router {
+pub fn social_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/like", post(social::like_payment))
         .route("/unlike", delete(social::unlike_payment))
         .route("/comment", post(social::add_comment))
         .route("/comment/:id", delete(social::delete_comment))
+        .with_state(pool)
 }
 
 pub fn bridge_routes() -> Router {

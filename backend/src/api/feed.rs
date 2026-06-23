@@ -1,6 +1,6 @@
 use axum::{
     async_trait,
-    extract::{FromRequestParts, State},
+    extract::{FromRequestParts, FromRef, State},
     http::{request::Parts, StatusCode},
     response::IntoResponse,
     Json,
@@ -99,7 +99,7 @@ where
         };
 
         // Find or create the user in the database to get a valid UUID
-        let row = sqlx::query(
+        let (id, address, username) = sqlx::query_as::<_, (Uuid, String, String)>(
             r#"
             INSERT INTO users (address, username, display_name)
             VALUES ($1, $2, $3)
@@ -121,9 +121,9 @@ where
         })?;
 
         Ok(AuthUser {
-            id: row.get("id"),
-            address: row.get("address"),
-            username: row.get("username"),
+            id,
+            address,
+            username,
         })
     }
 }

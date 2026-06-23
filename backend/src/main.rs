@@ -1,10 +1,17 @@
 #![allow(dead_code, unused_variables, unused_imports)]
 
 use axum::{
+    extract::State,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -13,13 +20,81 @@ mod db;
 mod indexer;
 mod services;
 
+// Rate limiter state: token bucket per client (IP address)
+#[derive(Clone)]
+struct RateLimiter {
+    buckets: Arc<Mutex<HashMap<String, (i64, std::time::Instant)>>>,
+    tokens_per_second: i64,
+    max_tokens: i64,
+}
+
+impl RateLimiter {
+    fn new(tokens_per_second: i64, max_tokens: i64) -> Self {
+        Self {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+            tokens_per_second,
+            max_tokens,
+        }
+    }
+
+    async fn check_rate(&self, key: String) -> bool {
+        let mut buckets = self.buckets.lock().await;
+        let now = std::time::Instant::now();
+        
+        let (tokens, last_refill) = buckets.entry(key).or_insert((self.max_tokens, now));
+        
+        // Refill tokens based on time passed
+        let elapsed = now.duration_since(*last_refill).as_secs() as i64;
+        if elapsed > 0 {
+            *tokens = std::cmp::min(*tokens + elapsed * self.tokens_per_second, self.max_tokens);
+            *last_refill = now;
+        }
+        
+        if *tokens > 0 {
+            *tokens -= 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+async fn rate_limiter_middleware(
+    State(rate_limiter): State<RateLimiter>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> impl IntoResponse {
+    // Get client IP address
+    let ip = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                .map(|info| info.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if rate_limiter.check_rate(ip.clone()).await {
+        Ok(next.run(request).await)
+    } else {
+        Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many requests, please try again later.",
+        ))
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize logging
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "zaps_backend=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "zaps-backend=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -36,14 +111,25 @@ async fn main() {
         .await
         .expect("Failed to run database migrations");
 
+    // Initialize rate limiter: 5 requests per second, max 10 tokens
+    let rate_limiter = RateLimiter::new(5, 10);
+
     // Setup routes
-    let app = Router::new()
-        .route("/health", get(health_check))
+    let public_routes = Router::new().route("/health", get(health_check));
+    
+    let sensitive_routes = Router::new()
         .nest("/api/auth", api::auth_routes(pool.clone()))
-        .nest("/api/users", api::user_routes(pool.clone()))
+        .nest("/api/users", api::user_routes(pool.clone()));
+    
+    let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
-        .nest("/api/social", api::social_routes())
+        .nest("/api/social", api::social_routes(pool.clone()))
         .nest("/api/bridge", api::bridge_routes());
+
+    let app = Router::new()
+        .merge(public_routes)
+        .merge(sensitive_routes.layer(middleware::from_fn_with_state(rate_limiter.clone(), rate_limiter_middleware)))
+        .merge(other_routes);
 
     // Spawn indexer in the background
     tokio::spawn(async {
