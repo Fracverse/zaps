@@ -48,7 +48,7 @@ pub async fn process_social_payment_event(
     .bind(event.amount)
     .bind("NGN") // Default to NGN for now
     .bind(&event.memo)
-    .bind(&event.visibility.to_uppercase())
+    .bind(event.visibility.to_uppercase())
     .execute(pool)
     .await?;
 
