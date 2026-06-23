@@ -179,9 +179,7 @@ export default function HomeScreen() {
       // Revert on failure
       setFeed((prev) =>
         prev.map((f) =>
-          f.id === id
-            ? { ...f, hasLiked: prevHasLiked, likes: prevLikes }
-            : f
+          f.id === id ? { ...f, hasLiked: prevHasLiked, likes: prevLikes } : f
         )
       );
     }
