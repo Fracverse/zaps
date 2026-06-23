@@ -175,18 +175,65 @@ function TransferScreen() {
           style={styles.transferInput}
         />
 
-        <Input
-          placeholder="Amount (₦)"
-          value={amount}
-          onChangeText={setAmount}
-          keyboardType="numeric"
-          style={styles.transferInput}
-        />
+        {/* Custom Amount Display */}
+        <TouchableOpacity activeOpacity={1} style={[styles.transferInput, styles.amountDisplayContainer]}>
+          <Text style={styles.nairaSymbol}>₦</Text>
+          <Text style={styles.amountText}>{amount || "0"}</Text>
+        </TouchableOpacity>
+
+        {/* Custom Numeric Keypad */}
+        <View style={styles.keypadContainer}>
+          <View style={styles.keypadRow}>
+            {["1", "2", "3"].map((num) => (
+              <TouchableOpacity
+                key={num}
+                style={styles.keypadButton}
+                onPress={() => setAmount((prev) => prev + num)}
+              >
+                <Text style={styles.keypadButtonText}>{num}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.keypadRow}>
+            {["4", "5", "6"].map((num) => (
+              <TouchableOpacity
+                key={num}
+                style={styles.keypadButton}
+                onPress={() => setAmount((prev) => prev + num)}
+              >
+                <Text style={styles.keypadButtonText}>{num}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.keypadRow}>
+            {["7", "8", "9"].map((num) => (
+              <TouchableOpacity
+                key={num}
+                style={styles.keypadButton}
+                onPress={() => setAmount((prev) => prev + num)}
+              >
+                <Text style={styles.keypadButtonText}>{num}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <View style={styles.keypadRow}>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev + ".")}>
+              <Text style={styles.keypadButtonText}>.</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev + "0")}>
+              <Text style={styles.keypadButtonText}>0</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev.slice(0, -1))}>
+              <Text style={styles.keypadButtonText}>⌫</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         <Input
           placeholder="What is this for? (e.g. Lunch 🍕)"
           value={description}
           onChangeText={setDescription}
+          maxLength={100}
           style={styles.transferInput}
         />
       </View>
@@ -465,6 +512,44 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.gray,
     height: 60,
+  },
+  amountDisplayContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  nairaSymbol: {
+    fontSize: 24,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+  },
+  amountText: {
+    fontSize: 24,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+  },
+  keypadContainer: {
+    marginTop: 16,
+    gap: 12,
+  },
+  keypadRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  keypadButton: {
+    flex: 1,
+    height: 60,
+    backgroundColor: "#F5F5F5",
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  keypadButtonText: {
+    fontSize: 24,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
   },
   visibilitySection: {
     marginBottom: 24,
