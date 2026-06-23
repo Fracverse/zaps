@@ -1,7 +1,7 @@
+use crate::api::feed::AuthUser;
 use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use crate::api::feed::AuthUser;
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
@@ -38,10 +38,7 @@ pub struct FriendRequest {
     pub friend_address: String,
 }
 
-pub async fn get_profile(
-    State(pool): State<sqlx::PgPool>,
-    auth: AuthUser,
-) -> impl IntoResponse {
+pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
     let row = match sqlx::query(
         r#"
         SELECT address, username, display_name, bio, avatar_url
@@ -163,10 +160,7 @@ pub async fn search_users(
     Json(users).into_response()
 }
 
-pub async fn list_friends(
-    State(pool): State<sqlx::PgPool>,
-    auth: AuthUser,
-) -> impl IntoResponse {
+pub async fn list_friends(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
     let rows = match sqlx::query(
         r#"
         SELECT u.username, u.address, u.avatar_url

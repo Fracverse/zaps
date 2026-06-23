@@ -1,6 +1,11 @@
-use axum::{extract::{State, Path}, response::IntoResponse, http::StatusCode, Json};
-use serde::{Deserialize, Serialize};
 use crate::api::feed::AuthUser;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 #[derive(Deserialize)]

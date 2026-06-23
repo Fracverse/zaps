@@ -1,6 +1,6 @@
-use std::time::Duration;
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Deserialize, Debug)]
@@ -78,4 +78,3 @@ async fn get_or_create_user_id(
 
     Ok(row.get("id"))
 }
-

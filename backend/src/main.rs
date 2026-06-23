@@ -40,16 +40,16 @@ impl RateLimiter {
     async fn check_rate(&self, key: String) -> bool {
         let mut buckets = self.buckets.lock().await;
         let now = std::time::Instant::now();
-        
+
         let (tokens, last_refill) = buckets.entry(key).or_insert((self.max_tokens, now));
-        
+
         // Refill tokens based on time passed
         let elapsed = now.duration_since(*last_refill).as_secs() as i64;
         if elapsed > 0 {
             *tokens = std::cmp::min(*tokens + elapsed * self.tokens_per_second, self.max_tokens);
             *last_refill = now;
         }
-        
+
         if *tokens > 0 {
             *tokens -= 1;
             true
@@ -116,11 +116,11 @@ async fn main() {
 
     // Setup routes
     let public_routes = Router::new().route("/health", get(health_check));
-    
+
     let sensitive_routes = Router::new()
         .nest("/api/auth", api::auth_routes(pool.clone()))
         .nest("/api/users", api::user_routes(pool.clone()));
-    
+
     let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes(pool.clone()))
@@ -128,7 +128,10 @@ async fn main() {
 
     let app = Router::new()
         .merge(public_routes)
-        .merge(sensitive_routes.layer(middleware::from_fn_with_state(rate_limiter.clone(), rate_limiter_middleware)))
+        .merge(sensitive_routes.layer(middleware::from_fn_with_state(
+            rate_limiter.clone(),
+            rate_limiter_middleware,
+        )))
         .merge(other_routes);
 
     // Spawn indexer in the background

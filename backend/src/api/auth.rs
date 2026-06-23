@@ -1,6 +1,6 @@
 use axum::{extract::State, response::IntoResponse, Json};
-use serde::{Deserialize, Serialize};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 #[derive(Serialize)]
@@ -41,12 +41,16 @@ pub async fn verify_signature(
 
     let signature_bytes = if let Ok(bytes) = hex::decode(&payload.signature) {
         bytes
-    } else if let Ok(bytes) = base64::Engine::decode(&base64::prelude::BASE64_STANDARD, &payload.signature) {
+    } else if let Ok(bytes) =
+        base64::Engine::decode(&base64::prelude::BASE64_STANDARD, &payload.signature)
+    {
         bytes
     } else {
         return (
             axum::http::StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid signature format (must be hex or base64)" })),
+            Json(
+                serde_json::json!({ "error": "Invalid signature format (must be hex or base64)" }),
+            ),
         )
             .into_response();
     };
@@ -91,7 +95,8 @@ pub async fn verify_signature(
     let username: String = row.get("username");
 
     // Generate JWT token
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into());
+    let secret = std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into());
     let expiration = chrono::Utc::now()
         .checked_add_signed(chrono::Duration::days(1))
         .expect("valid timestamp")
