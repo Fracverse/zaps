@@ -11,7 +11,7 @@
  *  - Key rotation replaces the stored key for a given account index.
  */
 
-import { createHmac } from "crypto";
+import { createHmac } from "react-native-quick-crypto";
 import * as SecureStore from "expo-secure-store";
 import * as Clipboard from "expo-clipboard";
 import * as bip39 from "bip39";
