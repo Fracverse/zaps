@@ -74,7 +74,28 @@ where
         let (username, address) = if token == "mock-jwt-token-string" {
             ("ebube.zaps".to_string(), "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string())
         } else {
-            (token.to_string(), token.to_string())
+            // Attempt to decode as JWT
+            let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into());
+            let validation = jsonwebtoken::Validation::default();
+            match jsonwebtoken::decode::<crate::api::auth::Claims>(
+                token,
+                &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(token_data) => {
+                    let addr = token_data.claims.sub;
+                    let short_uname = format!("u_{}", &addr[1..15]);
+                    (short_uname, addr)
+                }
+                Err(_) => {
+                    let short_uname = if token.len() > 20 {
+                        format!("u_{}", &token[1..15])
+                    } else {
+                        token.to_string()
+                    };
+                    (short_uname, token.to_string())
+                }
+            }
         };
 
         // Find or create the user in the database to get a valid UUID

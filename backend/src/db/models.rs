@@ -8,6 +8,7 @@ pub struct User {
     pub address: String,
     pub username: String,
     pub display_name: Option<String>,
+    pub bio: Option<String>,
     pub avatar_url: Option<String>,
     pub created_at: NaiveDateTime,
 }

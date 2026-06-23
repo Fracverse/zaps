@@ -9,10 +9,11 @@ pub mod feed;
 pub mod social;
 pub mod user;
 
-pub fn auth_routes() -> Router {
+pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
+        .with_state(pool)
 }
 
 pub fn user_routes(pool: sqlx::PgPool) -> Router {

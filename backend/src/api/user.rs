@@ -1,10 +1,12 @@
-use axum::{response::IntoResponse, Json, extract::State};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use crate::api::feed::AuthUser;
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
     pub display_name: Option<String>,
+    pub bio: Option<String>,
     pub avatar_url: Option<String>,
 }
 
@@ -13,6 +15,7 @@ pub struct ProfileResponse {
     pub address: String,
     pub username: String,
     pub display_name: Option<String>,
+    pub bio: Option<String>,
     pub avatar_url: Option<String>,
 }
 
@@ -35,24 +38,83 @@ pub struct FriendRequest {
     pub friend_address: String,
 }
 
-pub async fn get_profile() -> impl IntoResponse {
-    // TODO: Implement BE-004 (Get User Profile details)
+pub async fn get_profile(
+    State(pool): State<sqlx::PgPool>,
+    auth: AuthUser,
+) -> impl IntoResponse {
+    let row = match sqlx::query(
+        r#"
+        SELECT address, username, display_name, bio, avatar_url
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Database query error in get_profile: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
     Json(ProfileResponse {
-        address: "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
-        username: "ebube.zaps".to_string(),
-        display_name: Some("Ebube One".to_string()),
-        avatar_url: None,
+        address: row.get("address"),
+        username: row.get("username"),
+        display_name: row.get("display_name"),
+        bio: row.get("bio"),
+        avatar_url: row.get("avatar_url"),
     })
+    .into_response()
 }
 
-pub async fn update_profile(Json(_payload): Json<UpdateProfileRequest>) -> impl IntoResponse {
-    // TODO: Implement BE-004 (Update avatar, display name)
+pub async fn update_profile(
+    State(pool): State<sqlx::PgPool>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateProfileRequest>,
+) -> impl IntoResponse {
+    let row = match sqlx::query(
+        r#"
+        UPDATE users
+        SET display_name = COALESCE($1, display_name),
+            bio = COALESCE($2, bio),
+            avatar_url = COALESCE($3, avatar_url)
+        WHERE id = $4
+        RETURNING address, username, display_name, bio, avatar_url
+        "#,
+    )
+    .bind(payload.display_name)
+    .bind(payload.bio)
+    .bind(payload.avatar_url)
+    .bind(auth.id)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Database update error in update_profile: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to update profile" })),
+            )
+                .into_response();
+        }
+    };
+
     Json(ProfileResponse {
-        address: "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
-        username: "ebube.zaps".to_string(),
-        display_name: Some("Ebube Updated".to_string()),
-        avatar_url: Some("https://example.com/avatar.png".to_string()),
+        address: row.get("address"),
+        username: row.get("username"),
+        display_name: row.get("display_name"),
+        bio: row.get("bio"),
+        avatar_url: row.get("avatar_url"),
     })
+    .into_response()
 }
 
 pub async fn search_users(

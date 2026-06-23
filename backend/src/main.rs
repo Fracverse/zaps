@@ -32,16 +32,14 @@ async fn main() {
         .expect("Failed to connect to database");
 
     // Run schema migrations/initialization
-    let schema_sql = include_str!("db/schema.sql");
-    sqlx::query(schema_sql)
-        .execute(&pool)
+    db::run_migrations(&pool)
         .await
-        .expect("Failed to run database migrations/schema setup");
+        .expect("Failed to run database migrations");
 
     // Setup routes
     let app = Router::new()
         .route("/health", get(health_check))
-        .nest("/api/auth", api::auth_routes())
+        .nest("/api/auth", api::auth_routes(pool.clone()))
         .nest("/api/users", api::user_routes(pool.clone()))
         .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes())
