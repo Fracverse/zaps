@@ -1,13 +1,24 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
-import { getLocales } from "react-native-localize";
-
-// Import translation files
 import en from "./en.json";
 import es from "./es.json";
 import fr from "./fr.json";
 import ar from "./ar.json";
 import sw from "./sw.json";
+
+let cachedGetLocales: (() => { languageCode?: string }[]) | null | undefined;
+
+function safeGetLocales(): (() => { languageCode?: string }[]) | null {
+  if (cachedGetLocales === undefined) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      cachedGetLocales = require("react-native-localize").getLocales;
+    } catch {
+      cachedGetLocales = null;
+    }
+  }
+  return cachedGetLocales;
+}
 
 const resources = {
   en: { translation: en },
@@ -18,8 +29,10 @@ const resources = {
 };
 
 const getDeviceLanguage = (): string => {
-  const locales = getLocales();
-  const deviceLanguage = locales[0]?.languageCode || "en";
+  const getLocales = safeGetLocales();
+  const deviceLanguage = getLocales
+    ? getLocales()[0]?.languageCode || "en"
+    : "en";
 
   // Map device language to supported languages
   const languageMap: { [key: string]: string } = {

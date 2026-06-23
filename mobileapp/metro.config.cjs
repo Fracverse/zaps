@@ -6,6 +6,11 @@ module.exports = (() => {
   config.resolver.extraNodeModules = {
     ...config.resolver.extraNodeModules,
     crypto: require.resolve("react-native-quick-crypto"),
+    stream: require.resolve("readable-stream"),
+    url: require.resolve("react-native-url-polyfill"),
+    events: require.resolve("events"),
+    https: require.resolve("https-browserify"),
+    http: require.resolve("stream-http"),
   };
 
   const { transformer, resolver } = config;

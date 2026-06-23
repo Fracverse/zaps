@@ -23,7 +23,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import * as ScreenCapture from "expo-screen-capture";
+import * as ScreenCapture from "../src/services/screenCapture";
 
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
