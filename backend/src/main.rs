@@ -26,12 +26,24 @@ async fn main() {
 
     tracing::info!("Initializing Zaps Social Backend...");
 
+    let config = config::Config::from_env();
+    let pool = db::get_pool(&config.database_url)
+        .await
+        .expect("Failed to connect to database");
+
+    // Run schema migrations/initialization
+    let schema_sql = include_str!("db/schema.sql");
+    sqlx::query(schema_sql)
+        .execute(&pool)
+        .await
+        .expect("Failed to run database migrations/schema setup");
+
     // Setup routes
     let app = Router::new()
         .route("/health", get(health_check))
         .nest("/api/auth", api::auth_routes())
-        .nest("/api/users", api::user_routes())
-        .nest("/api/feed", api::feed_routes())
+        .nest("/api/users", api::user_routes(pool.clone()))
+        .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes())
         .nest("/api/bridge", api::bridge_routes());
 

@@ -1,5 +1,6 @@
-use axum::{response::IntoResponse, Json};
+use axum::{response::IntoResponse, Json, extract::State};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
@@ -18,6 +19,8 @@ pub struct ProfileResponse {
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub q: String,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -53,15 +56,49 @@ pub async fn update_profile(Json(_payload): Json<UpdateProfileRequest>) -> impl 
 }
 
 pub async fn search_users(
-    axum::extract::Query(_params): axum::extract::Query<SearchQuery>,
+    State(pool): State<sqlx::PgPool>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
 ) -> impl IntoResponse {
-    // TODO: Implement BE-005 (Regex-based username search endpoint)
-    let mock_results = vec![UserSearchItem {
-        username: "tolu.zaps".to_string(),
-        address: "GDEF5678EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
-        avatar_url: None,
-    }];
-    Json(mock_results)
+    let limit = params.limit.unwrap_or(20);
+    let offset = params.offset.unwrap_or(0);
+    let query_pattern = format!("{}%", params.q);
+
+    let rows = match sqlx::query(
+        r#"
+        SELECT username, address, avatar_url
+        FROM users
+        WHERE username LIKE $1 OR address LIKE $1
+        ORDER BY username ASC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(&query_pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Search users query failed: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let users: Vec<UserSearchItem> = rows
+        .into_iter()
+        .map(|row| UserSearchItem {
+            username: row.get("username"),
+            address: row.get("address"),
+            avatar_url: row.get("avatar_url"),
+        })
+        .collect();
+
+    Json(users).into_response()
 }
 
 pub async fn list_friends() -> impl IntoResponse {

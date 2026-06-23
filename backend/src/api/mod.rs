@@ -15,7 +15,7 @@ pub fn auth_routes() -> Router {
         .route("/verify", post(auth::verify_signature))
 }
 
-pub fn user_routes() -> Router {
+pub fn user_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route(
             "/profile",
@@ -24,13 +24,15 @@ pub fn user_routes() -> Router {
         .route("/search", get(user::search_users))
         .route("/friends", get(user::list_friends))
         .route("/friends/request", post(user::send_friend_request))
+        .with_state(pool)
 }
 
-pub fn feed_routes() -> Router {
+pub fn feed_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/public", get(feed::get_public_feed))
         .route("/friends", get(feed::get_friends_feed))
         .route("/private", get(feed::get_private_feed))
+        .with_state(pool)
 }
 
 pub fn social_routes() -> Router {
