@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,12 +8,14 @@ import {
   TextInput,
   Modal,
   FlatList,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { likePayment, unlikePayment } from "../../src/services/socialService";
 
 interface FeedItem {
   id: string;
@@ -73,6 +75,16 @@ export default function HomeScreen() {
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [balance, setBalance] = useState("₦32,450.00");
 
+  // Animated values for like heart scale per feed item
+  const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
+
+  const getScaleAnim = useCallback((id: string) => {
+    if (!scaleAnims.current.has(id)) {
+      scaleAnims.current.set(id, new Animated.Value(1));
+    }
+    return scaleAnims.current.get(id)!;
+  }, []);
+
   // Comments Modal State
   const [commentsModalVisible, setCommentsModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
@@ -125,19 +137,54 @@ export default function HomeScreen() {
     loadNewTransfers();
   }, []);
 
-  const handleLike = (id: string) => {
-    setFeed(
-      feed.map((item) => {
-        if (item.id === id) {
-          return {
-            ...item,
-            hasLiked: !item.hasLiked,
-            likes: item.hasLiked ? item.likes - 1 : item.likes + 1,
-          };
-        }
-        return item;
-      })
+  const handleLike = async (id: string) => {
+    const currentItem = feed.find((f) => f.id === id);
+    if (!currentItem) return;
+
+    const prevHasLiked = currentItem.hasLiked;
+    const prevLikes = currentItem.likes;
+    const newHasLiked = !prevHasLiked;
+    const newLikes = prevHasLiked ? prevLikes - 1 : prevLikes + 1;
+
+    // Scale animation for instant UI feedback
+    const scale = getScaleAnim(id);
+    Animated.sequence([
+      Animated.spring(scale, {
+        toValue: 1.3,
+        useNativeDriver: true,
+        friction: 3,
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 3,
+      }),
+    ]).start();
+
+    // Optimistic local update
+    setFeed((prev) =>
+      prev.map((f) =>
+        f.id === id ? { ...f, hasLiked: newHasLiked, likes: newLikes } : f
+      )
     );
+
+    // Sync to backend
+    try {
+      if (newHasLiked) {
+        await likePayment(id);
+      } else {
+        await unlikePayment(id);
+      }
+    } catch {
+      // Revert on failure
+      setFeed((prev) =>
+        prev.map((f) =>
+          f.id === id
+            ? { ...f, hasLiked: prevHasLiked, likes: prevLikes }
+            : f
+        )
+      );
+    }
   };
 
   const openComments = (item: FeedItem) => {
@@ -330,11 +377,15 @@ export default function HomeScreen() {
                   style={styles.actionItem}
                   onPress={() => handleLike(item.id)}
                 >
-                  <Ionicons
-                    name={item.hasLiked ? "heart" : "heart-outline"}
-                    size={20}
-                    color={item.hasLiked ? "#EF4444" : "#666"}
-                  />
+                  <Animated.View
+                    style={{ transform: [{ scale: getScaleAnim(item.id) }] }}
+                  >
+                    <Ionicons
+                      name={item.hasLiked ? "heart" : "heart-outline"}
+                      size={20}
+                      color={item.hasLiked ? "#EF4444" : "#666"}
+                    />
+                  </Animated.View>
                   <Text
                     style={[
                       styles.actionCount,
