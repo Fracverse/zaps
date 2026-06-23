@@ -188,7 +188,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev) => prev + num)}
+                onPress={() => setAmount((prev: string) => prev + num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -199,7 +199,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev) => prev + num)}
+                onPress={() => setAmount((prev: string) => prev + num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -210,20 +210,20 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev) => prev + num)}
+                onPress={() => setAmount((prev: string) => prev + num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
             ))}
           </View>
           <View style={styles.keypadRow}>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev + ".")}>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev + ".")}>
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev + "0")}>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev + "0")}>
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev) => prev.slice(0, -1))}>
+            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev.slice(0, -1))}>
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>
           </View>
