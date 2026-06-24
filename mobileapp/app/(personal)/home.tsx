@@ -266,21 +266,20 @@ export default function HomeScreen() {
           <Text style={styles.balanceLabel}>Stellar Wallet Balance</Text>
           <Text style={styles.balanceAmount}>{balance}</Text>
 
-          {/* Quick Actions Redesign */}
-          <View style={styles.quickActions}>
-            <TouchableOpacity
-              style={[styles.actionBtn, styles.payBtn]}
-              onPress={() => router.push("/transfer")}
-            >
-              <Ionicons
-                name="send"
-                size={18}
-                color={COLORS.secondary}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.payBtnText}>Pay / Request</Text>
-            </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.payRequestButton}
+            onPress={() => router.push("/transfer")}
+          >
+            <Ionicons
+              name="send"
+              size={18}
+              color={COLORS.secondary}
+              style={styles.payRequestIcon}
+            />
+            <Text style={styles.payRequestButtonText}>Pay / Request</Text>
+          </TouchableOpacity>
 
+          <View style={styles.quickActions}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.receiveBtn]}
               onPress={() => router.push("/receive")}
@@ -535,6 +534,29 @@ const styles = StyleSheet.create({
   quickActions: {
     flexDirection: "row",
     gap: 10,
+  },
+  payRequestButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  payRequestButtonText: {
+    color: COLORS.secondary,
+    fontSize: 16,
+    fontFamily: "Outfit_700Bold",
+  },
+  payRequestIcon: {
+    marginRight: 8,
   },
   actionBtn: {
     flex: 1,
