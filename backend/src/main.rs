@@ -138,8 +138,10 @@ async fn main() {
         .merge(other_routes);
 
     // Spawn indexer in the background
-    tokio::spawn(async {
-        if let Err(e) = indexer::worker::run().await {
+    let indexer_pool = pool.clone();
+    let indexer_rpc_url = config.stellar_rpc_url.clone();
+    tokio::spawn(async move {
+        if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url).await {
             tracing::error!("Stellar Indexer background worker failed: {:?}", e);
         }
     });
