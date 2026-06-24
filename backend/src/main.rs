@@ -114,6 +114,9 @@ async fn main() {
     // Initialize rate limiter: 5 requests per second, max 10 tokens
     let rate_limiter = RateLimiter::new(5, 10);
 
+    // Bridge state: shares the DB pool and the Allbridge API client.
+    let bridge_state = api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
+
     // Setup routes
     let public_routes = Router::new().route("/health", get(health_check));
 
@@ -124,7 +127,7 @@ async fn main() {
     let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes(pool.clone()))
-        .nest("/api/bridge", api::bridge_routes());
+        .nest("/api/bridge", api::bridge_routes(bridge_state.clone()));
 
     let app = Router::new()
         .merge(public_routes)
@@ -139,6 +142,11 @@ async fn main() {
         if let Err(e) = indexer::worker::run().await {
             tracing::error!("Stellar Indexer background worker failed: {:?}", e);
         }
+    });
+
+    // Spawn the bridge status poller to periodically refresh pending cross-chain deposits.
+    tokio::spawn(async move {
+        api::bridge::run_status_poller(bridge_state).await;
     });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));

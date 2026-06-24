@@ -48,10 +48,25 @@ CREATE TABLE IF NOT EXISTS friendships (
     UNIQUE (user_id, friend_id)
 );
 
+CREATE TABLE IF NOT EXISTS bridge_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_tx_hash VARCHAR(128) UNIQUE NOT NULL, -- Source chain deposit tx hash / id
+    source_chain VARCHAR(20) NOT NULL DEFAULT 'STLR', -- Allbridge chain symbol (e.g. STLR, ETH, BSC)
+    destination_chain VARCHAR(20),
+    destination_address VARCHAR(128),
+    amount VARCHAR(78), -- Raw amount as string (supports big integers / decimals)
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- PENDING, SUCCESS, FAILED
+    confirmations INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_payments_visibility ON payments(visibility);
 CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_sender_id ON payments(sender_id);
 CREATE INDEX IF NOT EXISTS idx_payments_receiver_id ON payments(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_users_display_name ON users(display_name);
+CREATE INDEX IF NOT EXISTS idx_bridge_tx_status ON bridge_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_bridge_tx_created_at ON bridge_transactions(created_at DESC);
 

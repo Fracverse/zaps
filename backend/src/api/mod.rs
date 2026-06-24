@@ -45,9 +45,10 @@ pub fn social_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
-pub fn bridge_routes() -> Router {
+pub fn bridge_routes(state: bridge::BridgeState) -> Router {
     Router::new()
         .route("/quote", post(bridge::get_quote))
         .route("/tx", post(bridge::submit_bridge_tx))
         .route("/status/:id", get(bridge::get_bridge_status))
+        .with_state(state)
 }

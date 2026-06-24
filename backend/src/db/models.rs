@@ -51,3 +51,17 @@ pub struct Friendship {
     pub status: String, // "PENDING", "ACCEPTED"
     pub created_at: NaiveDateTime,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BridgeTransaction {
+    pub id: Uuid,
+    pub source_tx_hash: String,
+    pub source_chain: String,
+    pub destination_chain: Option<String>,
+    pub destination_address: Option<String>,
+    pub amount: Option<String>,
+    pub status: String, // "PENDING", "SUCCESS", "FAILED"
+    pub confirmations: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
