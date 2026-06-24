@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ErrorBoundary } from "../src/components/ErrorBoundary";
 import {
   View,
@@ -9,6 +9,7 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,6 +19,17 @@ import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { AccountTypeCard } from "../src/components/AccountTypeCard";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  checkFreighter,
+  connectFreighter,
+  connectAlbedo,
+  connectLocalWallet,
+  generateLocalKeypair,
+  saveLocalKeypair,
+  submitPayment,
+  getLocalKeypair,
+  StellarWalletState,
+} from "../src/services/stellarWallet";
 
 import ZapsIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
@@ -31,6 +43,11 @@ if (
 ) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
+
+const STELLAR_ASSET_ISSUERS: Record<string, string | undefined> = {
+  USDC: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+  USDT: "GCQTGZQQ5G4PTM2GL7CDIFKUBIPEC52BROAQIAPW53XBRJVN6ZJVTG6V",
+};
 
 const TOKENS = [
   {
@@ -96,26 +113,107 @@ function TransferScreen() {
     "PUBLIC" | "FRIENDS" | "PRIVATE"
   >("PUBLIC");
   const [selectedToken, setSelectedToken] = useState(TOKENS[0].id);
+  const [walletState, setWalletState] = useState<StellarWalletState | null>(
+    null
+  );
+  const [connecting, setConnecting] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
 
+  useEffect(() => {
+    (async () => {
+      const kp = await getLocalKeypair();
+      if (kp) {
+        setWalletState({
+          publicKey: kp.publicKey(),
+          isConnected: true,
+          source: "local",
+        });
+      }
+    })();
+  }, []);
+
+  const handleConnectWallet = useCallback(
+    async (source: "freighter" | "albedo" | "local") => {
+      setConnecting(true);
+      try {
+        let state: StellarWalletState;
+        if (source === "freighter") {
+          const hasFreighter = await checkFreighter();
+          if (!hasFreighter) {
+            Alert.alert(
+              "Freighter Not Found",
+              "Please install the Freighter wallet extension."
+            );
+            setConnecting(false);
+            return;
+          }
+          state = await connectFreighter();
+        } else if (source === "albedo") {
+          state = await connectAlbedo();
+        } else {
+          const existing = await getLocalKeypair();
+          if (existing) {
+            state = await connectLocalWallet();
+          } else {
+            const kp = generateLocalKeypair();
+            await saveLocalKeypair(kp.secretKey);
+            state = {
+              publicKey: kp.publicKey,
+              isConnected: true,
+              source: "local",
+            };
+          }
+        }
+        setWalletState(state);
+      } catch (e) {
+        Alert.alert("Connection Failed", (e as Error).message);
+      } finally {
+        setConnecting(false);
+      }
+    },
+    []
+  );
+
   const handleNext = async () => {
     if (step === 2) {
-      // Save payment state to AsyncStorage so home screen updates
+      if (!walletState?.isConnected) {
+        setStep(4);
+        return;
+      }
+      setSubmitting(true);
       try {
+        const assetIssuer =
+          token.symbol !== "XLM"
+            ? STELLAR_ASSET_ISSUERS[token.symbol]
+            : undefined;
+        const result = await submitPayment(
+          recipient,
+          amount,
+          walletState.source!,
+          walletState.publicKey,
+          token.symbol,
+          assetIssuer,
+          description || undefined
+        );
         const stored = await AsyncStorage.getItem("pending_transfers");
         const list = stored ? JSON.parse(stored) : [];
         list.unshift({
           recipient,
           amount,
-          description: description || "Sent money 💸",
+          description: description || "Sent money",
           visibility,
           token: token.symbol,
+          hash: result.hash,
         });
         await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
       } catch (e) {
-        console.error(e);
+        Alert.alert("Transfer Failed", (e as Error).message);
+        setSubmitting(false);
+        return;
       }
+      setSubmitting(false);
     }
 
     if (step === 3) {
@@ -132,10 +230,18 @@ function TransferScreen() {
       router.back();
     } else if (step === 3) {
       router.replace("/(personal)/home");
+    } else if (step === 4) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(2);
     } else {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(step - 1);
     }
+  };
+
+  const handleDisconnect = async () => {
+    setWalletState(null);
+    setStep(2);
   };
 
   const renderStep0 = () => (
@@ -176,7 +282,10 @@ function TransferScreen() {
         />
 
         {/* Custom Amount Display */}
-        <TouchableOpacity activeOpacity={1} style={[styles.transferInput, styles.amountDisplayContainer]}>
+        <TouchableOpacity
+          activeOpacity={1}
+          style={[styles.transferInput, styles.amountDisplayContainer]}
+        >
           <Text style={styles.nairaSymbol}>₦</Text>
           <Text style={styles.amountText}>{amount || "0"}</Text>
         </TouchableOpacity>
@@ -217,13 +326,22 @@ function TransferScreen() {
             ))}
           </View>
           <View style={styles.keypadRow}>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev + ".")}>
+            <TouchableOpacity
+              style={styles.keypadButton}
+              onPress={() => setAmount((prev: string) => prev + ".")}
+            >
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev + "0")}>
+            <TouchableOpacity
+              style={styles.keypadButton}
+              onPress={() => setAmount((prev: string) => prev + "0")}
+            >
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.keypadButton} onPress={() => setAmount((prev: string) => prev.slice(0, -1))}>
+            <TouchableOpacity
+              style={styles.keypadButton}
+              onPress={() => setAmount((prev: string) => prev.slice(0, -1))}
+            >
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>
           </View>
@@ -405,11 +523,107 @@ function TransferScreen() {
     </View>
   );
 
+  const renderStep4 = () => (
+    <View style={styles.stepContainer}>
+      <Text style={styles.subtitle}>
+        Connect a Stellar wallet to authorize this transfer.
+      </Text>
+
+      {walletState?.isConnected ? (
+        <View style={styles.connectedCard}>
+          <View style={styles.connectedIcon}>
+            <Ionicons
+              name="wallet-outline"
+              size={32}
+              color={COLORS.secondary}
+            />
+          </View>
+          <Text style={styles.connectedTitle}>Wallet Connected</Text>
+          <Text style={styles.connectedAddress}>
+            {walletState.publicKey.slice(0, 8)}...
+            {walletState.publicKey.slice(-6)}
+          </Text>
+          <Text style={styles.connectedSource}>via {walletState.source}</Text>
+          <View style={styles.connectedActions}>
+            <Button
+              title="Continue with this wallet"
+              onPress={() => {
+                setStep(2);
+                handleNext();
+              }}
+              loading={submitting}
+              style={{ backgroundColor: "#1A4B4A", marginTop: 16 }}
+            />
+            <TouchableOpacity
+              onPress={handleDisconnect}
+              style={styles.disconnectBtn}
+            >
+              <Text style={styles.disconnectText}>Disconnect</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.walletOptions}>
+          <TouchableOpacity
+            style={styles.walletOption}
+            onPress={() => handleConnectWallet("freighter")}
+            disabled={connecting}
+          >
+            <Ionicons name="rocket-outline" size={28} color={COLORS.primary} />
+            <View style={styles.walletOptionInfo}>
+              <Text style={styles.walletOptionTitle}>Freighter</Text>
+              <Text style={styles.walletOptionDesc}>
+                Connect with Freighter browser extension
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.walletOption}
+            onPress={() => handleConnectWallet("albedo")}
+            disabled={connecting}
+          >
+            <Ionicons name="globe-outline" size={28} color={COLORS.primary} />
+            <View style={styles.walletOptionInfo}>
+              <Text style={styles.walletOptionTitle}>Albedo</Text>
+              <Text style={styles.walletOptionDesc}>
+                Connect with Albedo wallet
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.walletOption}
+            onPress={() => handleConnectWallet("local")}
+            disabled={connecting}
+          >
+            <Ionicons name="key-outline" size={28} color={COLORS.primary} />
+            <View style={styles.walletOptionInfo}>
+              <Text style={styles.walletOptionTitle}>Local Key</Text>
+              <Text style={styles.walletOptionDesc}>
+                Use a locally stored Stellar keypair
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+
+          {connecting && (
+            <View style={styles.connectingContainer}>
+              <Text style={styles.connectingText}>Connecting...</Text>
+            </View>
+          )}
+        </View>
+      )}
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {step < 3 && (
+      {step < 3 && step !== 4 && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
@@ -421,10 +635,20 @@ function TransferScreen() {
         </View>
       )}
 
+      {step === 4 && (
+        <View style={styles.header}>
+          <TouchableOpacity onPress={handleBack} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.black} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Connect Wallet</Text>
+          <View style={{ width: 40 }} />
+        </View>
+      )}
+
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
-          step === 3 && { justifyContent: "center" },
+          (step === 3 || step === 4) && { justifyContent: "center" },
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -432,28 +656,36 @@ function TransferScreen() {
         {step === 1 && renderStep1()}
         {step === 2 && renderStep2()}
         {step === 3 && renderStep3()}
+        {step === 4 && renderStep4()}
       </ScrollView>
 
-      <View style={styles.footer}>
-        <Button
-          title={
-            step === 1
-              ? "Review"
-              : step === 2
-                ? "Confirm & Pay"
-                : step === 3
-                  ? "Done"
-                  : "Continue"
-          }
-          onPress={handleNext}
-          disabled={
-            (step === 0 && !transferType) ||
-            (step === 1 && (!recipient || !amount)) ||
-            (step === 2 && false)
-          }
-          style={{ backgroundColor: "#1A4B4A" }}
-        />
-      </View>
+      {step !== 4 && (
+        <View style={styles.footer}>
+          <Button
+            title={
+              step === 1
+                ? "Review"
+                : step === 2
+                  ? submitting
+                    ? "Submitting..."
+                    : "Confirm & Pay"
+                  : step === 3
+                    ? "Done"
+                    : "Continue"
+            }
+            onPress={handleNext}
+            loading={submitting}
+            disabled={
+              (step === 0 && !transferType) ||
+              (step === 1 && (!recipient || !amount)) ||
+              (step === 2 && false) ||
+              (step === 3 && false) ||
+              submitting
+            }
+            style={{ backgroundColor: "#1A4B4A" }}
+          />
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -751,6 +983,92 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontFamily: "Outfit_700Bold",
     color: COLORS.black,
+  },
+  connectedCard: {
+    alignItems: "center",
+    padding: 32,
+    backgroundColor: "#FAFAFA",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    marginTop: 20,
+  },
+  connectedIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: COLORS.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  connectedTitle: {
+    fontSize: 20,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+    marginBottom: 8,
+  },
+  connectedAddress: {
+    fontSize: 15,
+    fontFamily: "Outfit_500Medium",
+    color: "#666",
+    marginBottom: 4,
+  },
+  connectedSource: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
+    marginBottom: 8,
+  },
+  connectedActions: {
+    width: "100%",
+    marginTop: 8,
+  },
+  disconnectBtn: {
+    marginTop: 12,
+    alignItems: "center",
+  },
+  disconnectText: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: "#CC0000",
+  },
+  walletOptions: {
+    gap: 12,
+    marginTop: 20,
+  },
+  walletOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    backgroundColor: "#FAFAFA",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+  },
+  walletOptionInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  walletOptionTitle: {
+    fontSize: 16,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.black,
+  },
+  walletOptionDesc: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#777",
+    marginTop: 2,
+  },
+  connectingContainer: {
+    alignItems: "center",
+    padding: 16,
+  },
+  connectingText: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: "#666",
   },
   footer: {
     padding: 20,
