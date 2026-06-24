@@ -351,20 +351,31 @@ export default function HomeScreen() {
           {filteredFeed.map((item) => (
             <View key={item.id} style={styles.feedCard}>
               <View style={styles.feedHeader}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{item.sender[0]}</Text>
+                <View style={styles.avatarStack}>
+                  <View style={[styles.avatar, styles.avatarPrimary]}>
+                    <Text style={styles.avatarText}>{item.sender[0]}</Text>
+                  </View>
+                  <View style={[styles.avatar, styles.avatarSecondary]}>
+                    <Text style={styles.avatarText}>{item.receiver[0]}</Text>
+                  </View>
                 </View>
+
                 <View style={styles.paymentInfo}>
-                  <Text style={styles.paymentText}>
-                    <Text style={styles.boldText}>{item.sender}</Text> paid{" "}
-                    <Text style={styles.boldText}>{item.receiver}</Text>
-                  </Text>
+                  <View style={styles.paymentRow}>
+                    <Text style={styles.paymentText} numberOfLines={2}>
+                      <Text style={styles.boldText}>{item.sender}</Text> paid{" "}
+                      <Text style={styles.boldText}>{item.receiver}</Text>
+                    </Text>
+                    <View style={styles.amountPill}>
+                      <Text style={styles.amountText}>{item.amount}</Text>
+                    </View>
+                  </View>
                   <Text style={styles.timestamp}>{item.timestamp}</Text>
                 </View>
-                <Text style={styles.paymentAmount}>{item.amount}</Text>
               </View>
 
               <View style={styles.memoContainer}>
+                <Text style={styles.memoLabel}>Memo</Text>
                 <Text style={styles.memoText}>{item.description}</Text>
               </View>
 
@@ -603,24 +614,44 @@ const styles = StyleSheet.create({
   },
   feedCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 16,
+    borderRadius: 24,
     padding: 16,
-    marginBottom: 12,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: "#ECECEC",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 3,
   },
   feedHeader: {
     flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+  },
+  avatarStack: {
+    flexDirection: "row",
     alignItems: "center",
+    marginRight: 12,
   },
   avatar: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#E2F0D9",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    borderWidth: 2,
+    borderColor: COLORS.white,
+  },
+  avatarPrimary: {
+    backgroundColor: "#E2F0D9",
+    marginRight: -8,
+    zIndex: 2,
+  },
+  avatarSecondary: {
+    backgroundColor: "#FCEEDC",
+    zIndex: 1,
   },
   avatarText: {
     color: COLORS.primary,
@@ -630,37 +661,66 @@ const styles = StyleSheet.create({
   paymentInfo: {
     flex: 1,
   },
+  paymentRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+  },
   paymentText: {
+    flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     fontFamily: "Outfit_400Regular",
-    color: "#333",
+    color: "#334155",
+    flexShrink: 1,
+    marginRight: 8,
   },
   boldText: {
     fontFamily: "Outfit_700Bold",
-    color: "#111",
+    color: "#111827",
   },
-  timestamp: {
-    fontSize: 12,
-    color: "#999",
+  amountPill: {
+    backgroundColor: "#F2F9F0",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: "#DDF2DD",
+    alignSelf: "flex-start",
     marginTop: 2,
   },
-  paymentAmount: {
-    fontSize: 16,
+  amountText: {
+    fontSize: 13,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
+  timestamp: {
+    fontSize: 12,
+    color: "#94A3B8",
+    marginTop: 4,
+  },
   memoContainer: {
-    marginTop: 12,
-    backgroundColor: "#F5F8F6",
+    backgroundColor: "#F4F6F8",
+    borderColor: "#E7EBEF",
+    borderWidth: 1,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignSelf: "flex-start",
+    paddingVertical: 10,
+    borderRadius: 16,
+  },
+  memoLabel: {
+    fontSize: 11,
+    color: "#64748B",
+    fontFamily: "Outfit_600SemiBold",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 2,
   },
   memoText: {
     fontSize: 14,
-    color: "#444",
+    color: "#334155",
     fontFamily: "Outfit_400Regular",
+    lineHeight: 19,
   },
   actionsDivider: {
     height: 1,
