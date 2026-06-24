@@ -1,4 +1,6 @@
-use crate::services::allbridge::{AllbridgeClient, BridgeStatusKind, BridgeTransferStatus};
+use crate::services::allbridge::{
+    AllbridgeClient, AllbridgeQuoteRequest, BridgeStatusKind, BridgeTransferStatus,
+};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -68,13 +70,54 @@ pub struct BridgeStatusResponse {
     pub updated_at: String,
 }
 
-pub async fn get_quote(Json(_payload): Json<BridgeQuoteRequest>) -> impl IntoResponse {
-    // TODO: Implement BE-016 (Fetch bridge fee quote & route from Allbridge API)
-    Json(BridgeQuoteResponse {
-        fee: "0.005".to_string(),
-        receive_amount: "99.95".to_string(),
-        bridge_tx_data: "0x_mock_bridge_call_payload".to_string(),
-    })
+pub async fn get_quote(
+    State(state): State<BridgeState>,
+    Json(payload): Json<BridgeQuoteRequest>,
+) -> impl IntoResponse {
+    if payload.source_chain.trim().is_empty()
+        || payload.destination_chain.trim().is_empty()
+        || payload.amount.trim().is_empty()
+        || payload.source_token.trim().is_empty()
+        || payload.destination_token.trim().is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "source_chain, destination_chain, amount, source_token and destination_token are required" })),
+        )
+            .into_response();
+    }
+
+    let amount_value = payload.amount.parse::<u64>();
+    if amount_value.is_err() || amount_value.unwrap_or_default() == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "amount must be a positive integer" })),
+        )
+            .into_response();
+    }
+
+    let quote_request = AllbridgeQuoteRequest {
+        source_chain: payload.source_chain,
+        source_token: payload.source_token,
+        amount: payload.amount,
+        destination_chain: payload.destination_chain,
+        destination_token: payload.destination_token,
+        destination_address: payload.destination_address,
+    };
+
+    match state.allbridge.get_price_quote(&quote_request).await {
+        Ok(quote) => Json(BridgeQuoteResponse {
+            fee: quote.fee,
+            receive_amount: quote.receive_amount,
+            bridge_tx_data: quote.bridge_tx_data,
+        })
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": err.message })),
+        )
+            .into_response(),
+    }
 }
 
 /// BE-017: Record a submitted cross-chain deposit so its status can be tracked/polled.

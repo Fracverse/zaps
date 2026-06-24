@@ -2,8 +2,48 @@
 // This client calls Allbridge Core REST API endpoints to fetch quotes, calculate fees,
 // and trace cross-chain bridge transaction updates.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AllbridgeQuoteRequest {
+    pub source_chain: String,
+    pub source_token: String,
+    pub amount: String,
+    pub destination_chain: String,
+    pub destination_token: String,
+    pub destination_address: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AllbridgeQuoteResponse {
+    pub fee: String,
+    pub receive_amount: String,
+    pub bridge_tx_data: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AllbridgeQuoteApiResponse {
+    #[serde(default)]
+    fee: Option<String>,
+    #[serde(default)]
+    receive_amount: Option<String>,
+    #[serde(default)]
+    bridge_tx_data: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AllbridgeProxyError {
+    pub message: String,
+}
+
+impl std::fmt::Display for AllbridgeProxyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AllbridgeProxyError {}
 
 /// Normalized lifecycle status of a cross-chain transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,10 +158,41 @@ impl AllbridgeClient {
         }
     }
 
-    /// Retrieve fee calculations and routing parameters from Allbridge
-    pub async fn get_price_quote(&self) -> Result<(), reqwest::Error> {
-        // TODO: Implement BE-016 (Perform HTTP POST to Allbridge API)
-        Ok(())
+    /// Retrieve fee calculations and routing parameters from Allbridge.
+    pub async fn get_price_quote(
+        &self,
+        request: &AllbridgeQuoteRequest,
+    ) -> Result<AllbridgeQuoteResponse, AllbridgeProxyError> {
+        let url = format!(
+            "{}/quote",
+            self.api_url.trim_end_matches('/')
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .json(request)
+            .send()
+            .await
+            .map_err(|err| AllbridgeProxyError {
+                message: format!("allbridge quote request failed: {err}"),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(AllbridgeProxyError {
+                message: format!("allbridge upstream returned status {}", response.status()),
+            });
+        }
+
+        let payload: AllbridgeQuoteApiResponse = response.json().await.map_err(|err| AllbridgeProxyError {
+            message: format!("allbridge quote response parsing failed: {err}"),
+        })?;
+
+        Ok(AllbridgeQuoteResponse {
+            fee: payload.fee.unwrap_or_else(|| "0".to_string()),
+            receive_amount: payload.receive_amount.unwrap_or_else(|| "0".to_string()),
+            bridge_tx_data: payload.bridge_tx_data.unwrap_or_else(|| "".to_string()),
+        })
     }
 
     /// Poll Allbridge backend for status updates on a specific cross-chain transaction.
