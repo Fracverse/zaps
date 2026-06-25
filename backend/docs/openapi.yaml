@@ -31,6 +31,15 @@ components:
       description: JWT obtained from POST /api/auth/verify
 
   schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+
     ChallengeResponse:
       type: object
       required:
@@ -57,7 +66,7 @@ components:
           type: string
           description: Challenge string previously obtained from GET /api/auth/challenge
 
-    VerifyResponse:
+    AuthResponse:
       type: object
       required:
         - token
@@ -65,13 +74,16 @@ components:
       properties:
         token:
           type: string
-          description: JWT valid for 24 hours; include as Authorization: Bearer header
+          description: "JWT valid for 24 hours; include as Authorization: Bearer header"
         username:
           type: string
           description: Auto-generated username prefixed with u_ followed by chars 2-15 of the Stellar address
 
     ProfileResponse:
       type: object
+      required:
+        - address
+        - username
       properties:
         address:
           type: string
@@ -105,14 +117,12 @@ components:
       properties:
         q:
           type: string
-          description: Search term matched against username and address (ILIKE)
+          description: Search term matched against username and address via ILIKE
         limit:
           type: integer
-          description: Max results to return
           default: 20
         offset:
           type: integer
-          description: Result offset for pagination
           default: 0
 
     SearchUser:
@@ -153,6 +163,7 @@ components:
       properties:
         status:
           type: string
+          description: Status of the friendship request or action result
           enum:
             - PENDING
             - ACCEPTED
@@ -189,7 +200,7 @@ components:
           nullable: true
         amount:
           type: string
-          description: Payment amount as a fixed-precision string
+          description: Payment amount as a fixed-precision string (micro-units / 100)
         currency:
           type: string
           description: Payment currency code (NGN or USDC)
@@ -202,7 +213,7 @@ components:
           type: integer
         has_liked:
           type: boolean
-          description: Whether the requesting user has liked this payment (always false for anonymous requests)
+          description: Whether the requesting user has liked this payment (false for anonymous requests)
         created_at:
           type: string
           format: date-time
@@ -226,10 +237,13 @@ components:
       properties:
         success:
           type: boolean
+          description: true if the like was recorded or unliked successfully
         likes_count:
           type: integer
+          description: Total number of likes on the payment after the action
         has_liked:
           type: boolean
+          description: true if the requesting user currently likes the payment
 
     CommentRequest:
       type: object
@@ -283,11 +297,7 @@ components:
       properties:
         source_chain:
           type: string
-          enum:
-            - STLR
-            - ETH
-            - BSC
-          description: Origin chain code
+          description: Origin chain code (e.g. STLR, ETH, BSC)
         source_token:
           type: string
           description: Source token contract address
@@ -296,10 +306,6 @@ components:
           description: Positive integer string representing token amount
         destination_chain:
           type: string
-          enum:
-            - STLR
-            - ETH
-            - BSC
           description: Target chain code
         destination_token:
           type: string
@@ -336,15 +342,11 @@ components:
         source_chain:
           type: string
           description: Source chain; defaults to STLR if omitted
-          enum:
-            - STLR
+          default: STLR
         destination_chain:
           type: string
           description: Target chain, or null if unknown
           nullable: true
-          enum:
-            - ETH
-            - BSC
         destination_address:
           type: string
           description: Receiver address on the destination chain
@@ -366,6 +368,7 @@ components:
           description: UUID of the bridge transaction record
         source_tx_hash:
           type: string
+          description: Source chain transaction hash
         status:
           type: string
           enum:
@@ -384,17 +387,16 @@ components:
       properties:
         source_tx_hash:
           type: string
+          description: Source chain transaction hash
         source_chain:
           type: string
+          description: Origin chain code
           enum:
             - STLR
         destination_chain:
           type: string
           nullable: true
           description: Destination chain; null if not yet determined
-          enum:
-            - ETH
-            - BSC
         status:
           type: string
           enum:
@@ -407,6 +409,7 @@ components:
         updated_at:
           type: string
           format: date-time
+          description: ISO8601 timestamp of last status update
 
 paths:
   /health:
@@ -458,27 +461,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/VerifyResponse'
+                $ref: '#/components/schemas/AuthResponse'
         '400':
           description: Invalid signature format
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
-                example: Invalid signature format (must be hex or base64)
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid signature format (must be hex or base64)
         '401':
           description: Signature verification failed
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
-                example: Signature verification failed
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Signature verification failed
         '500':
           description: Internal server error
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal database error
 
   /api/users/profile:
     get:
@@ -498,9 +505,19 @@ paths:
         '401':
           description: Missing or invalid JWT
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Missing authorization header
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal database error
 
     post:
       tags:
@@ -525,9 +542,15 @@ paths:
         '401':
           description: Missing or invalid JWT
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/users/search:
     get:
@@ -541,23 +564,9 @@ paths:
         - name: q
           in: query
           required: true
-          description: Search term matched against username and address
+          description: Search term matched against username and address (ILIKE)
           schema:
             type: string
-        - name: limit
-          in: query
-          required: false
-          description: Maximum number of results
-          schema:
-            type: integer
-            default: 20
-        - name: offset
-          in: query
-          required: false
-          description: Result offset for pagination
-          schema:
-            type: integer
-            default: 0
       responses:
         '200':
           description: Matching users
@@ -569,6 +578,16 @@ paths:
                   $ref: '#/components/schemas/SearchUser'
         '401':
           description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/users/friends:
     get:
@@ -589,7 +608,18 @@ paths:
                   $ref: '#/components/schemas/FriendUser'
         '401':
           description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
+  /api/users/friends/request:
     post:
       tags:
         - Users
@@ -612,31 +642,35 @@ paths:
               schema:
                 $ref: '#/components/schemas/StatusResponse'
         '400':
-          description: Cannot friend yourself
+          description: Cannot friend yourself or invalid request
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Target user not found
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Friendship already exists
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/users/friends/{id}/accept:
     post:
       tags:
         - Users
-      summary: Accept a pending friend request
+      summary: Accept an incoming friend request
       operationId: acceptFriendRequest
       security:
         - BearerAuth: []
@@ -644,7 +678,7 @@ paths:
         - name: id
           in: path
           required: true
-          description: UUID of the friendship record
+          description: UUID of the friendship record to accept
           schema:
             type: string
       responses:
@@ -654,20 +688,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusResponse'
-        '404':
-          description: No pending request found for this friendship ID
+        '400':
+          description: Invalid UUID format for friendship id
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending friend request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/users/friends/{id}/reject:
     post:
       tags:
         - Users
-      summary: Reject a pending friend request
+      summary: Reject an incoming friend request
       operationId: rejectFriendRequest
       security:
         - BearerAuth: []
@@ -675,7 +719,7 @@ paths:
         - name: id
           in: path
           required: true
-          description: UUID of the friendship record
+          description: UUID of the friendship record to reject
           schema:
             type: string
       responses:
@@ -685,14 +729,24 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StatusResponse'
-        '404':
-          description: No pending request found for this friendship ID
+        '400':
+          description: Invalid UUID format for friendship id
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pending friend request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/feed/public:
     get:
@@ -713,7 +767,7 @@ paths:
         - name: offset
           in: query
           required: false
-          description: Result offset for pagination
+          description: Number of items to skip
           schema:
             type: integer
             default: 0
@@ -727,7 +781,17 @@ paths:
                 items:
                   $ref: '#/components/schemas/FeedItem'
         '401':
-          description: Missing or invalid JWT
+          description: Invalid or missing JWT when auth header is provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/feed/friends:
     get:
@@ -748,7 +812,7 @@ paths:
         - name: offset
           in: query
           required: false
-          description: Result offset for pagination
+          description: Number of items to skip
           schema:
             type: integer
             default: 0
@@ -763,6 +827,16 @@ paths:
                   $ref: '#/components/schemas/FeedItem'
         '401':
           description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/feed/private:
     get:
@@ -783,7 +857,7 @@ paths:
         - name: offset
           in: query
           required: false
-          description: Result offset for pagination
+          description: Number of items to skip
           schema:
             type: integer
             default: 0
@@ -798,6 +872,16 @@ paths:
                   $ref: '#/components/schemas/FeedItem'
         '401':
           description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/social/like:
     post:
@@ -823,11 +907,15 @@ paths:
         '400':
           description: Invalid payment_id UUID format
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/social/unlike:
     delete:
@@ -853,11 +941,15 @@ paths:
         '400':
           description: Invalid payment_id UUID format
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/social/comment:
     post:
@@ -883,11 +975,15 @@ paths:
         '400':
           description: Invalid payment_id UUID format
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/social/comment/{id}:
     delete:
@@ -914,17 +1010,21 @@ paths:
         '400':
           description: Invalid UUID format for comment id
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Comment not found or not owned by authenticated user
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/bridge/quote:
     post:
@@ -948,15 +1048,15 @@ paths:
         '400':
           description: Missing required fields or invalid amount
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '502':
           description: Allbridge upstream API failure
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/bridge/tx:
     post:
@@ -980,15 +1080,15 @@ paths:
         '400':
           description: source_tx_hash is empty
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error during DB insertion
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/bridge/status/{id}:
     get:
@@ -1013,12 +1113,12 @@ paths:
         '404':
           description: Bridge transaction not found
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal server error
           content:
-            text/plain:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ErrorResponse'
