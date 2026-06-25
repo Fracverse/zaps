@@ -4,7 +4,7 @@ use axum::{
     extract::State,
     http::{Request, StatusCode},
     middleware::{self, Next},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
+use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -96,7 +98,7 @@ async fn main() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "zaps-backend=debug,tower_http=debug".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().json())
         .init();
 
     tracing::info!("Initializing Zaps Social Backend...");
@@ -115,7 +117,8 @@ async fn main() {
     let rate_limiter = RateLimiter::new(5, 10);
 
     // Bridge state: shares the DB pool and the Allbridge API client.
-    let bridge_state = api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
+    let bridge_state =
+        api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
 
     // Setup routes
     let public_routes = Router::new().route("/health", get(health_check));
@@ -135,7 +138,47 @@ async fn main() {
             rate_limiter.clone(),
             rate_limiter_middleware,
         )))
-        .merge(other_routes);
+        .merge(other_routes)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request<_>| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        status_code = tracing::field::Empty,
+                        duration_ms = tracing::field::Empty,
+                    )
+                })
+                .on_response(
+                    |response: &Response, duration: std::time::Duration, span: &Span| {
+                        let status_code = response.status().as_u16();
+                        let duration_ms = duration.as_millis() as u64;
+                        span.record("status_code", status_code);
+                        span.record("duration_ms", duration_ms);
+                        tracing::info!(
+                            parent: span,
+                            status_code,
+                            duration_ms,
+                            "request completed"
+                        );
+                    },
+                )
+                .on_failure(
+                    |error: ServerErrorsFailureClass,
+                     duration: std::time::Duration,
+                     span: &Span| {
+                        let duration_ms = duration.as_millis() as u64;
+                        span.record("duration_ms", duration_ms);
+                        tracing::error!(
+                            parent: span,
+                            error = %error,
+                            duration_ms,
+                            "request failed"
+                        );
+                    },
+                ),
+        );
 
     // Spawn indexer in the background
     let indexer_pool = pool.clone();

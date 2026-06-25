@@ -1,184 +1,193 @@
 "use client";
-import { useState, useMemo } from "react";
-import { usePolling } from "@/lib/use-polling";
-import { api, Transaction } from "@/lib/api";
-import StatusBadge from "@/components/StatusBadge";
-import { fmtAmount, toCSV, downloadBlob } from "@/lib/utils";
+
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
+import { api } from "@/lib/api";
+import { usePolling } from "@/lib/use-polling";
 
 const PAGE_SIZE = 20;
-const STATUSES = ["", "pending", "processing", "completed", "failed", "refunded"];
+
+const visibilityStyles = {
+  PUBLIC: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  FRIENDS: "bg-amber-50 text-amber-700 ring-amber-600/20",
+  PRIVATE: "bg-slate-100 text-slate-700 ring-slate-500/20",
+};
 
 export default function TransactionsPage() {
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [minAmt, setMinAmt] = useState("");
-  const [maxAmt, setMaxAmt] = useState("");
   const [page, setPage] = useState(0);
-
-  const params = useMemo(() => {
-    const p: Record<string, string> = {};
-    if (status) p.status = status;
-    if (dateFrom) p.date_from = dateFrom;
-    if (dateTo) p.date_to = dateTo;
-    return p;
-  }, [status, dateFrom, dateTo]);
-
-  const { data: raw, loading, error, refresh } = usePolling(
-    () => api.transactions(params),
+  const { data, loading, error, refresh } = usePolling(
+    () => api.socialFeed(),
     20000,
-    [JSON.stringify(params)]
   );
 
   const filtered = useMemo(() => {
-    if (!raw) return [];
-    return raw.filter((t) => {
-      if (search && !t.id.includes(search) && !t.from_address.includes(search) && !t.memo?.includes(search)) return false;
-      if (minAmt && t.send_amount < Number(minAmt) * 1_000_000) return false;
-      if (maxAmt && t.send_amount > Number(maxAmt) * 1_000_000) return false;
-      return true;
-    });
-  }, [raw, search, minAmt, maxAmt]);
+    const term = search.trim().toLowerCase();
+    if (!data) return [];
+    if (!term) return data;
 
-  const paginated = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    return data.filter((feed) =>
+      [
+        feed.sender_username,
+        feed.receiver_username,
+        feed.memo,
+        feed.tx_hash,
+      ].some((value) => value.toLowerCase().includes(term)),
+    );
+  }, [data, search]);
+
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-
-  const exportCSV = () => {
-    downloadBlob(toCSV(filtered), `transactions-${Date.now()}.csv`, "text/csv");
-  };
+  const paginated = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">Transactions</h1>
-        <div className="flex gap-2">
-          <button onClick={refresh} className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50">
-            ↻ Refresh
-          </button>
-          <button onClick={exportCSV} className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-            ↓ Export CSV
-          </button>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Social Payments</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Recent payment feeds and their social engagement.
+          </p>
         </div>
+        <button
+          onClick={refresh}
+          className="self-start rounded-lg border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+        >
+          ↻ Refresh
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 mb-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <input
-          placeholder="Search ID / address"
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-          className="col-span-2 border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <select
-          value={status}
-          onChange={(e) => { setStatus(e.target.value); setPage(0); }}
-          className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4">
+        <label
+          htmlFor="social-payment-search"
+          className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500"
         >
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>{s || "All statuses"}</option>
-          ))}
-        </select>
+          Search feeds
+        </label>
         <input
-          type="date"
-          value={dateFrom}
-          onChange={(e) => { setDateFrom(e.target.value); setPage(0); }}
-          className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          id="social-payment-search"
+          placeholder="Sender, recipient, note, or transaction hash"
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setPage(0);
+          }}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
-        <input
-          type="date"
-          value={dateTo}
-          onChange={(e) => { setDateTo(e.target.value); setPage(0); }}
-          className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-        />
-        <div className="flex gap-1">
-          <input
-            placeholder="Min $"
-            value={minAmt}
-            onChange={(e) => { setMinAmt(e.target.value); setPage(0); }}
-            className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <input
-            placeholder="Max $"
-            value={maxAmt}
-            onChange={(e) => { setMaxAmt(e.target.value); setPage(0); }}
-            className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-        </div>
       </div>
 
       {error && (
-        <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {error}
+        </div>
       )}
 
-      {/* Table */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
+            <thead className="border-b border-slate-200 bg-slate-50">
               <tr>
-                {["ID", "Date", "From", "Asset", "Amount", "Status", "Memo"].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                    {h}
+                {[
+                  "Date",
+                  "Feed",
+                  "Amount",
+                  "Note",
+                  "Visibility",
+                  "Likes",
+                  "Comments",
+                ].map((heading) => (
+                  <th
+                    key={heading}
+                    className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    {heading}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {loading && !raw ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3">
-                        <div className="h-4 bg-slate-100 rounded animate-pulse" />
+              {loading && !data ? (
+                Array.from({ length: 6 }).map((_, row) => (
+                  <tr key={row}>
+                    {Array.from({ length: 7 }).map((__, column) => (
+                      <td key={column} className="px-4 py-3">
+                        <div className="h-4 animate-pulse rounded bg-slate-100" />
                       </td>
                     ))}
                   </tr>
                 ))
               ) : paginated.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
-                    No transactions found
+                  <td
+                    colSpan={7}
+                    className="px-4 py-12 text-center text-slate-400"
+                  >
+                    No social payments found
                   </td>
                 </tr>
               ) : (
-                paginated.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{t.id.slice(0, 8)}…</td>
-                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                      {format(new Date(t.created_at), "MMM d, yyyy HH:mm")}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{t.from_address.slice(0, 12)}…</td>
-                    <td className="px-4 py-3 font-medium">{t.send_asset}</td>
-                    <td className="px-4 py-3 font-medium">{fmtAmount(t.send_amount, t.send_asset)}</td>
-                    <td className="px-4 py-3"><StatusBadge status={t.status} /></td>
-                    <td className="px-4 py-3 text-slate-400 text-xs">{t.memo ?? "—"}</td>
-                  </tr>
-                ))
+                paginated.map((feed) => {
+                  const visibility = feed.visibility;
+                  return (
+                    <tr
+                      key={feed.id}
+                      className="transition-colors hover:bg-slate-50"
+                    >
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                        {format(new Date(feed.created_at), "MMM d, yyyy HH:mm")}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="font-medium text-slate-900">
+                          {feed.sender_username}
+                        </span>
+                        <span className="mx-1.5 text-slate-400">→</span>
+                        <span className="font-medium text-slate-900">
+                          {feed.receiver_username}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">
+                        {feed.amount} {feed.currency}
+                      </td>
+                      <td className="max-w-xs px-4 py-3 text-slate-600">
+                        <span className="line-clamp-2">{feed.memo || "—"}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${visibilityStyles[visibility]}`}
+                        >
+                          {visibility}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-pink-600">
+                        ♥ {feed.likes_count}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {feed.comments_count}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
 
-        {/* Pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50">
+          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-3">
             <span className="text-xs text-slate-500">
-              {filtered.length} results · page {page + 1} of {totalPages}
+              {filtered.length} feeds · page {page + 1} of {totalPages}
             </span>
             <div className="flex gap-1">
               <button
                 disabled={page === 0}
-                onClick={() => setPage((p) => p - 1)}
-                className="px-3 py-1 text-sm border border-slate-300 rounded-lg disabled:opacity-40 hover:bg-white"
+                onClick={() => setPage((current) => current - 1)}
+                className="rounded-lg border border-slate-300 px-3 py-1 text-sm hover:bg-white disabled:opacity-40"
               >
                 ← Prev
               </button>
               <button
                 disabled={page >= totalPages - 1}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-3 py-1 text-sm border border-slate-300 rounded-lg disabled:opacity-40 hover:bg-white"
+                onClick={() => setPage((current) => current + 1)}
+                className="rounded-lg border border-slate-300 px-3 py-1 text-sm hover:bg-white disabled:opacity-40"
               >
                 Next →
               </button>

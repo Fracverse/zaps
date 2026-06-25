@@ -12,10 +12,15 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { likePayment, unlikePayment, fetchFeed } from "../../src/services/socialService";
+import {
+  likePayment,
+  unlikePayment,
+  fetchFeed,
+} from "../../src/services/socialService";
 
 interface FeedItem {
   id: string;
@@ -73,7 +78,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [balance, setBalance] = useState("₦32,450.00");
+  const [balance] = useState("₦32,450.00");
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -128,6 +133,10 @@ export default function HomeScreen() {
     const currentItem = feed.find((f) => f.id === id);
     if (!currentItem) return;
 
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+
     const prevHasLiked = currentItem.hasLiked;
     const prevLikes = currentItem.likes;
     const newHasLiked = !prevHasLiked;
@@ -173,6 +182,9 @@ export default function HomeScreen() {
   };
 
   const openComments = (item: FeedItem) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(
+      () => undefined
+    );
     setSelectedItem(item);
     setCommentsList([
       {
