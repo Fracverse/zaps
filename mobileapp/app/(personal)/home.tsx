@@ -9,6 +9,8 @@ import {
   Modal,
   FlatList,
   Animated,
+  ViewStyle,
+  StyleProp,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -33,6 +35,12 @@ interface FeedItem {
   comments: number;
   hasLiked: boolean;
   visibility: "PUBLIC" | "FRIENDS" | "PRIVATE";
+}
+
+interface YieldSnapshot {
+  apy: string;
+  totalYieldEarned: string;
+  explanation: string;
 }
 
 const INITIAL_FEED: FeedItem[] = [
@@ -79,11 +87,17 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [balance] = useState("₦32,450.00");
-  const [currentApy] = useState("8.75%");
-  const [totalYieldEarned] = useState("₦3,280.45");
+  const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
+  const [yieldStatus, setYieldStatus] = useState<"loading" | "success" | "error">(
+    "loading"
+  );
+  const [yieldError, setYieldError] = useState("");
+  const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const shimmerAnim = useRef(new Animated.Value(-1)).current;
+  const yieldRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -104,6 +118,53 @@ export default function HomeScreen() {
   >([]);
 
   const FEED_CACHE_KEY = "feed_items_cache";
+  const YIELD_REQUEST_TIMEOUT_MS = 4500;
+
+  const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    return {
+      apy: "8.75%",
+      totalYieldEarned: "₦3,280.45",
+      explanation:
+        "Your earnings are generated from your wallet balance and may vary as rates change. APY is an annualized estimate and total yield is updated automatically over time.",
+    };
+  };
+
+  const withTimeout = async <T,>(
+    promise: Promise<T>,
+    timeoutMs: number
+  ): Promise<T> => {
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("Request timed out. Please try again.")),
+        timeoutMs
+      );
+    });
+    return Promise.race([promise, timeoutPromise]);
+  };
+
+  const loadYieldData = useCallback(async () => {
+    const requestId = ++yieldRequestRef.current;
+    setYieldStatus("loading");
+    setYieldError("");
+    try {
+      const data = await withTimeout(
+        fetchYieldSnapshot(),
+        YIELD_REQUEST_TIMEOUT_MS
+      );
+      if (requestId !== yieldRequestRef.current) return;
+      setYieldData(data);
+      setYieldStatus("success");
+    } catch (error) {
+      if (requestId !== yieldRequestRef.current) return;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to load yield details right now.";
+      setYieldError(message);
+      setYieldStatus("error");
+    }
+  }, []);
 
   // On mount: hydrate UI from cache instantly, then fetch fresh data and overwrite cache
   useEffect(() => {
@@ -133,6 +194,22 @@ export default function HomeScreen() {
 
     loadFeed();
   }, []);
+
+  useEffect(() => {
+    void loadYieldData();
+  }, [loadYieldData]);
+
+  useEffect(() => {
+    const shimmerLoop = Animated.loop(
+      Animated.timing(shimmerAnim, {
+        toValue: 1,
+        duration: 1000,
+        useNativeDriver: true,
+      })
+    );
+    shimmerLoop.start();
+    return () => shimmerLoop.stop();
+  }, [shimmerAnim]);
 
   const handleLike = async (id: string) => {
     const currentItem = feed.find((f) => f.id === id);
@@ -270,6 +347,28 @@ export default function HomeScreen() {
     });
   };
 
+  const handleYieldRetry = () => {
+    setYieldRetryCount((prev) => prev + 1);
+    shimmerAnim.setValue(-1);
+    void loadYieldData();
+  };
+
+  const shimmerTranslateX = shimmerAnim.interpolate({
+    inputRange: [-1, 1],
+    outputRange: [-220, 220],
+  });
+
+  const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
+    <View style={[styles.skeletonBase, style]}>
+      <Animated.View
+        style={[
+          styles.skeletonShimmer,
+          { transform: [{ translateX: shimmerTranslateX }] },
+        ]}
+      />
+    </View>
+  );
+
   const filteredFeed = feed.filter((item) => {
     if (item.visibility === "PRIVATE") return false;
     if (activeTab === "friends") {
@@ -357,11 +456,34 @@ export default function HomeScreen() {
           activeOpacity={0.9}
           onPress={openEarningsModal}
         >
-          <View>
-            <Text style={styles.earningLabel}>Earning Balance</Text>
-            <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
-            <Text style={styles.earningHint}>Tap to view yield breakdown</Text>
-          </View>
+          {yieldStatus === "loading" ? (
+            <View style={styles.earningContent}>
+              <SkeletonBlock style={styles.earningLabelSkeleton} />
+              <SkeletonBlock style={styles.earningAmountSkeleton} />
+              <SkeletonBlock style={styles.earningHintSkeleton} />
+            </View>
+          ) : yieldStatus === "error" ? (
+            <View style={styles.earningContent}>
+              <Text style={styles.earningLabel}>Earning Balance</Text>
+              <Text style={styles.earningErrorText}>Unable to load yield</Text>
+              <TouchableOpacity
+                style={styles.retryChip}
+                onPress={handleYieldRetry}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="refresh" size={12} color={COLORS.primary} />
+                <Text style={styles.retryChipText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.earningContent}>
+              <Text style={styles.earningLabel}>Earning Balance</Text>
+              <Text style={styles.earningAmount}>
+                {yieldData?.totalYieldEarned ?? "₦0.00"}
+              </Text>
+              <Text style={styles.earningHint}>Tap to view yield breakdown</Text>
+            </View>
+          )}
           <View style={styles.earningIconWrap}>
             <Ionicons name="trending-up" size={20} color={COLORS.primary} />
           </View>
@@ -523,21 +645,61 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.earningsMetricCard}>
-              <Text style={styles.earningsMetricLabel}>Current APY</Text>
-              <Text style={styles.earningsMetricValue}>{currentApy}</Text>
-            </View>
+            {yieldStatus === "loading" ? (
+              <>
+                <View style={styles.earningsMetricCard}>
+                  <SkeletonBlock style={styles.modalLabelSkeleton} />
+                  <SkeletonBlock style={styles.modalValueSkeleton} />
+                </View>
+                <View style={styles.earningsMetricCard}>
+                  <SkeletonBlock style={styles.modalLabelSkeleton} />
+                  <SkeletonBlock style={styles.modalValueSkeleton} />
+                </View>
+                <SkeletonBlock style={styles.modalCopySkeleton} />
+                <SkeletonBlock style={styles.modalCopySkeletonShort} />
+              </>
+            ) : yieldStatus === "error" ? (
+              <View style={styles.yieldErrorCard}>
+                <Text style={styles.yieldErrorTitle}>Could not load details</Text>
+                <Text style={styles.yieldErrorCopy}>
+                  {yieldError}. Check your connection and try again.
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={handleYieldRetry}
+                >
+                  <Ionicons name="refresh" size={16} color={COLORS.secondary} />
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </TouchableOpacity>
+                {yieldRetryCount > 0 && (
+                  <Text style={styles.retryMetaText}>
+                    Retry attempts: {yieldRetryCount}
+                  </Text>
+                )}
+              </View>
+            ) : (
+              <>
+                <View style={styles.earningsMetricCard}>
+                  <Text style={styles.earningsMetricLabel}>Current APY</Text>
+                  <Text style={styles.earningsMetricValue}>
+                    {yieldData?.apy ?? "0.00%"}
+                  </Text>
+                </View>
 
-            <View style={styles.earningsMetricCard}>
-              <Text style={styles.earningsMetricLabel}>Total Yield Earned</Text>
-              <Text style={styles.earningsMetricValue}>{totalYieldEarned}</Text>
-            </View>
+                <View style={styles.earningsMetricCard}>
+                  <Text style={styles.earningsMetricLabel}>
+                    Total Yield Earned
+                  </Text>
+                  <Text style={styles.earningsMetricValue}>
+                    {yieldData?.totalYieldEarned ?? "₦0.00"}
+                  </Text>
+                </View>
 
-            <Text style={styles.earningsInfoCopy}>
-              Your earnings are generated from your wallet balance and may vary
-              as rates change. APY is an annualized estimate and total yield is
-              updated automatically over time.
-            </Text>
+                <Text style={styles.earningsInfoCopy}>
+                  {yieldData?.explanation}
+                </Text>
+              </>
+            )}
           </Animated.View>
         </View>
       </Modal>
@@ -735,6 +897,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  earningContent: {
+    flex: 1,
+    marginRight: 12,
+  },
   earningLabel: {
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
@@ -751,6 +917,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Outfit_400Regular",
     color: "#56785A",
+  },
+  earningErrorText: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#B45309",
+    marginBottom: 6,
+  },
+  retryChip: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 14,
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#F8FAFC",
+  },
+  retryChipText: {
+    fontSize: 12,
+    color: COLORS.primary,
+    fontFamily: "Outfit_600SemiBold",
   },
   earningIconWrap: {
     width: 40,
@@ -820,6 +1009,91 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+  },
+  yieldErrorCard: {
+    borderWidth: 1,
+    borderColor: "#F5D0C5",
+    backgroundColor: "#FFF7F5",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  yieldErrorTitle: {
+    fontSize: 15,
+    fontFamily: "Outfit_700Bold",
+    color: "#9A3412",
+    marginBottom: 4,
+  },
+  yieldErrorCopy: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: "Outfit_400Regular",
+    color: "#7C2D12",
+    marginBottom: 12,
+  },
+  retryButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  retryButtonText: {
+    color: COLORS.secondary,
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+  },
+  retryMetaText: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#92400E",
+    marginTop: 10,
+  },
+  skeletonBase: {
+    backgroundColor: "#DDE6D9",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  skeletonShimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: "45%",
+    backgroundColor: "rgba(255,255,255,0.5)",
+  },
+  earningLabelSkeleton: {
+    height: 13,
+    width: "42%",
+    marginBottom: 10,
+  },
+  earningAmountSkeleton: {
+    height: 30,
+    width: "58%",
+    marginBottom: 8,
+  },
+  earningHintSkeleton: {
+    height: 13,
+    width: "64%",
+  },
+  modalLabelSkeleton: {
+    height: 12,
+    width: "34%",
+    marginBottom: 8,
+  },
+  modalValueSkeleton: {
+    height: 26,
+    width: "56%",
+  },
+  modalCopySkeleton: {
+    height: 14,
+    width: "100%",
+    marginTop: 4,
+  },
+  modalCopySkeletonShort: {
+    height: 14,
+    width: "78%",
   },
   tabBar: {
     flexDirection: "row",
