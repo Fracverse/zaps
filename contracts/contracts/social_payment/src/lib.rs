@@ -169,7 +169,7 @@ mod tests {
         let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
         let mut found = false;
         for item in events.iter() {
-            if item.1.contains(topic.clone()) {
+            if item.1.contains(topic) {
                 let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
                 assert_eq!(ev.sender, sender);
                 assert_eq!(ev.receiver, receiver);
@@ -250,7 +250,7 @@ mod tests {
         let topic: Val = Symbol::new(&env, "PaymentLiked").into_val(&env);
         let mut found = false;
         for item in events.iter() {
-            if item.1.contains(topic.clone()) {
+            if item.1.contains(topic) {
                 let (eid, eaddr): (Symbol, Address) = item.2.try_into_val(&env).unwrap();
                 assert_eq!(eid, tx_id);
                 assert_eq!(eaddr, sender);

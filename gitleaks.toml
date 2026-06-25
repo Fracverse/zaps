@@ -1,0 +1,7 @@
+[allowlist]
+description = "Allowlist mock keys in tests and mock screens"
+paths = [
+    '''mobileapp/app/backup-key\.tsx''',
+    '''backend/tests/payment_xdr_test\.rs''',
+    '''mobileapp/src/services/walletSecurity\.ts'''
+]
