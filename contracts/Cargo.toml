@@ -6,6 +6,7 @@ members = [
     "contracts/naira_token",
     "contracts/social_graph",
     "contracts/allbridge_receiver",
+    "contracts/yield_vault",
 ]
 
 [profile.release]
