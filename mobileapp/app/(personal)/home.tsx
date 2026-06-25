@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,13 @@ import {
   ViewStyle,
   StyleProp,
 } from "react-native";
+import Svg, {
+  Defs,
+  LinearGradient,
+  Stop,
+  Path,
+  Circle,
+} from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -43,6 +50,26 @@ interface YieldSnapshot {
   totalYieldEarned: string;
   explanation: string;
 }
+
+interface MonthlyEarningPoint {
+  month: string;
+  amount: number;
+}
+
+const MONTHLY_EARNINGS: MonthlyEarningPoint[] = [
+  { month: "Jan", amount: 140 },
+  { month: "Feb", amount: 172 },
+  { month: "Mar", amount: 205 },
+  { month: "Apr", amount: 238 },
+  { month: "May", amount: 261 },
+  { month: "Jun", amount: 296 },
+  { month: "Jul", amount: 317 },
+  { month: "Aug", amount: 334 },
+  { month: "Sep", amount: 352 },
+  { month: "Oct", amount: 365 },
+  { month: "Nov", amount: 388 },
+  { month: "Dec", amount: 412 },
+];
 
 const INITIAL_FEED: FeedItem[] = [
   {
@@ -97,6 +124,10 @@ export default function HomeScreen() {
   );
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
+  const [chartWidth, setChartWidth] = useState(0);
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(
+    MONTHLY_EARNINGS.length - 1
+  );
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
@@ -370,6 +401,79 @@ export default function HomeScreen() {
     inputRange: [-1, 1],
     outputRange: [-220, 220],
   });
+
+  const parseCurrencyAmount = (value: string) => {
+    const sanitized = value.replace(/[^\d.-]/g, "");
+    const parsed = Number(sanitized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const formatCurrency = (value: number) =>
+    `₦${value.toLocaleString("en-NG", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+
+  const monthlyEarnings = useMemo(() => {
+    const baseTotal = MONTHLY_EARNINGS.reduce((sum, item) => sum + item.amount, 0);
+    const targetTotal = parseCurrencyAmount(
+      yieldData?.totalYieldEarned ?? "₦3,280.45"
+    );
+    const scale = targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
+    return MONTHLY_EARNINGS.map((item) => ({
+      ...item,
+      amount: Number((item.amount * scale).toFixed(2)),
+    }));
+  }, [yieldData]);
+
+  useEffect(() => {
+    if (selectedMonthIndex > monthlyEarnings.length - 1) {
+      setSelectedMonthIndex(monthlyEarnings.length - 1);
+    }
+  }, [monthlyEarnings, selectedMonthIndex]);
+
+  const chartHeight = 170;
+  const chartPadding = { top: 18, right: 12, bottom: 28, left: 12 };
+
+  const chartGeometry = useMemo(() => {
+    if (chartWidth <= 0 || monthlyEarnings.length === 0) return null;
+
+    const usableWidth = Math.max(
+      chartWidth - chartPadding.left - chartPadding.right,
+      1
+    );
+    const usableHeight = Math.max(
+      chartHeight - chartPadding.top - chartPadding.bottom,
+      1
+    );
+    const amounts = monthlyEarnings.map((item) => item.amount);
+    const minAmount = Math.min(...amounts);
+    const maxAmount = Math.max(...amounts);
+    const amountRange = maxAmount - minAmount || 1;
+
+    const points = monthlyEarnings.map((item, index) => {
+      const x =
+        chartPadding.left +
+        (index / (monthlyEarnings.length - 1 || 1)) * usableWidth;
+      const normalizedY = (item.amount - minAmount) / amountRange;
+      const y = chartPadding.top + (1 - normalizedY) * usableHeight;
+      return { ...item, x, y };
+    });
+
+    const linePath = points.reduce((path, point, index, arr) => {
+      if (index === 0) return `M ${point.x} ${point.y}`;
+      const prev = arr[index - 1];
+      const cpX = (prev.x + point.x) / 2;
+      return `${path} Q ${cpX} ${prev.y} ${point.x} ${point.y}`;
+    }, "");
+
+    const first = points[0];
+    const last = points[points.length - 1];
+    const areaBaseY = chartHeight - chartPadding.bottom;
+    const areaPath = `${linePath} L ${last.x} ${areaBaseY} L ${first.x} ${areaBaseY} Z`;
+
+    return { points, linePath, areaPath };
+  }, [chartHeight, chartPadding.bottom, chartPadding.left, chartPadding.right, chartPadding.top, chartWidth, monthlyEarnings]);
 
   const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
     <View style={[styles.skeletonBase, style]}>
@@ -724,26 +828,122 @@ export default function HomeScreen() {
                   </Text>
                 </View>
 
-            <View style={styles.autoYieldRow}>
-              <View style={styles.autoYieldTextWrap}>
-                <Text style={styles.autoYieldTitle}>Auto-yield deposits</Text>
-                <Text style={styles.autoYieldSubtitle}>
-                  Automatically put idle balance to work
-                </Text>
-              </View>
-              <Switch
-                value={autoYieldEnabled}
-                onValueChange={handleAutoYieldToggle}
-                trackColor={{ false: "#E2E8F0", true: "#34D399" }}
-                thumbColor={COLORS.white}
-              />
-            </View>
+                <View
+                  style={styles.earningsChartSection}
+                  onLayout={(event) =>
+                    setChartWidth(event.nativeEvent.layout.width - 24)
+                  }
+                >
+                  <View style={styles.earningsChartHeader}>
+                    <Text style={styles.earningsChartTitle}>Monthly earnings</Text>
+                    <Text style={styles.earningsChartMeta}>
+                      {monthlyEarnings[selectedMonthIndex]?.month}:{" "}
+                      {formatCurrency(
+                        monthlyEarnings[selectedMonthIndex]?.amount ?? 0
+                      )}
+                    </Text>
+                  </View>
 
-            <Text style={styles.earningsInfoCopy}>
-              Your earnings are generated from your wallet balance and may vary
-              as rates change. APY is an annualized estimate and total yield is
-              updated automatically over time.
-            </Text>
+                  <View style={styles.earningsChartCanvas}>
+                    {chartGeometry && (
+                      <>
+                        <Svg width={chartWidth} height={chartHeight}>
+                          <Defs>
+                            <LinearGradient
+                              id="earningsGradient"
+                              x1="0%"
+                              y1="0%"
+                              x2="0%"
+                              y2="100%"
+                            >
+                              <Stop
+                                offset="0%"
+                                stopColor="#3D6B35"
+                                stopOpacity={0.3}
+                              />
+                              <Stop
+                                offset="100%"
+                                stopColor="#3D6B35"
+                                stopOpacity={0.02}
+                              />
+                            </LinearGradient>
+                          </Defs>
+                          <Path
+                            d={chartGeometry.areaPath}
+                            fill="url(#earningsGradient)"
+                          />
+                          <Path
+                            d={chartGeometry.linePath}
+                            stroke="#2F5A2E"
+                            strokeWidth={3}
+                            fill="none"
+                          />
+                          {chartGeometry.points.map((point, index) => {
+                            const isActive = selectedMonthIndex === index;
+                            return (
+                              <Circle
+                                key={point.month}
+                                cx={point.x}
+                                cy={point.y}
+                                r={isActive ? 5 : 3.5}
+                                fill={isActive ? "#0F3D16" : "#6E9E62"}
+                              />
+                            );
+                          })}
+                        </Svg>
+
+                        <View style={styles.chartTouchOverlay}>
+                          {chartGeometry.points.map((point, index) => (
+                            <TouchableOpacity
+                              key={`${point.month}-touch`}
+                              style={[
+                                styles.chartTouchPoint,
+                                { left: point.x - 14, width: 28 },
+                              ]}
+                              onPress={() => setSelectedMonthIndex(index)}
+                              activeOpacity={1}
+                            />
+                          ))}
+                        </View>
+                      </>
+                    )}
+                  </View>
+
+                  <View style={styles.earningsMonthRow}>
+                    {monthlyEarnings.map((item, index) => {
+                      const isVisibleLabel =
+                        index % 2 === 0 || index === monthlyEarnings.length - 1;
+                      const isSelected = selectedMonthIndex === index;
+                      return (
+                        <Text
+                          key={`${item.month}-label`}
+                          style={[
+                            styles.earningsMonthLabel,
+                            isSelected && styles.earningsMonthLabelActive,
+                          ]}
+                        >
+                          {isVisibleLabel ? item.month : ""}
+                        </Text>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <View style={styles.autoYieldRow}>
+                  <View style={styles.autoYieldTextWrap}>
+                    <Text style={styles.autoYieldTitle}>Auto-yield deposits</Text>
+                    <Text style={styles.autoYieldSubtitle}>
+                      Automatically put idle balance to work
+                    </Text>
+                  </View>
+                  <Switch
+                    value={autoYieldEnabled}
+                    onValueChange={handleAutoYieldToggle}
+                    trackColor={{ false: "#E2E8F0", true: "#34D399" }}
+                    thumbColor={COLORS.white}
+                  />
+                </View>
+
                 <Text style={styles.earningsInfoCopy}>
                   {yieldData?.explanation}
                 </Text>
@@ -1126,6 +1326,61 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+  },
+  earningsChartSection: {
+    backgroundColor: "#F9FCF8",
+    borderWidth: 1,
+    borderColor: "#E2EDDF",
+    borderRadius: 16,
+    padding: 12,
+  },
+  earningsChartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  earningsChartTitle: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#446248",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  earningsChartMeta: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#1F3C1E",
+  },
+  earningsChartCanvas: {
+    height: 170,
+    borderRadius: 14,
+    overflow: "hidden",
+    backgroundColor: "#F2F9F0",
+  },
+  chartTouchOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  chartTouchPoint: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+  },
+  earningsMonthRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 8,
+  },
+  earningsMonthLabel: {
+    flex: 1,
+    fontSize: 11,
+    color: "#779074",
+    fontFamily: "Outfit_500Medium",
+    textAlign: "center",
+  },
+  earningsMonthLabelActive: {
+    color: "#0F3D16",
+    fontFamily: "Outfit_700Bold",
   },
   yieldErrorCard: {
     borderWidth: 1,
