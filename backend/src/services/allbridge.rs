@@ -191,7 +191,7 @@ impl AllbridgeClient {
         Ok(AllbridgeQuoteResponse {
             fee: payload.fee.unwrap_or_else(|| "0".to_string()),
             receive_amount: payload.receive_amount.unwrap_or_else(|| "0".to_string()),
-            bridge_tx_data: payload.bridge_tx_data.unwrap_or_else(|| "".to_string()),
+            bridge_tx_data: payload.bridge_tx_data.unwrap_or_default(),
         })
     }
 
