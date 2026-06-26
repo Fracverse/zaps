@@ -326,7 +326,10 @@ fn test_full_lifecycle_deposit_yield_withdraw() {
     client.accrue_yield(&owner);
 
     let index = client.yield_index();
-    assert!(index > PRECISION, "yield should compound after ledger advance");
+    assert!(
+        index > PRECISION,
+        "yield should compound after ledger advance"
+    );
 
     let half_shares = shares / 2;
     let expected_out = half_shares * index / PRECISION;

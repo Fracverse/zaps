@@ -27,7 +27,7 @@ const MOCK_PROTOCOL_REWARD_BPS: i128 = 650; // 6.50%
 #[cfg(any(feature = "mock-protocol", test))]
 mod sandbox_protocol {
     use super::{
-        Env, MOCK_PROTOCOL_REWARD_BPS, PROTO_BAL_KEY, PROTO_LED_KEY, PROTO_REW_KEY, Symbol,
+        Env, Symbol, MOCK_PROTOCOL_REWARD_BPS, PROTO_BAL_KEY, PROTO_LED_KEY, PROTO_REW_KEY,
     };
 
     const LEDGERS_PER_YEAR: i128 = 6_307_200; // ~5s per ledger
@@ -44,9 +44,7 @@ mod sandbox_protocol {
                     .expect("overflow")
                     .checked_mul(delta)
                     .expect("overflow")
-                    / (10_000i128
-                        .checked_mul(LEDGERS_PER_YEAR)
-                        .expect("overflow"));
+                    / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
                 if accrued > 0 {
                     let rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
                     env.storage()
@@ -64,7 +62,9 @@ mod sandbox_protocol {
         }
         checkpoint(env);
         let current: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
-        env.storage().instance().set(&PROTO_BAL_KEY, &(current + amount));
+        env.storage()
+            .instance()
+            .set(&PROTO_BAL_KEY, &(current + amount));
         env.events().publish(
             (Symbol::new(env, "MockSupply"),),
             (amount, current + amount),
@@ -102,9 +102,7 @@ mod sandbox_protocol {
             .expect("overflow")
             .checked_mul(delta)
             .expect("overflow")
-            / (10_000i128
-                .checked_mul(LEDGERS_PER_YEAR)
-                .expect("overflow"));
+            / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
         current_rewards + incremental
     }
 
