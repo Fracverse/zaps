@@ -13,9 +13,133 @@ const SHARES_KEY: Symbol = symbol_short!("tot_shr");
 const ASSETS_KEY: Symbol = symbol_short!("tot_ast");
 const IDX_KEY: Symbol = symbol_short!("yld_idx");
 const IDX_LED_KEY: Symbol = symbol_short!("idx_led");
+const PROTO_BAL_KEY: Symbol = symbol_short!("p_bal");
+const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
+const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
 
 /// Precision factor used in all fixed-point math (1e8).
 const PRECISION: i128 = 100_000_000;
+
+/// Mock lending protocol annualized reward rate (basis points).
+#[cfg(any(feature = "mock-protocol", test))]
+const MOCK_PROTOCOL_REWARD_BPS: i128 = 650; // 6.50%
+
+#[cfg(any(feature = "mock-protocol", test))]
+mod sandbox_protocol {
+    use super::{
+        Env, MOCK_PROTOCOL_REWARD_BPS, PROTO_BAL_KEY, PROTO_LED_KEY, PROTO_REW_KEY, Symbol,
+    };
+
+    const LEDGERS_PER_YEAR: i128 = 6_307_200; // ~5s per ledger
+
+    fn checkpoint(env: &Env) {
+        let now = env.ledger().sequence();
+        let last: u32 = env.storage().instance().get(&PROTO_LED_KEY).unwrap_or(now);
+        let delta = (now - last) as i128;
+        if delta > 0 {
+            let supplied: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+            if supplied > 0 {
+                let accrued = supplied
+                    .checked_mul(MOCK_PROTOCOL_REWARD_BPS)
+                    .expect("overflow")
+                    .checked_mul(delta)
+                    .expect("overflow")
+                    / (10_000i128
+                        .checked_mul(LEDGERS_PER_YEAR)
+                        .expect("overflow"));
+                if accrued > 0 {
+                    let rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+                    env.storage()
+                        .instance()
+                        .set(&PROTO_REW_KEY, &(rewards + accrued));
+                }
+            }
+        }
+        env.storage().instance().set(&PROTO_LED_KEY, &now);
+    }
+
+    pub fn supply(env: &Env, amount: i128) {
+        if amount <= 0 {
+            return;
+        }
+        checkpoint(env);
+        let current: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        env.storage().instance().set(&PROTO_BAL_KEY, &(current + amount));
+        env.events().publish(
+            (Symbol::new(env, "MockSupply"),),
+            (amount, current + amount),
+        );
+    }
+
+    pub fn redeem(env: &Env, amount: i128) -> i128 {
+        if amount <= 0 {
+            return 0;
+        }
+        checkpoint(env);
+        let current: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        let redeemed = if amount > current { current } else { amount };
+        env.storage()
+            .instance()
+            .set(&PROTO_BAL_KEY, &(current - redeemed));
+        env.events().publish(
+            (Symbol::new(env, "MockRedeem"),),
+            (amount, redeemed, current - redeemed),
+        );
+        redeemed
+    }
+
+    pub fn pending_rewards(env: &Env) -> i128 {
+        let now = env.ledger().sequence();
+        let last: u32 = env.storage().instance().get(&PROTO_LED_KEY).unwrap_or(now);
+        let delta = (now - last) as i128;
+        let supplied: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        let current_rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+        if delta <= 0 || supplied <= 0 {
+            return current_rewards;
+        }
+        let incremental = supplied
+            .checked_mul(MOCK_PROTOCOL_REWARD_BPS)
+            .expect("overflow")
+            .checked_mul(delta)
+            .expect("overflow")
+            / (10_000i128
+                .checked_mul(LEDGERS_PER_YEAR)
+                .expect("overflow"));
+        current_rewards + incremental
+    }
+
+    pub fn claim_rewards(env: &Env) -> i128 {
+        checkpoint(env);
+        let rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+        env.storage().instance().set(&PROTO_REW_KEY, &0i128);
+        env.events()
+            .publish((Symbol::new(env, "MockClaim"),), (rewards,));
+        rewards
+    }
+
+    pub fn supplied_balance(env: &Env) -> i128 {
+        env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0)
+    }
+}
+
+#[cfg(not(any(feature = "mock-protocol", test)))]
+mod sandbox_protocol {
+    use super::Env;
+
+    pub fn supply(_env: &Env, _amount: i128) {}
+    pub fn redeem(_env: &Env, amount: i128) -> i128 {
+        amount
+    }
+    pub fn pending_rewards(_env: &Env) -> i128 {
+        0
+    }
+    pub fn claim_rewards(_env: &Env) -> i128 {
+        0
+    }
+    pub fn supplied_balance(_env: &Env) -> i128 {
+        0
+    }
+}
 
 #[contracttype]
 enum DataKey {
@@ -27,6 +151,15 @@ pub struct YieldVaultContract;
 
 #[contractimpl]
 impl YieldVaultContract {
+    fn require_owner(env: &Env, caller: &Address) {
+        let owner: Address = env
+            .storage()
+            .instance()
+            .get(&OWNER_KEY)
+            .expect("not initialized");
+        assert!(caller == &owner, "only owner");
+    }
+
     /// SC-016: One-time initializer. Sets owner, token address, and initial APY.
     /// `apy_bps` is the annual percentage yield in basis points (e.g. 500 = 5%).
     pub fn initialize(env: Env, owner: Address, token: Address, apy_bps: u32) {
@@ -43,6 +176,11 @@ impl YieldVaultContract {
             .set(&IDX_LED_KEY, &env.ledger().sequence());
         env.storage().instance().set(&SHARES_KEY, &0i128);
         env.storage().instance().set(&ASSETS_KEY, &0i128);
+        env.storage().instance().set(&PROTO_BAL_KEY, &0i128);
+        env.storage().instance().set(&PROTO_REW_KEY, &0i128);
+        env.storage()
+            .instance()
+            .set(&PROTO_LED_KEY, &env.ledger().sequence());
     }
 
     // ─── SC-019: Yield compounding math ──────────────────────────────────────
@@ -99,6 +237,8 @@ impl YieldVaultContract {
 
         // Pull tokens from depositor into vault
         token::Client::new(&env, &token_addr).transfer(&depositor, &vault_addr, &amount);
+        // Simulate routing liquidity into an external lending protocol adapter.
+        sandbox_protocol::supply(&env, amount);
 
         let index = Self::current_index(&env);
         let shares = amount.checked_mul(PRECISION).expect("overflow") / index;
@@ -144,6 +284,8 @@ impl YieldVaultContract {
         let index = Self::current_index(&env);
         let assets_out = shares.checked_mul(index).expect("overflow") / PRECISION;
         assert!(assets_out > 0, "withdrawal too small");
+        // Simulate retrieving liquidity from the external lending protocol adapter.
+        sandbox_protocol::redeem(&env, assets_out);
 
         // Deduct shares
         env.storage()
@@ -172,6 +314,41 @@ impl YieldVaultContract {
             (Symbol::new(&env, "Withdrawn"),),
             (user, shares, assets_out),
         );
+    }
+
+    // ─── Mock protocol adapter interface ──────────────────────────────────────
+
+    /// Owner-controlled mock protocol supply entrypoint for sandbox/testing use.
+    pub fn mock_protocol_supply(env: Env, caller: Address, amount: i128) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(amount > 0, "amount must be positive");
+        sandbox_protocol::supply(&env, amount);
+    }
+
+    /// Owner-controlled mock protocol redeem entrypoint for sandbox/testing use.
+    pub fn mock_protocol_redeem(env: Env, caller: Address, amount: i128) -> i128 {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(amount > 0, "amount must be positive");
+        sandbox_protocol::redeem(&env, amount)
+    }
+
+    /// Returns current pending simulated rewards from the mock protocol.
+    pub fn mock_protocol_pending_rewards(env: Env) -> i128 {
+        sandbox_protocol::pending_rewards(&env)
+    }
+
+    /// Claims accrued simulated rewards from the mock protocol.
+    pub fn mock_protocol_claim_rewards(env: Env, caller: Address) -> i128 {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        sandbox_protocol::claim_rewards(&env)
+    }
+
+    /// Returns the amount currently supplied to the mock protocol.
+    pub fn mock_protocol_supplied_balance(env: Env) -> i128 {
+        sandbox_protocol::supplied_balance(&env)
     }
 
     // ─── View helpers ─────────────────────────────────────────────────────────
