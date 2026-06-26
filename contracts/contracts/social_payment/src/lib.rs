@@ -224,7 +224,7 @@ mod tests {
 
     // ── Pay panics on zero amount ─────────────────────────────────────────────
     #[test]
-    #[ignore = "raw contract panics abort the no_std Soroban test process"]
+    #[ignore]
     fn test_pay_rejects_zero_amount() {
         let (env, client, admin, _treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000);
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "raw contract panics abort the no_std Soroban test process"]
+    #[ignore]
     fn comment_payment_rejects_overlong_comment() {
         let (env, client, _admin, _treasury, sender, _receiver) = setup();
         let tx_id = Symbol::new(&env, "tx789");
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "raw contract panics abort the no_std Soroban test process"]
+    #[ignore]
     fn test_initialize_twice_panics() {
         let (_env, client, admin, treasury, _sender, _receiver) = setup();
         let res = client.try_initialize(&admin, &treasury);
