@@ -103,7 +103,7 @@ pub async fn get_history(
                 )
                     .into_response();
             }
-        }
+        };
 
     let rows = match sqlx::query(
         r#"

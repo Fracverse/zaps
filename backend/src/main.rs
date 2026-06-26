@@ -130,7 +130,8 @@ async fn main() {
     let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes(pool.clone()))
-        .nest("/api/bridge", api::bridge_routes(bridge_state.clone()));
+        .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
+        .nest("/api/yield", api::yield_routes(pool.clone()));
 
     let app = Router::new()
         .merge(public_routes)
