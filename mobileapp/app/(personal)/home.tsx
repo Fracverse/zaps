@@ -9,6 +9,7 @@ import {
   Modal,
   FlatList,
   Animated,
+  Switch,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -82,6 +83,7 @@ export default function HomeScreen() {
   const [currentApy] = useState("8.75%");
   const [totalYieldEarned] = useState("₦3,280.45");
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
+  const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
 
@@ -268,6 +270,14 @@ export default function HomeScreen() {
         setEarningsModalVisible(false);
       }
     });
+  };
+
+  const handleAutoYieldToggle = (value: boolean) => {
+    // Light haptic bump on yield preference change (and resulting deposit)
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+    setAutoYieldEnabled(value);
   };
 
   const filteredFeed = feed.filter((item) => {
@@ -531,6 +541,21 @@ export default function HomeScreen() {
             <View style={styles.earningsMetricCard}>
               <Text style={styles.earningsMetricLabel}>Total Yield Earned</Text>
               <Text style={styles.earningsMetricValue}>{totalYieldEarned}</Text>
+            </View>
+
+            <View style={styles.autoYieldRow}>
+              <View style={styles.autoYieldTextWrap}>
+                <Text style={styles.autoYieldTitle}>Auto-yield deposits</Text>
+                <Text style={styles.autoYieldSubtitle}>
+                  Automatically put idle balance to work
+                </Text>
+              </View>
+              <Switch
+                value={autoYieldEnabled}
+                onValueChange={handleAutoYieldToggle}
+                trackColor={{ false: "#E2E8F0", true: "#34D399" }}
+                thumbColor={COLORS.white}
+              />
             </View>
 
             <Text style={styles.earningsInfoCopy}>
@@ -814,6 +839,32 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontFamily: "Outfit_700Bold",
     color: "#111827",
+  },
+  autoYieldRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "#FAFAFA",
+  },
+  autoYieldTextWrap: {
+    flex: 1,
+    marginRight: 12,
+  },
+  autoYieldTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#111827",
+    marginBottom: 2,
+  },
+  autoYieldSubtitle: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
   },
   earningsInfoCopy: {
     fontSize: 13,
