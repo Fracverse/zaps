@@ -39,7 +39,11 @@ impl SocialPaymentContract {
     }
 
     pub fn set_treasury(env: Env, new_treasury: Address) {
-        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&TREAS_KEY, &new_treasury);
     }
