@@ -15,6 +15,12 @@ pub struct NairaTokenContract;
 
 #[contractimpl]
 impl NairaTokenContract {
+    fn require_admin(env: &Env) -> Address {
+        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
+        admin.require_auth();
+        admin
+    }
+
     pub fn initialize(env: Env, admin: Address, _name: String, _symbol: String) {
         if env.storage().instance().has(&ADMIN_KEY) {
             panic!("already initialized");
@@ -23,15 +29,14 @@ impl NairaTokenContract {
     }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
-        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
-        admin.require_auth();
+        Self::require_admin(&env);
         assert!(amount > 0, "amount must be positive");
         let bal: i128 = env.storage().persistent().get(&DataKey::Balance(to.clone())).unwrap_or(0);
         env.storage().persistent().set(&DataKey::Balance(to), &(bal + amount));
     }
 
     pub fn burn(env: Env, from: Address, amount: i128) {
-        from.require_auth();
+        Self::require_admin(&env);
         assert!(amount > 0, "amount must be positive");
         let bal: i128 = env.storage().persistent().get(&DataKey::Balance(from.clone())).unwrap_or(0);
         assert!(bal >= amount, "insufficient balance");
