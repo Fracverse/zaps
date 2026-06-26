@@ -1,6 +1,6 @@
+use super::models::{UserYieldBalance, YieldRateHistory, YieldTransaction};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
-use super::models::{UserYieldBalance, YieldTransaction, YieldRateHistory};
 
 /// Get a user's yield balance or create one with zero balance if it doesn't exist
 pub async fn get_or_create_yield_balance(
@@ -13,7 +13,7 @@ pub async fn get_or_create_yield_balance(
         VALUES ($1, 0, 0, NOW())
         ON CONFLICT (user_id) DO UPDATE SET updated_at = NOW()
         RETURNING user_id, available_balance, earning_balance, updated_at
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_one(pool)
@@ -54,7 +54,7 @@ pub async fn process_yield_deposit_tx(
         r#"
         INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
         VALUES ($1, $2, 'DEPOSIT', $3, NOW())
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(tx_hash)
@@ -70,7 +70,7 @@ pub async fn process_yield_deposit_tx(
         ON CONFLICT (user_id) DO UPDATE 
         SET earning_balance = user_yield_balances.earning_balance + $2,
             updated_at = NOW()
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(amount)
@@ -107,7 +107,7 @@ pub async fn process_yield_withdrawal_tx(
         r#"
         INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
         VALUES ($1, $2, 'WITHDRAW', $3, NOW())
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(tx_hash)
@@ -124,7 +124,7 @@ pub async fn process_yield_withdrawal_tx(
             available_balance = available_balance + $2,
             updated_at = NOW()
         WHERE user_id = $1
-        "#
+        "#,
     )
     .bind(user_id)
     .bind(amount)
@@ -135,15 +135,12 @@ pub async fn process_yield_withdrawal_tx(
 }
 
 /// Log an APY update
-pub async fn log_yield_rate_update(
-    pool: &PgPool,
-    apy: i32,
-) -> Result<(), sqlx::Error> {
+pub async fn log_yield_rate_update(pool: &PgPool, apy: i32) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT INTO yield_rates_history (apy, created_at)
         VALUES ($1, NOW())
-        "#
+        "#,
     )
     .bind(apy)
     .execute(pool)
@@ -153,15 +150,13 @@ pub async fn log_yield_rate_update(
 }
 
 /// Get the current (latest) APY
-pub async fn get_current_yield_rate(
-    pool: &PgPool,
-) -> Result<Option<i32>, sqlx::Error> {
+pub async fn get_current_yield_rate(pool: &PgPool) -> Result<Option<i32>, sqlx::Error> {
     let rate = sqlx::query_scalar(
         r#"
         SELECT apy FROM yield_rates_history
         ORDER BY created_at DESC
         LIMIT 1
-        "#
+        "#,
     )
     .fetch_optional(pool)
     .await?;

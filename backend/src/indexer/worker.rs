@@ -5,7 +5,9 @@ use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
 use super::parser::{parse_zaps_event, ZapsEvent};
-use crate::db::r#yield::{process_yield_deposit_tx, process_yield_withdrawal_tx, log_yield_rate_update};
+use crate::db::r#yield::{
+    log_yield_rate_update, process_yield_deposit_tx, process_yield_withdrawal_tx,
+};
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -56,15 +58,15 @@ pub async fn run(
                 let mut tx = pool.begin().await?;
 
                 for event in &events {
-                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings, 
-                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type 
+                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings,
+                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type
                     // or assume the topic is available in the payload somehow (e.g. decoded by a proxy or we check fields).
                     // For now, we will use a heuristic: if it has "apy", it's YieldRateUpdated.
                     // Otherwise we try extracting topic.
-                    
+
                     let topic_hint = super::parser::find_nested_string(event, "topic_symbol")
                         .or_else(|| super::parser::find_nested_string(event, "event_type"));
-                    
+
                     let guessed_topic = if let Some(t) = topic_hint {
                         t
                     } else if super::parser::find_nested_i64(event, "apy").is_some() {
@@ -79,14 +81,24 @@ pub async fn run(
 
                     match parse_zaps_event(&guessed_topic, event) {
                         ZapsEvent::YieldDeposited(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) = process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
+                            let user_id = get_or_create_user_id(&e.address, &pool)
+                                .await
+                                .unwrap_or_else(|_| Uuid::new_v4());
+                            if let Err(err) =
+                                process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash)
+                                    .await
+                            {
                                 tracing::warn!("Failed to process YieldDeposited event: {err}");
                             }
                         }
                         ZapsEvent::YieldWithdrawn(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) = process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
+                            let user_id = get_or_create_user_id(&e.address, &pool)
+                                .await
+                                .unwrap_or_else(|_| Uuid::new_v4());
+                            if let Err(err) =
+                                process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash)
+                                    .await
+                            {
                                 tracing::warn!("Failed to process YieldWithdrawn event: {err}");
                             }
                         }
@@ -98,9 +110,12 @@ pub async fn run(
                         ZapsEvent::Unknown => {
                             if let Some(payment_event) = extract_social_payment_event(event) {
                                 if let Err(err) =
-                                    process_social_payment_event(payment_event, &pool, &mut tx).await
+                                    process_social_payment_event(payment_event, &pool, &mut tx)
+                                        .await
                                 {
-                                    tracing::warn!("Failed to process Stellar payment event: {err}");
+                                    tracing::warn!(
+                                        "Failed to process Stellar payment event: {err}"
+                                    );
                                 }
                             }
                         }
@@ -323,10 +338,7 @@ fn find_nested_i64(value: &Value, key: &str) -> Option<i64> {
                 Value::String(text) => text.parse::<i64>().ok(),
                 _ => None,
             })
-            .or_else(|| {
-                map.values()
-                    .find_map(|nested| find_nested_i64(nested, key))
-            }),
+            .or_else(|| map.values().find_map(|nested| find_nested_i64(nested, key))),
         Value::Array(items) => items.iter().find_map(|item| find_nested_i64(item, key)),
         _ => None,
     }
