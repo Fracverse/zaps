@@ -78,7 +78,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [balance] = useState("₦32,450.00");
+  const [availableBalance] = useState("₦32,450.00");
   const [currentApy] = useState("8.75%");
   const [totalYieldEarned] = useState("₦3,280.45");
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
@@ -307,8 +307,14 @@ export default function HomeScreen() {
       >
         {/* Balance Card */}
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Stellar Wallet Balance</Text>
-          <Text style={styles.balanceAmount}>{balance}</Text>
+          <Text style={styles.balanceLabel}>Available Balance</Text>
+          <Text style={styles.balanceAmount}>{availableBalance}</Text>
+
+          <View style={styles.earningRow}>
+            <View style={styles.earningDot} />
+            <Text style={styles.earningRowLabel}>Earning Balance</Text>
+            <Text style={styles.earningRowValue}>{totalYieldEarned}</Text>
+          </View>
 
           <TouchableOpacity
             style={styles.payRequestButton}
@@ -653,7 +659,35 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
+    marginBottom: 14,
+  },
+  earningRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    backgroundColor: "#F2F9F0",
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     marginBottom: 20,
+  },
+  earningDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#2E7D32",
+    marginRight: 8,
+  },
+  earningRowLabel: {
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#456047",
+    marginRight: 8,
+  },
+  earningRowValue: {
+    fontSize: 13,
+    fontFamily: "Outfit_700Bold",
+    color: "#2E7D32",
   },
   quickActions: {
     flexDirection: "row",
