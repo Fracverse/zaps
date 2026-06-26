@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod feed;
 pub mod social;
 pub mod user;
+pub mod r#yield;
 
 pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
@@ -53,4 +54,13 @@ pub fn bridge_routes(state: bridge::BridgeState) -> Router {
         .route("/tx", post(bridge::submit_bridge_tx))
         .route("/status/:id", get(bridge::get_bridge_status))
         .with_state(state)
+}
+
+pub fn yield_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/balance", get(r#yield::get_balance))
+        .route("/history", get(r#yield::get_history))
+        .route("/deposit", post(r#yield::deposit))
+        .route("/withdraw", post(r#yield::withdraw))
+        .with_state(pool)
 }

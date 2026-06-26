@@ -1,6 +1,8 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 // ─── SC-016: Storage keys & configuration ────────────────────────────────────
 
@@ -36,7 +38,9 @@ impl YieldVaultContract {
         env.storage().instance().set(&APY_KEY, &apy_bps);
         // Yield index starts at 1.0 (represented as PRECISION)
         env.storage().instance().set(&IDX_KEY, &PRECISION);
-        env.storage().instance().set(&IDX_LED_KEY, &env.ledger().sequence());
+        env.storage()
+            .instance()
+            .set(&IDX_LED_KEY, &env.ledger().sequence());
         env.storage().instance().set(&SHARES_KEY, &0i128);
         env.storage().instance().set(&ASSETS_KEY, &0i128);
     }
@@ -58,8 +62,10 @@ impl YieldVaultContract {
         }
         // Scaled addition; all intermediate values stay within i128 for realistic APYs and time windows
         let accrued = old_index
-            .checked_mul(apy_bps as i128).expect("overflow")
-            .checked_mul(delta).expect("overflow")
+            .checked_mul(apy_bps as i128)
+            .expect("overflow")
+            .checked_mul(delta)
+            .expect("overflow")
             / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
         old_index.checked_add(accrued).expect("overflow")
     }
@@ -68,7 +74,9 @@ impl YieldVaultContract {
     fn checkpoint_index(env: &Env) {
         let idx = Self::current_index(env);
         env.storage().instance().set(&IDX_KEY, &idx);
-        env.storage().instance().set(&IDX_LED_KEY, &env.ledger().sequence());
+        env.storage()
+            .instance()
+            .set(&IDX_LED_KEY, &env.ledger().sequence());
     }
 
     // ─── SC-017: Deposit ──────────────────────────────────────────────────────
@@ -82,7 +90,11 @@ impl YieldVaultContract {
 
         Self::checkpoint_index(&env);
 
-        let token_addr: Address = env.storage().instance().get(&TOKEN_KEY).expect("not initialized");
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
         let vault_addr = env.current_contract_address();
 
         // Pull tokens from depositor into vault
@@ -95,13 +107,19 @@ impl YieldVaultContract {
         // Update user shares
         let user_key = DataKey::UserShares(depositor.clone());
         let prev_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
-        env.storage().persistent().set(&user_key, &(prev_shares + shares));
+        env.storage()
+            .persistent()
+            .set(&user_key, &(prev_shares + shares));
 
         // Update totals
         let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
         let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
-        env.storage().instance().set(&SHARES_KEY, &(tot_shares + shares));
-        env.storage().instance().set(&ASSETS_KEY, &(tot_assets + amount));
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares + shares));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets + amount));
 
         env.events().publish(
             (Symbol::new(&env, "Deposited"),),
@@ -128,15 +146,25 @@ impl YieldVaultContract {
         assert!(assets_out > 0, "withdrawal too small");
 
         // Deduct shares
-        env.storage().persistent().set(&user_key, &(user_shares - shares));
+        env.storage()
+            .persistent()
+            .set(&user_key, &(user_shares - shares));
 
         // Update totals (clamp to zero to guard against rounding drift)
         let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
         let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
-        env.storage().instance().set(&SHARES_KEY, &(tot_shares - shares).max(0));
-        env.storage().instance().set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
 
-        let token_addr: Address = env.storage().instance().get(&TOKEN_KEY).expect("not initialized");
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
         let vault_addr = env.current_contract_address();
         token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
 
@@ -149,7 +177,10 @@ impl YieldVaultContract {
     // ─── View helpers ─────────────────────────────────────────────────────────
 
     pub fn shares_of(env: Env, user: Address) -> i128 {
-        env.storage().persistent().get(&DataKey::UserShares(user)).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserShares(user))
+            .unwrap_or(0)
     }
 
     pub fn total_shares(env: Env) -> i128 {
