@@ -105,7 +105,10 @@ struct AllbridgeLeg {
 impl AllbridgeLeg {
     fn is_failed(&self) -> bool {
         matches!(
-            self.status.as_deref().map(str::to_ascii_lowercase).as_deref(),
+            self.status
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
             Some("failed") | Some("error") | Some("refunded") | Some("reverted")
         )
     }
@@ -126,8 +129,16 @@ impl AllbridgeStatusResponse {
         let confirmations = send_conf.max(receive_conf).max(0) as i32;
 
         // Any leg explicitly reporting a failure marks the whole transfer failed.
-        let failed = self.send.as_ref().map(AllbridgeLeg::is_failed).unwrap_or(false)
-            || self.receive.as_ref().map(AllbridgeLeg::is_failed).unwrap_or(false);
+        let failed = self
+            .send
+            .as_ref()
+            .map(AllbridgeLeg::is_failed)
+            .unwrap_or(false)
+            || self
+                .receive
+                .as_ref()
+                .map(AllbridgeLeg::is_failed)
+                .unwrap_or(false);
 
         let status = if failed {
             BridgeStatusKind::Failed
@@ -163,10 +174,7 @@ impl AllbridgeClient {
         &self,
         request: &AllbridgeQuoteRequest,
     ) -> Result<AllbridgeQuoteResponse, AllbridgeProxyError> {
-        let url = format!(
-            "{}/quote",
-            self.api_url.trim_end_matches('/')
-        );
+        let url = format!("{}/quote", self.api_url.trim_end_matches('/'));
 
         let response = self
             .client
@@ -184,14 +192,15 @@ impl AllbridgeClient {
             });
         }
 
-        let payload: AllbridgeQuoteApiResponse = response.json().await.map_err(|err| AllbridgeProxyError {
-            message: format!("allbridge quote response parsing failed: {err}"),
-        })?;
+        let payload: AllbridgeQuoteApiResponse =
+            response.json().await.map_err(|err| AllbridgeProxyError {
+                message: format!("allbridge quote response parsing failed: {err}"),
+            })?;
 
         Ok(AllbridgeQuoteResponse {
             fee: payload.fee.unwrap_or_else(|| "0".to_string()),
             receive_amount: payload.receive_amount.unwrap_or_else(|| "0".to_string()),
-            bridge_tx_data: payload.bridge_tx_data.unwrap_or_else(|| "".to_string()),
+            bridge_tx_data: payload.bridge_tx_data.unwrap_or_default(),
         })
     }
 

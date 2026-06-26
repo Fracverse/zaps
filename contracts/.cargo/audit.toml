@@ -1,0 +1,8 @@
+# Soroban SDK 20.x pins transitive dependencies that cannot be upgraded
+# independently without a larger SDK migration. Keep these ignores narrow so
+# new advisories still fail CI.
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0344", # curve25519-dalek pinned by soroban-env-host 20.3.0
+    "RUSTSEC-2026-0009", # time pinned through the Soroban 20.x dependency graph
+]
