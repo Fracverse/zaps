@@ -47,7 +47,7 @@ export default function AccountTypeScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.subtitle}>
-          Select how you'll primarily use Blink.
+          Select how you'll primarily use Zaps.
         </Text>
 
         <View style={styles.cardsContainer}>

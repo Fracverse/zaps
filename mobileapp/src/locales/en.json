@@ -1,0 +1,113 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "done": "Done",
+    "next": "Next",
+    "previous": "Previous",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "warning": "Warning",
+    "info": "Info"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "network": "Network error. Please check your connection.",
+    "offline": "You are offline. Some features may not be available.",
+    "server": "Server error. Please try again later.",
+    "validation": "Please check your input and try again.",
+    "timeout": "Request timed out. Please try again.",
+    "unauthorized": "You are not authorized to perform this action.",
+    "notFound": "The requested resource was not found.",
+    "crash": "The app encountered an unexpected error."
+  },
+  "network": {
+    "offline": "You are offline",
+    "online": "You are back online",
+    "retrying": "Retrying... ({{attempt}}/{{maxAttempts}})",
+    "retryFailed": "Retry failed",
+    "checkConnection": "Please check your internet connection"
+  },
+  "transactions": {
+    "success": "Transaction completed successfully",
+    "failed": "Transaction failed",
+    "pending": "Transaction pending",
+    "confirming": "Confirming transaction...",
+    "sending": "Sending payment...",
+    "receiving": "Receiving payment...",
+    "insufficientBalance": "Insufficient balance",
+    "invalidAmount": "Invalid amount",
+    "invalidRecipient": "Invalid recipient address"
+  },
+  "wallet": {
+    "create": "Create Wallet",
+    "backup": "Backup Wallet",
+    "restore": "Restore Wallet",
+    "balance": "Balance",
+    "send": "Send",
+    "receive": "Receive",
+    "scan": "Scan QR",
+    "showQR": "Show QR Code",
+    "copyAddress": "Copy Address",
+    "addressCopied": "Address copied to clipboard"
+  },
+  "auth": {
+    "login": "Login",
+    "logout": "Logout",
+    "signup": "Sign Up",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "forgotPassword": "Forgot Password?",
+    "resetPassword": "Reset Password",
+    "biometric": "Use Biometric",
+    "pin": "PIN",
+    "enterPin": "Enter your PIN",
+    "incorrectPin": "Incorrect PIN",
+    "pinSetup": "Setup PIN"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language",
+    "theme": "Theme",
+    "notifications": "Notifications",
+    "privacy": "Privacy",
+    "security": "Security",
+    "about": "About",
+    "help": "Help & Support",
+    "contact": "Contact Us",
+    "terms": "Terms of Service",
+    "privacyPolicy": "Privacy Policy"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "ar": "العربية",
+    "sw": "Kiswahili"
+  },
+  "currency": {
+    "usd": "USD",
+    "eur": "EUR",
+    "gbp": "GBP",
+    "xlm": "XLM",
+    "usdt": "USDT",
+    "usdc": "USDC"
+  },
+  "dates": {
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "tomorrow": "Tomorrow",
+    "thisWeek": "This Week",
+    "lastWeek": "Last Week",
+    "thisMonth": "This Month",
+    "lastMonth": "Last Month",
+    "thisYear": "This Year",
+    "lastYear": "Last Year"
+  }
+}

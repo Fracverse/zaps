@@ -10,13 +10,13 @@ interface AccountTypeCardProps {
   onPress: () => void;
 }
 
-export const AccountTypeCard = ({
+export const AccountTypeCard = React.memo(function AccountTypeCard({
   title,
   description,
   Icon,
   selected,
   onPress,
-}: AccountTypeCardProps) => {
+}: AccountTypeCardProps) {
   return (
     <TouchableOpacity
       style={[styles.card, selected && styles.cardSelected]}
@@ -32,7 +32,7 @@ export const AccountTypeCard = ({
       </View>
     </TouchableOpacity>
   );
-};
+});
 
 const styles = StyleSheet.create({
   card: {

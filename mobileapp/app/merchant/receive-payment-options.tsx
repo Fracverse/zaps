@@ -49,7 +49,7 @@ export default function ReceivePaymentOptionsScreen() {
         <View style={styles.cardsContainer}>
           <AccountTypeCard
             title="Receive Via Tap"
-            description="Receive crypto via Near Field Communication from Blink users"
+            description="Receive crypto via Near Field Communication from Zaps users"
             Icon={TapIconBlack}
             selected={selectedMethod === "tap"}
             onPress={() => setSelectedMethod("tap")}
@@ -57,7 +57,7 @@ export default function ReceivePaymentOptionsScreen() {
 
           <AccountTypeCard
             title="Receive Via QR Code"
-            description="Receive crypto via Quick Response code from Blink users"
+            description="Receive crypto via Quick Response code from Zaps users"
             Icon={ScanIconBlack}
             selected={selectedMethod === "qr"}
             onPress={() => setSelectedMethod("qr")}

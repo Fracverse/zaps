@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  # --- PostgreSQL Database ---
+  db:
+    image: postgres:15-alpine
+    container_name: zaps-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: zaps_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d zaps_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Redis Cache ---
+  redis:
+    image: redis:7-alpine
+    container_name: zaps-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # --- Stellar / Soroban RPC Node ---
+  soroban-rpc:
+    image: stellar/quickstart:latest
+    container_name: zaps-soroban-rpc
+    restart: unless-stopped
+    # Running local standalone sandbox environment
+    command:
+      - --local
+      - --enable-soroban-rpc
+    ports:
+      - "8000:8000"
+    volumes:
+      - soroban_data:/opt/stellar
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  soroban_data:
+    driver: local

@@ -1,0 +1,8 @@
+# Allow vulnerabilities that have no fix or are outside the scope of current changes
+[advisories]
+ignore = [
+    "RUSTSEC-2023-0071", # rsa: Marvin Attack - no fix available
+    "RUSTSEC-2024-0436", # paste unmaintained
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained
+    "RUSTSEC-2024-0363", # sqlx 0.7: wait for 0.8 upgrade
+]

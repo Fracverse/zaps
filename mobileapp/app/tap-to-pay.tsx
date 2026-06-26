@@ -17,6 +17,8 @@ import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { NfcIcon } from "../src/components/NfcIcon";
+import { scanNfcTag } from "../src/services/nfcTapToPay";
+import { parseSep0007Uri } from "../src/utils/sep0007";
 
 import XLMLogo from "../assets/XML-logo.svg";
 import USDTLogo from "../assets/USDT-logo.svg";
@@ -229,15 +231,57 @@ export default function TapToPayScreen() {
   const [step, setStep] = useState<Step>("ready");
   const [amount, setAmount] = useState("");
   const [selectedToken, setSelectedToken] = useState(TOKENS[0].id);
+  const [, setDestination] = useState<string | null>(null);
+  const [nfcError, setNfcError] = useState<string | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
 
   useEffect(() => {
-    if (step === "terminalFound") {
-      const t = setTimeout(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      if (step !== "terminalFound") return;
+      if (cancelled) return;
+
+      setIsScanning(true);
+      setNfcError(null);
+
+      try {
+        const { raw } = await scanNfcTag({ timeoutMs: 15000 });
+        if (cancelled) return;
+
+        const parsed = parseSep0007Uri(raw);
+        if (!parsed.valid) {
+          throw new Error(parsed.error);
+        }
+        if (parsed.operation !== "pay") {
+          throw new Error('Only SEP-0007 "pay" is supported for tap-to-pay');
+        }
+
+        const p = parsed.params;
+        if ("destination" in p) {
+          setDestination(p.destination);
+        } else {
+          throw new Error("Invalid SEP-0007 payload (missing destination)");
+        }
+
+        // Auto-advance to transfer/confirm UI
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setStep("transfer");
-      }, 1500);
-      return () => clearTimeout(t);
-    }
+      } catch (e) {
+        if (cancelled) return;
+        setNfcError(e instanceof Error ? e.message : "NFC scan failed");
+        // Stay on connecting screen; user can retry by going back
+        setStep("terminalFound");
+      } finally {
+        if (!cancelled) setIsScanning(false);
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
   }, [step]);
 
   const goNext = () => {
@@ -294,10 +338,13 @@ export default function TapToPayScreen() {
             {step === "searching" ? "Searching..." : "Terminal Found"}
           </Text>
           <Text style={styles.statusSubtext}>
-            {step === "searching"
-              ? "Looking for nearby terminal"
-              : "Connecting..."}
+            {isScanning
+              ? "Reading NFC..."
+              : step === "searching"
+                ? "Looking for nearby terminal"
+                : "Connecting..."}
           </Text>
+          {nfcError && <Text style={styles.nfcErrorText}>{nfcError}</Text>}
         </View>
       );
     }
@@ -715,5 +762,14 @@ const styles = StyleSheet.create({
   },
   scanInsteadText: {
     color: COLORS.secondary,
+  },
+  nfcErrorText: {
+    marginTop: 16,
+    color: "#EF4444",
+
+    fontFamily: "Outfit_500Medium",
+    fontSize: 14,
+    textAlign: "center",
+    paddingHorizontal: 20,
   },
 });

@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "BLINKS",
-    "slug": "BLINKS",
+    "name": "ZAPS",
+    "slug": "ZAPS",
     "version": "1.0.0",
-    "scheme": "BLINKS",
+    "scheme": "ZAPS",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -27,6 +27,6 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-font"]
+    "plugins": ["expo-font", "expo-notifications"]
   }
 }

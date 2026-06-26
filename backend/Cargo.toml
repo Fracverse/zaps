@@ -1,90 +1,26 @@
 [package]
-name = "blinks-backend"
+name = "zaps-backend"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Async runtime
-tokio = { version = "1.0", features = ["full"] }
-tokio-util = "0.7"
-
-# Web framework
-axum = { version = "0.7", features = ["json", "multipart", "macros"] }
-tower = { version = "0.4", features = ["util"] }
-tower-http = { version = "0.5", features = ["cors", "trace", "request-id", "util"] }
-governor = "0.6"
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# Database
-sqlx = { version = "0.7", features = [
-    "runtime-tokio-rustls",
-    "postgres",
-    "chrono",
-    "uuid",
-    "json",
-    "migrate"
-] }
-deadpool-postgres = "0.10"
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
-
-# Authentication & Security
-jsonwebtoken = "9.0"
-bcrypt = "0.15"
-ring = "0.17"
-
-# Stellar SDK - TODO: Use correct Stellar Rust SDK
-# Check: https://crates.io/crates/stellar-rust-sdk or similar
-# For now, we'll comment this out until we find the right crate
-# stellar_sdk = "0.1"
-soroban-sdk = "21.0"
-
-# HTTP client
-reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-
-# Configuration
-config = "0.14"
-
-# Error handling
-anyhow = "1.0"
-thiserror = "1.0"
-
-# Utilities
-uuid = { version = "1.0", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-regex = "1.10"
-base64 = "0.21"
-
-# Metrics & monitoring
-prometheus = "0.13"
-lazy_static = "1.4"
-dashmap = "5.5"
-
-# Queue system
-redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
-bb8 = "0.8"
-bb8-redis = "0.13"
-
-# HTTP body utilities
-http-body-util = "0.1"
-
-# Async utilities
-futures = "0.3"
-async-trait = "0.1"
+axum = "0.7.4"
+tokio = { version = "1.36.0", features = ["full"] }
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+sqlx = { version = "0.7.3", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid"] }
+uuid = { version = "1.7.0", features = ["v4", "serde"] }
+chrono = { version = "0.4.34", features = ["serde"] }
+dotenvy = "0.15.7"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+tower-http = { version = "0.5.2", features = ["cors", "trace"] }
+reqwest = { version = "0.11.24", features = ["json"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+jsonwebtoken = "9.2.0"
+base64 = "0.22.1"
 hex = "0.4.3"
 
-# Testing
 [dev-dependencies]
-tokio-test = "0.4"
-httpmock = "0.7"
-
-# Binaries
-[[bin]]
-name = "new_migration"
-path = "src/bin/new_migration.rs"
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"

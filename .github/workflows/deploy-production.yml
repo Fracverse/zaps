@@ -1,0 +1,164 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (e.g. sha-abc1234 or v1.2.3)'
+        required: true
+      confirm:
+        description: 'Type "deploy" to confirm production deployment'
+        required: true
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm deployment intent
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "deploy" ]]; then
+            echo "Confirmation string must be 'deploy'. Got: '${{ github.event.inputs.confirm }}'"
+            exit 1
+          fi
+          echo "Deployment confirmed for tag: ${{ github.event.inputs.image_tag }}"
+
+  # Manual approval gate via GitHub Environments
+  deploy-production:
+    name: Deploy to Production
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record pre-deploy state (for rollback)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            CURRENT=$(docker inspect zaps-backend-production --format='{{.Config.Image}}' 2>/dev/null || echo "none")
+            echo "$CURRENT" > /tmp/zaps-previous-image.txt
+            echo "Previous image: $CURRENT"
+
+      - name: Run database migrations
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            set -e
+            echo "Running migrations on production..."
+            docker run --rm \
+              --network host \
+              -e ZAPS_DATABASE__URL="${{ secrets.PRODUCTION_DATABASE_URL }}" \
+              -e RUN_ENV=production \
+              ghcr.io/${{ github.repository_owner }}/zaps-backend:${{ github.event.inputs.image_tag }} \
+              /app/zaps-backend migrate
+            echo "Migrations complete"
+
+      - name: Deploy to production
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            set -e
+            IMAGE="ghcr.io/${{ github.repository_owner }}/zaps-backend:${{ github.event.inputs.image_tag }}"
+
+            echo "Pulling $IMAGE..."
+            docker pull "$IMAGE"
+
+            echo "Stopping existing container..."
+            docker stop zaps-backend-production 2>/dev/null || true
+            docker rm zaps-backend-production 2>/dev/null || true
+
+            echo "Starting new container..."
+            docker run -d \
+              --name zaps-backend-production \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e ZAPS_DATABASE__URL="${{ secrets.PRODUCTION_DATABASE_URL }}" \
+              -e ZAPS_CACHE__REDIS_URL="${{ secrets.PRODUCTION_REDIS_URL }}" \
+              -e ZAPS_QUEUE__REDIS_URL="${{ secrets.PRODUCTION_REDIS_URL }}" \
+              -e ZAPS_JWT__SECRET="${{ secrets.PRODUCTION_JWT_SECRET }}" \
+              -e ZAPS_ANCHOR__WEBHOOK_SECRET="${{ secrets.PRODUCTION_ANCHOR_WEBHOOK_SECRET }}" \
+              -e ZAPS_COMPLIANCE__SANCTIONS_API_KEY="${{ secrets.PRODUCTION_SANCTIONS_API_KEY }}" \
+              -e ZAPS_OBSERVABILITY__SENTRY_DSN="${{ secrets.PRODUCTION_SENTRY_DSN }}" \
+              -e RUN_ENV=production \
+              -e LOG_FORMAT=json \
+              -e RUST_LOG=zaps_backend=warn,tower_http=warn \
+              "$IMAGE"
+
+            echo "Deployed $IMAGE to production"
+
+      - name: Health check
+        run: |
+          echo "Waiting for service to be ready..."
+          sleep 20
+          for i in {1..12}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.PRODUCTION_URL }}/health" || echo "000")
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed — triggering rollback"
+          exit 1
+
+      - name: Auto-rollback on health check failure
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ${{ secrets.PRODUCTION_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          script: |
+            PREVIOUS=$(cat /tmp/zaps-previous-image.txt 2>/dev/null || echo "none")
+            if [[ "$PREVIOUS" == "none" ]]; then
+              echo "No previous image to roll back to"
+              exit 1
+            fi
+            echo "Rolling back to $PREVIOUS..."
+            docker stop zaps-backend-production 2>/dev/null || true
+            docker rm zaps-backend-production 2>/dev/null || true
+            docker run -d \
+              --name zaps-backend-production \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e ZAPS_DATABASE__URL="${{ secrets.PRODUCTION_DATABASE_URL }}" \
+              -e ZAPS_CACHE__REDIS_URL="${{ secrets.PRODUCTION_REDIS_URL }}" \
+              -e ZAPS_QUEUE__REDIS_URL="${{ secrets.PRODUCTION_REDIS_URL }}" \
+              -e ZAPS_JWT__SECRET="${{ secrets.PRODUCTION_JWT_SECRET }}" \
+              -e ZAPS_ANCHOR__WEBHOOK_SECRET="${{ secrets.PRODUCTION_ANCHOR_WEBHOOK_SECRET }}" \
+              -e ZAPS_COMPLIANCE__SANCTIONS_API_KEY="${{ secrets.PRODUCTION_SANCTIONS_API_KEY }}" \
+              -e ZAPS_OBSERVABILITY__SENTRY_DSN="${{ secrets.PRODUCTION_SENTRY_DSN }}" \
+              -e RUN_ENV=production \
+              -e LOG_FORMAT=json \
+              "$PREVIOUS"
+            echo "Rolled back to $PREVIOUS"
+
+      - name: Notify deployment
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '🚀' || '🔥' }} Production deployment *${{ job.status }}*\nImage: `${{ github.event.inputs.image_tag }}`\nDeployed by: ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

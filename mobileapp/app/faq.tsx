@@ -63,9 +63,9 @@ export default function FAQScreen() {
 
   const faqs = [
     {
-      question: "What is Blinks?",
+      question: "What is Zaps?",
       answer:
-        "Blinks is a high-speed payment and transfer platform that allows users and merchants to send, receive, and manage funds seamlessly with low fees.",
+        "Zaps is a high-speed payment and transfer platform that allows users and merchants to send, receive, and manage funds seamlessly with low fees.",
     },
     {
       question: "How do I withdraw funds to my bank?",
@@ -73,14 +73,14 @@ export default function FAQScreen() {
         "Go to the 'Withdraw' section in your dashboard, enter the amount you wish to withdraw, and confirm the transaction. Funds are typically processed within minutes.",
     },
     {
-      question: "Is Blinks secure?",
+      question: "Is Zaps secure?",
       answer:
-        "Yes, Blinks uses bank-grade encryption and secure protocols to ensure your data and funds are always protected. We also support biometric authentication for added security.",
+        "Yes, Zaps uses bank-grade encryption and secure protocols to ensure your data and funds are always protected. We also support biometric authentication for added security.",
     },
     {
       question: "What are the transaction fees?",
       answer:
-        "Blinks offers competitive fees. Standard transfers typically have a small nominal fee, while basic account features are free. Check our 'Pricing' section for a detailed breakdown.",
+        "Zaps offers competitive fees. Standard transfers typically have a small nominal fee, while basic account features are free. Check our 'Pricing' section for a detailed breakdown.",
     },
     {
       question: "How can I contact support?",
@@ -108,7 +108,7 @@ export default function FAQScreen() {
       >
         <Text style={styles.title}>Frequently Asked Questions</Text>
         <Text style={styles.subtitle}>
-          Find answers to the most common questions about Blinks.
+          Find answers to the most common questions about Zaps.
         </Text>
 
         <View style={styles.faqList}>

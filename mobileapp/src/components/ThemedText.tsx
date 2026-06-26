@@ -6,7 +6,7 @@ export type ThemedTextProps = TextProps & {
   type?: "default" | "title" | "subtitle" | "link";
 };
 
-export function ThemedText({
+export const ThemedText = React.memo(function ThemedText({
   style,
   type = "default",
   ...rest
@@ -26,7 +26,7 @@ export function ThemedText({
       {...rest}
     />
   );
-}
+});
 
 const styles = StyleSheet.create({
   default: {

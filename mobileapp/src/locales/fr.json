@@ -1,0 +1,113 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Annuler",
+    "retry": "Réessayer",
+    "done": "Terminé",
+    "next": "Suivant",
+    "previous": "Précédent",
+    "save": "Enregistrer",
+    "delete": "Supprimer",
+    "edit": "Modifier",
+    "close": "Fermer",
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "warning": "Avertissement",
+    "info": "Information"
+  },
+  "errors": {
+    "generic": "Une erreur s'est produite. Veuillez réessayer.",
+    "network": "Erreur réseau. Veuillez vérifier votre connexion.",
+    "offline": "Vous êtes hors ligne. Certaines fonctionnalités peuvent ne pas être disponibles.",
+    "server": "Erreur serveur. Veuillez réessayer plus tard.",
+    "validation": "Veuillez vérifier votre saisie et réessayer.",
+    "timeout": "La demande a expiré. Veuillez réessayer.",
+    "unauthorized": "Vous n'êtes pas autorisé à effectuer cette action.",
+    "notFound": "La ressource demandée n'a pas été trouvée.",
+    "crash": "L'application a rencontré une erreur inattendue."
+  },
+  "network": {
+    "offline": "Vous êtes hors ligne",
+    "online": "Vous êtes de retour en ligne",
+    "retrying": "Nouvelle tentative... ({{attempt}}/{{maxAttempts}})",
+    "retryFailed": "La nouvelle tentative a échoué",
+    "checkConnection": "Veuillez vérifier votre connexion internet"
+  },
+  "transactions": {
+    "success": "Transaction terminée avec succès",
+    "failed": "Transaction échouée",
+    "pending": "Transaction en attente",
+    "confirming": "Confirmation de la transaction...",
+    "sending": "Envoi du paiement...",
+    "receiving": "Réception du paiement...",
+    "insufficientBalance": "Solde insuffisant",
+    "invalidAmount": "Montant invalide",
+    "invalidRecipient": "Adresse du destinataire invalide"
+  },
+  "wallet": {
+    "create": "Créer Portefeuille",
+    "backup": "Sauvegarder Portefeuille",
+    "restore": "Restaurer Portefeuille",
+    "balance": "Solde",
+    "send": "Envoyer",
+    "receive": "Recevoir",
+    "scan": "Scanner QR",
+    "showQR": "Afficher Code QR",
+    "copyAddress": "Copier l'Adresse",
+    "addressCopied": "Adresse copiée dans le presse-papiers"
+  },
+  "auth": {
+    "login": "Se Connecter",
+    "logout": "Se Déconnecter",
+    "signup": "S'inscrire",
+    "password": "Mot de passe",
+    "confirmPassword": "Confirmer le mot de passe",
+    "forgotPassword": "Mot de passe oublié ?",
+    "resetPassword": "Réinitialiser le mot de passe",
+    "biometric": "Utiliser la biométrie",
+    "pin": "PIN",
+    "enterPin": "Entrez votre PIN",
+    "incorrectPin": "PIN incorrect",
+    "pinSetup": "Configurer le PIN"
+  },
+  "settings": {
+    "title": "Paramètres",
+    "language": "Langue",
+    "theme": "Thème",
+    "notifications": "Notifications",
+    "privacy": "Confidentialité",
+    "security": "Sécurité",
+    "about": "À propos",
+    "help": "Aide et Support",
+    "contact": "Nous Contacter",
+    "terms": "Conditions d'Utilisation",
+    "privacyPolicy": "Politique de Confidentialité"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "ar": "العربية",
+    "sw": "Kiswahili"
+  },
+  "currency": {
+    "usd": "USD",
+    "eur": "EUR",
+    "gbp": "GBP",
+    "xlm": "XLM",
+    "usdt": "USDT",
+    "usdc": "USDC"
+  },
+  "dates": {
+    "today": "Aujourd'hui",
+    "yesterday": "Hier",
+    "tomorrow": "Demain",
+    "thisWeek": "Cette Semaine",
+    "lastWeek": "Semaine Dernière",
+    "thisMonth": "Ce Mois",
+    "lastMonth": "Mois Dernier",
+    "thisYear": "Cette Année",
+    "lastYear": "Année Dernière"
+  }
+}

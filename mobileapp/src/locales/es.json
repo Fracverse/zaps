@@ -1,0 +1,113 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancelar",
+    "retry": "Reintentar",
+    "done": "Hecho",
+    "next": "Siguiente",
+    "previous": "Anterior",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "close": "Cerrar",
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito",
+    "warning": "Advertencia",
+    "info": "Información"
+  },
+  "errors": {
+    "generic": "Algo salió mal. Por favor inténtalo de nuevo.",
+    "network": "Error de red. Por favor verifica tu conexión.",
+    "offline": "Estás sin conexión. Algunas funciones pueden no estar disponibles.",
+    "server": "Error del servidor. Por favor inténtalo más tarde.",
+    "validation": "Por favor revisa tu entrada e inténtalo de nuevo.",
+    "timeout": "La solicitud expiró. Por favor inténtalo de nuevo.",
+    "unauthorized": "No estás autorizado para realizar esta acción.",
+    "notFound": "El recurso solicitado no fue encontrado.",
+    "crash": "La aplicación encontró un error inesperado."
+  },
+  "network": {
+    "offline": "Estás sin conexión",
+    "online": "Estás de vuelta en línea",
+    "retrying": "Reintentando... ({{attempt}}/{{maxAttempts}})",
+    "retryFailed": "Reintentar falló",
+    "checkConnection": "Por favor verifica tu conexión a internet"
+  },
+  "transactions": {
+    "success": "Transacción completada exitosamente",
+    "failed": "Transacción fallida",
+    "pending": "Transacción pendiente",
+    "confirming": "Confirmando transacción...",
+    "sending": "Enviando pago...",
+    "receiving": "Recibiendo pago...",
+    "insufficientBalance": "Saldo insuficiente",
+    "invalidAmount": "Cantidad inválida",
+    "invalidRecipient": "Dirección de destinatario inválida"
+  },
+  "wallet": {
+    "create": "Crear Billetera",
+    "backup": "Respaldar Billetera",
+    "restore": "Restaurar Billetera",
+    "balance": "Saldo",
+    "send": "Enviar",
+    "receive": "Recibir",
+    "scan": "Escanear QR",
+    "showQR": "Mostrar Código QR",
+    "copyAddress": "Copiar Dirección",
+    "addressCopied": "Dirección copiada al portapapeles"
+  },
+  "auth": {
+    "login": "Iniciar Sesión",
+    "logout": "Cerrar Sesión",
+    "signup": "Registrarse",
+    "password": "Contraseña",
+    "confirmPassword": "Confirmar Contraseña",
+    "forgotPassword": "¿Olvidaste tu contraseña?",
+    "resetPassword": "Restablecer Contraseña",
+    "biometric": "Usar Biometría",
+    "pin": "PIN",
+    "enterPin": "Ingresa tu PIN",
+    "incorrectPin": "PIN incorrecto",
+    "pinSetup": "Configurar PIN"
+  },
+  "settings": {
+    "title": "Configuración",
+    "language": "Idioma",
+    "theme": "Tema",
+    "notifications": "Notificaciones",
+    "privacy": "Privacidad",
+    "security": "Seguridad",
+    "about": "Acerca de",
+    "help": "Ayuda y Soporte",
+    "contact": "Contáctanos",
+    "terms": "Términos de Servicio",
+    "privacyPolicy": "Política de Privacidad"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Español",
+    "fr": "Français",
+    "ar": "العربية",
+    "sw": "Kiswahili"
+  },
+  "currency": {
+    "usd": "USD",
+    "eur": "EUR",
+    "gbp": "GBP",
+    "xlm": "XLM",
+    "usdt": "USDT",
+    "usdc": "USDC"
+  },
+  "dates": {
+    "today": "Hoy",
+    "yesterday": "Ayer",
+    "tomorrow": "Mañana",
+    "thisWeek": "Esta Semana",
+    "lastWeek": "Semana Pasada",
+    "thisMonth": "Este Mes",
+    "lastMonth": "Mes Pasado",
+    "thisYear": "Este Año",
+    "lastYear": "Año Pasado"
+  }
+}

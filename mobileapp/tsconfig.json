@@ -6,6 +6,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
-    }
-  }
+    },
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["app/**/*", "src/**/*", "src/declarations.d.ts"]
 }

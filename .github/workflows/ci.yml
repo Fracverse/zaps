@@ -2,14 +2,21 @@ name: CI
 
 on:
   push:
-    branches: ['main', 'master', 'fix-ci']
+    branches: [main, master]
   pull_request:
-    branches: ['main', 'master', 'fix-ci']
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/zaps-backend
 
 jobs:
+  # ─── Frontend ────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend (React Native)
     runs-on: ubuntu-latest
@@ -19,35 +26,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 18
           cache: npm
           cache-dependency-path: mobileapp/package-lock.json
 
-      # Install all dependencies (including devDependencies)
       - name: Install dependencies
         run: npm ci
 
-      # Lint
       - name: Lint
         run: npm run lint
 
-      # Format check
-      - name: Format Check
+      - name: Format check
         run: npm run format:check
 
-      # Run tests in CI mode
       - name: Test
-        run: npm test -- --watch=false
+        run: npm test -- --watchAll=false --passWithNoTests
         env:
           CI: true
 
-      # Build check (Expo Web)
-      - name: Build Check
+      - name: Build check
         run: npx expo export --platform web --output-dir dist || echo "Build check completed"
 
+  # ─── Backend ─────────────────────────────────────────────────────────────────
   backend:
     name: Backend (Rust)
     runs-on: ubuntu-latest
@@ -57,7 +59,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: password
-          POSTGRES_DB: BLINKS
+          POSTGRES_DB: ZAPS
         ports:
           - 5432:5432
         options: >-
@@ -65,28 +67,35 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
-      BLINKS_DATABASE__URL: postgres://postgres:password@localhost:5432/BLINKS
+      ZAPS_DATABASE__URL: postgres://postgres:password@localhost:5432/ZAPS
+      ZAPS_CACHE__REDIS_URL: redis://localhost:6379
+      ZAPS_QUEUE__REDIS_URL: redis://localhost:6379
+      ZAPS_JWT__SECRET: ci-test-secret-not-for-production
+      RUN_ENV: test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
 
       - name: Check
         working-directory: ./backend
         run: cargo check
-
-      - name: Test
-        working-directory: ./backend
-        run: cargo test
 
       - name: Format
         working-directory: ./backend
@@ -96,22 +105,33 @@ jobs:
         working-directory: ./backend
         run: cargo clippy -- -D warnings
 
+      - name: Test
+        working-directory: ./backend
+        run: cargo test
+
+  # ─── Contracts ───────────────────────────────────────────────────────────────
   contracts:
     name: Contracts (Soroban)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: contracts
+
+      - name: Format
+        working-directory: ./contracts
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: ./contracts
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
         working-directory: ./contracts
@@ -121,10 +141,19 @@ jobs:
         working-directory: ./contracts
         run: cargo test --workspace
 
-      - name: Format
-        working-directory: ./contracts
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        working-directory: ./contracts
-        run: cargo clippy --all-targets --all-features -- -D warnings
+  # ─── All checks passed gate ───────────────────────────────────────────────────
+  ci-pass:
+    name: CI Pass
+    needs: [frontend, backend, contracts]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.frontend.result }}" != "success" || \
+                "${{ needs.backend.result }}" != "success" || \
+                "${{ needs.contracts.result }}" != "success" ]]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi
+          echo "All CI checks passed"

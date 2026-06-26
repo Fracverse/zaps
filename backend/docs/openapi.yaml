@@ -1,0 +1,921 @@
+openapi: 3.0.3
+info:
+  title: Zaps Backend API
+  description: Backend API for the Zaps social payments platform on Stellar. Covers auth, profiles, feed, social interactions, and cross-chain token bridging.
+  version: 1.0.0
+  contact:
+    name: Fracverse
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+
+tags:
+  - name: Auth
+    description: Challenge issuance and Stellar signature verification for JWT auth
+  - name: Users
+    description: User profiles, search, and friend management
+  - name: Feed
+    description: Public, friends, and private payment feeds
+  - name: Social
+    description: Likes and comments on payments
+  - name: Bridge
+    description: Cross-chain token quote, submission, and status tracking
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT obtained from POST /api/auth/verify
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+
+    ChallengeResponse:
+      type: object
+      required:
+        - challenge
+      properties:
+        challenge:
+          type: string
+          description: UUID v4 challenge string to be signed by the client Stellar keypair
+
+    VerifyRequest:
+      type: object
+      required:
+        - address
+        - signature
+        - challenge
+      properties:
+        address:
+          type: string
+          description: Stellar G... public address
+        signature:
+          type: string
+          description: Hex or base64-encoded Ed25519 signature of the challenge bytes
+        challenge:
+          type: string
+          description: Challenge string previously obtained from GET /api/auth/challenge
+
+    AuthResponse:
+      type: object
+      required:
+        - token
+        - username
+      properties:
+        token:
+          type: string
+          description: "JWT valid for 24 hours; include as Authorization: Bearer header"
+        username:
+          type: string
+          description: Auto-generated username prefixed with u_ followed by chars 2-15 of the Stellar address
+
+    ProfileResponse:
+      type: object
+      required:
+        - address
+        - username
+      properties:
+        address:
+          type: string
+        username:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          nullable: true
+        avatar_url:
+          type: string
+          nullable: true
+
+    SearchQuery:
+      type: object
+      properties:
+        q:
+          type: string
+          description: Search term matched against username and address via ILIKE
+
+    SearchUser:
+      type: object
+      properties:
+        username:
+          type: string
+        address:
+          type: string
+        avatar_url:
+          type: string
+          nullable: true
+
+    FriendUser:
+      type: object
+      properties:
+        username:
+          type: string
+        address:
+          type: string
+        avatar_url:
+          type: string
+          nullable: true
+
+    FriendRequest:
+      type: object
+      required:
+        - friend_address
+      properties:
+        friend_address:
+          type: string
+          description: Stellar G... address of the user to befriend
+
+    StatusResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - pending
+
+    FeedQuery:
+      type: object
+      properties:
+
+    FeedItem:
+      type: object
+      properties:
+        id:
+          type: string
+          description: UUID of the payment record
+        tx_hash:
+          type: string
+          description: Stellar transaction hash
+        sender_username:
+          type: string
+        sender_avatar:
+          type: string
+          nullable: true
+        receiver_username:
+          type: string
+        receiver_avatar:
+          type: string
+          nullable: true
+        amount:
+          type: string
+          description: Payment amount as a fixed-precision string (micro-units / 100)
+        currency:
+          type: string
+          description: Payment currency code (NGN or USDC)
+        memo:
+          type: string
+          description: Optional payment memo
+        likes_count:
+          type: integer
+        comments_count:
+          type: integer
+        has_liked:
+          type: boolean
+          description: Whether the requesting user has liked this payment (false for anonymous requests)
+        created_at:
+          type: string
+          format: date-time
+          description: ISO8601 / RFC3339 timestamp
+
+    LikeRequest:
+      type: object
+      required:
+        - payment_id
+      properties:
+        payment_id:
+          type: string
+          description: UUID of the payment record to like or unlike
+
+    LikeResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          description: true if the like/unlike action succeeded
+
+    CommentRequest:
+      type: object
+      required:
+        - payment_id
+        - content
+      properties:
+        payment_id:
+          type: string
+          description: UUID of the payment record to comment on
+        content:
+          type: string
+          description: Comment text
+
+    CommentResponse:
+      type: object
+      required:
+        - id
+        - username
+        - content
+        - created_at
+      properties:
+        id:
+          type: string
+          description: UUID of the comment
+        username:
+          type: string
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DeleteCommentResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+
+    BridgeQuoteRequest:
+      type: object
+      required:
+        - source_chain
+        - source_token
+        - amount
+        - destination_chain
+        - destination_token
+        - destination_address
+      properties:
+        source_chain:
+          type: string
+          description: Origin chain code (e.g. STLR, ETH, BSC)
+        source_token:
+          type: string
+          description: Source token contract address
+        amount:
+          type: string
+          description: Positive integer string representing token amount
+        destination_chain:
+          type: string
+          description: Target chain code
+        destination_token:
+          type: string
+          description: Destination token contract address
+        destination_address:
+          type: string
+          description: Stellar or EVM address to receive the bridged funds
+
+    BridgeQuoteResponse:
+      type: object
+      required:
+        - fee
+        - receive_amount
+        - bridge_tx_data
+      properties:
+        fee:
+          type: string
+          description: Bridge fee amount
+        receive_amount:
+          type: string
+          description: Net amount receiver will get after fees
+        bridge_tx_data:
+          type: string
+          description: Serialized transaction data or instructions provided by the bridge provider
+
+    BridgeTxRequest:
+      type: object
+      required:
+        - source_tx_hash
+      properties:
+        source_tx_hash:
+          type: string
+          description: Source chain transaction hash of the deposit
+
+    BridgeTxResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - submitted
+
+    BridgeStatusResponse:
+      type: object
+      required:
+        - status
+        - confirmations
+      properties:
+        status:
+          type: string
+          enum:
+            - completed
+        confirmations:
+          type: integer
+          description: Number of confirmations observed on the source chain
+
+paths:
+  /health:
+    get:
+      tags:
+        - Auth
+      summary: Health check endpoint
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+
+  /api/auth/challenge:
+    get:
+      tags:
+        - Auth
+      summary: Get a Stellar signing challenge
+      operationId: getChallenge
+      responses:
+        '200':
+          description: Challenge UUID to sign
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+              example:
+                challenge: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+  /api/auth/verify:
+    post:
+      tags:
+        - Auth
+      summary: Verify a Stellar signature and issue a JWT
+      operationId: verifySignature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Signature verified; JWT returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid signature format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Invalid signature format (must be hex or base64)
+        '401':
+          description: Signature verification failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Signature verification failed
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal database error
+
+  /api/users/profile:
+    get:
+      tags:
+        - Users
+      summary: Get the authenticated user profile
+      operationId: getProfile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Missing authorization header
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Internal database error
+
+    post:
+      tags:
+        - Users
+      summary: Update the authenticated user profile
+      operationId: updateProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/search:
+    get:
+      tags:
+        - Users
+      summary: Search users by username or address
+      operationId: searchUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search term matched against username and address (ILIKE)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SearchUser'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/friends:
+    get:
+      tags:
+        - Users
+      summary: List accepted friends of the authenticated user
+      operationId: listFriends
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of friends
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FriendUser'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/friends/request:
+    post:
+      tags:
+        - Users
+        - Social
+      summary: Send a friend request
+      operationId: sendFriendRequest
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FriendRequest'
+      responses:
+        '201':
+          description: Friend request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          description: Cannot friend yourself or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Target user not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Friendship already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/feed/public:
+    get:
+      tags:
+        - Feed
+      summary: Get the public payment feed
+      operationId: getPublicFeed
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Public feed items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeedItem'
+        '401':
+          description: Invalid or missing JWT when auth header is provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/feed/friends:
+    get:
+      tags:
+        - Feed
+      summary: Get the friends payment feed
+      operationId: getFriendsFeed
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Friends feed items (PUBLIC and FRIENDS visibility)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeedItem'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/feed/private:
+    get:
+      tags:
+        - Feed
+      summary: Get the private payment feed for the authenticated user
+      operationId: getPrivateFeed
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Private feed items where the user is sender or receiver
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FeedItem'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/social/like:
+    post:
+      tags:
+        - Social
+      summary: Like a payment
+      operationId: likePayment
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LikeRequest'
+      responses:
+        '200':
+          description: Like recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LikeResponse'
+        '400':
+          description: Invalid payment_id UUID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/social/unlike:
+    delete:
+      tags:
+        - Social
+      summary: Unlike a payment
+      operationId: unlikePayment
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LikeRequest'
+      responses:
+        '200':
+          description: Like removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LikeResponse'
+        '400':
+          description: Invalid payment_id UUID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/social/comment:
+    post:
+      tags:
+        - Social
+      summary: Add a comment to a payment
+      operationId: addComment
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentRequest'
+      responses:
+        '200':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+        '400':
+          description: Invalid payment_id UUID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/social/comment/{id}:
+    delete:
+      tags:
+        - Social
+      summary: Delete a comment by ID
+      operationId: deleteComment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID string of the comment to delete
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Comment deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteCommentResponse'
+        '400':
+          description: Invalid UUID format for comment id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Comment not found or not owned by authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bridge/quote:
+    post:
+      tags:
+        - Bridge
+      summary: Get a cross-chain bridge quote from Allbridge
+      operationId: getBridgeQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BridgeQuoteRequest'
+      responses:
+        '200':
+          description: Bridge quote from upstream provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BridgeQuoteResponse'
+        '400':
+          description: Missing required fields or invalid amount
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Allbridge upstream API failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bridge/tx:
+    post:
+      tags:
+        - Bridge
+      summary: Submit a bridge transaction record
+      operationId: submitBridgeTx
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BridgeTxRequest'
+      responses:
+        '200':
+          description: Bridge transaction record created or updated (idempotent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BridgeTxResponse'
+        '400':
+          description: source_tx_hash is empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error during DB insertion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/bridge/status/{id}:
+    get:
+      tags:
+        - Bridge
+      summary: Get bridge transaction status by source TX hash
+      operationId: getBridgeStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Source chain transaction hash (source_tx_hash)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bridge transaction status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BridgeStatusResponse'
+        '404':
+          description: Bridge transaction not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

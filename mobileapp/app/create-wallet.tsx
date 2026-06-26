@@ -12,7 +12,8 @@ export default function CreateWalletScreen() {
   const router = useRouter();
 
   const handleContinue = () => {
-    router.push("/backup-key");
+    // Route to the secure mnemonic backup screen (Issue #97)
+    router.push("/mnemonic-backup");
   };
 
   return (

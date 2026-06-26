@@ -1,0 +1,107 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Image tag to roll back to (e.g. sha-abc1234 or v1.2.3)'
+        required: true
+      reason:
+        description: 'Reason for rollback'
+        required: true
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Rollback ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event.inputs.environment }}
+      url: ${{ github.event.inputs.environment == 'production' && vars.PRODUCTION_URL || vars.STAGING_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set environment variables
+        id: env
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            echo "host=${{ secrets.PRODUCTION_HOST }}" >> $GITHUB_OUTPUT
+            echo "user=${{ secrets.PRODUCTION_USER }}" >> $GITHUB_OUTPUT
+            echo "container=zaps-backend-production" >> $GITHUB_OUTPUT
+          else
+            echo "host=${{ secrets.STAGING_HOST }}" >> $GITHUB_OUTPUT
+            echo "user=${{ secrets.STAGING_USER }}" >> $GITHUB_OUTPUT
+            echo "container=zaps-backend-staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Execute rollback
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.env.outputs.host }}
+          username: ${{ steps.env.outputs.user }}
+          key: ${{ github.event.inputs.environment == 'production' && secrets.PRODUCTION_SSH_KEY || secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            IMAGE="ghcr.io/${{ github.repository_owner }}/zaps-backend:${{ github.event.inputs.image_tag }}"
+            CONTAINER="${{ steps.env.outputs.container }}"
+
+            echo "Pulling rollback image $IMAGE..."
+            docker pull "$IMAGE"
+
+            echo "Stopping $CONTAINER..."
+            docker stop "$CONTAINER" 2>/dev/null || true
+            docker rm "$CONTAINER" 2>/dev/null || true
+
+            echo "Starting rollback container..."
+            docker run -d \
+              --name "$CONTAINER" \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e ZAPS_DATABASE__URL="${{ github.event.inputs.environment == 'production' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}" \
+              -e ZAPS_CACHE__REDIS_URL="${{ github.event.inputs.environment == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}" \
+              -e ZAPS_QUEUE__REDIS_URL="${{ github.event.inputs.environment == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}" \
+              -e ZAPS_JWT__SECRET="${{ github.event.inputs.environment == 'production' && secrets.PRODUCTION_JWT_SECRET || secrets.STAGING_JWT_SECRET }}" \
+              -e RUN_ENV=${{ github.event.inputs.environment }} \
+              -e LOG_FORMAT=json \
+              "$IMAGE"
+
+            echo "Rollback complete: $IMAGE is running as $CONTAINER"
+
+      - name: Health check
+        run: |
+          URL="${{ github.event.inputs.environment == 'production' && vars.PRODUCTION_URL || vars.STAGING_URL }}"
+          sleep 15
+          for i in {1..8}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL/health" || echo "000")
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: $STATUS, retrying..."
+            sleep 10
+          done
+          echo "Health check failed after rollback"
+          exit 1
+
+      - name: Notify rollback
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '⏪' || '💥' }} Rollback *${{ job.status }}* on *${{ github.event.inputs.environment }}*\nImage: `${{ github.event.inputs.image_tag }}`\nReason: ${{ github.event.inputs.reason }}\nTriggered by: ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

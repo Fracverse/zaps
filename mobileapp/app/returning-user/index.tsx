@@ -108,6 +108,22 @@ export default function ReturningUserScreen() {
           style={styles.button}
           disabled={secretKey.length === 0}
         />
+        {/* Recovery phrase alternative — Issue #97 */}
+        <TouchableOpacity
+          style={styles.recoveryPhraseLink}
+          onPress={() => router.push("/wallet-recovery")}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="document-text-outline"
+            size={16}
+            color={COLORS.primary}
+            style={{ marginRight: 6 }}
+          />
+          <Text style={styles.recoveryPhraseLinkText}>
+            Restore with recovery phrase instead
+          </Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -190,5 +206,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#1A4B4A", // Dark green/teal from screenshot
     borderRadius: 100,
     height: 60,
+  },
+  recoveryPhraseLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 16,
+    paddingVertical: 8,
+  },
+  recoveryPhraseLinkText: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: COLORS.primary,
+    textDecorationLine: "underline",
   },
 });

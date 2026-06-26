@@ -9,15 +9,18 @@ import {
   Platform,
   UIManager,
   Share,
+  Clipboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, Stack } from "expo-router";
+import QRCode from "react-native-qrcode-svg";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { AccountTypeCard } from "../src/components/AccountTypeCard";
+import { buildSep0007PayUri } from "../src/utils/sep0007";
 
-import BlinksIcon from "../assets/icon-4.svg";
+import ZapsIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
 
 if (
@@ -30,12 +33,18 @@ if (
 export default function ReceiveScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [receiveType, setReceiveType] = useState<"BLINKS" | "external" | null>(
+  const [receiveType, setReceiveType] = useState<"ZAPS" | "external" | null>(
     null
   );
 
-  const blinkId = "ejembiii.blink";
-  const walletAddress = "GABC...1234"; // Placeholder
+  const blinkId = "ejembiii.zaps";
+  // Real Stellar G-address (placeholder — replace with actual wallet address from auth context)
+  const walletAddress =
+    "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+  // Build SEP-0007 URI for the QR code so any SEP-0007 compatible wallet can scan it
+  const sep0007Uri = buildSep0007PayUri({ destination: walletAddress });
+  const qrValue = receiveType === "ZAPS" ? blinkId : sep0007Uri;
 
   const handleNext = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -53,11 +62,18 @@ export default function ReceiveScreen() {
 
   const handleShare = async () => {
     try {
-      await Share.share({
-        message: receiveType === "BLINKS" ? blinkId : walletAddress,
-      });
+      const shareValue = receiveType === "ZAPS" ? blinkId : walletAddress;
+      await Share.share({ message: shareValue });
     } catch (error) {
       console.log(error);
+    }
+  };
+
+  const handleCopy = () => {
+    const copyValue = receiveType === "ZAPS" ? blinkId : walletAddress;
+    Clipboard.setString(copyValue);
+    if (typeof global !== "undefined" && global.toast) {
+      global.toast.success("Address copied to clipboard");
     }
   };
 
@@ -66,11 +82,11 @@ export default function ReceiveScreen() {
       <Text style={styles.subtitle}>Choose how you want to receive money.</Text>
       <View style={styles.cardsContainer}>
         <AccountTypeCard
-          title="Blink User"
-          description="Receive instantly from any Blink user via your Blink ID"
-          Icon={BlinksIcon}
-          selected={receiveType === "BLINKS"}
-          onPress={() => setReceiveType("BLINKS")}
+          title="Zaps User"
+          description="Receive instantly from any Zaps user via your Zaps ID"
+          Icon={ZapsIcon}
+          selected={receiveType === "ZAPS"}
+          onPress={() => setReceiveType("ZAPS")}
         />
         <AccountTypeCard
           title="External Wallet"
@@ -87,22 +103,26 @@ export default function ReceiveScreen() {
     <View style={styles.stepContainer}>
       <View style={styles.qrContainer}>
         <View style={styles.qrCard}>
-          {/* QR Code Placeholder with pattern background */}
           <View style={styles.qrPatternBackground}>
-            <Ionicons name="qr-code-outline" size={200} color={COLORS.black} />
+            <QRCode
+              value={qrValue}
+              size={220}
+              color={COLORS.primary}
+              backgroundColor="#EFEFEF"
+            />
           </View>
         </View>
 
         <View style={styles.idDisplaySection}>
           <View style={styles.idBadge}>
-            <BlinksIcon width={18} height={18} />
+            <ZapsIcon width={18} height={18} />
           </View>
           <View style={styles.idTextContainer}>
             <Text style={styles.idLabel}>
-              {receiveType === "BLINKS" ? "Blink ID" : "Wallet Address"}
+              {receiveType === "ZAPS" ? "Zaps ID" : "Wallet Address"}
             </Text>
             <Text style={styles.idValue}>
-              {receiveType === "BLINKS" ? blinkId : walletAddress}
+              {receiveType === "ZAPS" ? blinkId : walletAddress}
             </Text>
           </View>
         </View>
@@ -110,7 +130,11 @@ export default function ReceiveScreen() {
         <View style={styles.divider} />
 
         <View style={styles.actionRowSide}>
-          <TouchableOpacity style={styles.outlineActionBtn} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={styles.outlineActionBtn}
+            activeOpacity={0.7}
+            onPress={handleCopy}
+          >
             <Ionicons name="copy-outline" size={20} color="#0E4A47" />
             <Text style={styles.outlineActionText}>Copy ID</Text>
           </TouchableOpacity>

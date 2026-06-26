@@ -1,21 +1,32 @@
-# Soroban Project
+# Zaps Smart Contracts (Soroban Workspace)
 
-## Project Structure
+Welcome to the rebranded Zaps Smart Contracts repository! Zaps is a social payments platform running on the Stellar blockchain, turning payments into interactive social experiences.
 
-This repository uses the recommended structure for a Soroban project:
-```text
-.
-├── contracts
-│   └── hello_world
-│       ├── src
-│       │   ├── lib.rs
-│       │   └── test.rs
-│       └── Cargo.toml
-├── Cargo.toml
-└── README.md
+## Architecture
+
+This workspace contains the following Soroban smart contracts:
+- **`user_registry`**: Maps Stellar addresses to user profiles and custom Zaps IDs (e.g., `ebube.zaps`).
+- **`social_payment`**: Executes peer-to-peer payments on-chain with detailed transaction notes, amounts, and visibility settings (Public, Friends-only, Private) and emits social transaction events.
+- **`naira_token`**: A custom Naira-pegged stablecoin anchor interface (₦) used as the primary fiat token in our social ecosystem.
+- **`social_graph`**: Keeps track of friend links and relationships on-chain to handle privacy permissions.
+- **`allbridge_receiver`**: Interacts with the Allbridge relayer to receive cross-chain token deposits and fund user wallets from other blockchains (Solana, EVM, etc.).
+
+## How to Contribute
+
+This codebase is structured with stubs and `todo!()` macros so that contributors can implement features step-by-step.
+1. Check the local issues under `/issues/smart-contracts/` or GitHub Issues.
+2. Locate the corresponding contract in the `contracts/` directory.
+3. Replace the placeholder stubs with proper Soroban implementation logic.
+4. Add unit tests inside the contract modules (using `#[test]` / `testutils` from the SDK).
+
+## Building & Testing
+
+To compile the smart contracts:
+```bash
+cargo build --target wasm32-unknown-unknown --release
 ```
 
-- New Soroban contracts can be put in `contracts`, each in their own directory. There is already a `hello_world` contract in there to get you started.
-- If you initialized this project with any other example contracts via `--with-example`, those contracts will be in the `contracts` directory as well.
-- Contracts should have their own `Cargo.toml` files that rely on the top-level `Cargo.toml` workspace for their dependencies.
-- Frontend libraries can be added to the top-level directory as well. If you initialized this project with a frontend template via `--frontend-template` you will have those files already included.
+To run unit tests:
+```bash
+cargo test
+```

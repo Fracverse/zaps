@@ -18,9 +18,13 @@ interface ButtonProps {
   style?: ViewStyle;
   textStyle?: TextStyle;
   icon?: React.ReactNode;
+  /** Accessibility label for screen readers. Defaults to `title`. */
+  accessibilityLabel?: string;
+  /** Additional hint describing the action outcome. */
+  accessibilityHint?: string;
 }
 
-export const Button = ({
+export const Button = React.memo(function Button({
   title,
   onPress,
   variant = "primary",
@@ -29,7 +33,9 @@ export const Button = ({
   style,
   textStyle,
   icon,
-}: ButtonProps) => {
+  accessibilityLabel,
+  accessibilityHint,
+}: ButtonProps) {
   const getBackgroundColor = () => {
     switch (variant) {
       case "primary":
@@ -77,9 +83,17 @@ export const Button = ({
       onPress={onPress}
       disabled={loading || disabled}
       activeOpacity={0.8}
+      accessible
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityHint={accessibilityHint}
+      accessibilityState={{ disabled: loading || disabled, busy: loading }}
     >
       {loading ? (
-        <ActivityIndicator color={getTextColor()} />
+        <ActivityIndicator
+          color={getTextColor()}
+          accessibilityLabel="Loading"
+        />
       ) : (
         <>
           {icon}
@@ -90,10 +104,12 @@ export const Button = ({
       )}
     </TouchableOpacity>
   );
-};
+});
 
 const styles = StyleSheet.create({
   button: {
+    // Minimum 44×44pt touch target (WCAG 2.5.5)
+    minHeight: 44,
     height: 56,
     borderRadius: 28,
     justifyContent: "center",

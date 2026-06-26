@@ -1,0 +1,121 @@
+name: Deploy to Staging
+
+on:
+  workflow_run:
+    workflows: [Build & Push Docker Image]
+    types: [completed]
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (e.g. sha-abc1234)'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    # Only run if the triggering workflow succeeded (or manual dispatch)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=sha-$(echo ${{ github.event.workflow_run.head_sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run database migrations
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            echo "Running migrations on staging..."
+            docker run --rm \
+              --network host \
+              -e ZAPS_DATABASE__URL="${{ secrets.STAGING_DATABASE_URL }}" \
+              -e RUN_ENV=staging \
+              ghcr.io/${{ github.repository_owner }}/zaps-backend:${{ steps.tag.outputs.tag }} \
+              /app/zaps-backend migrate
+            echo "Migrations complete"
+
+      - name: Deploy to staging server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -e
+            IMAGE="ghcr.io/${{ github.repository_owner }}/zaps-backend:${{ steps.tag.outputs.tag }}"
+
+            echo "Pulling $IMAGE..."
+            docker pull "$IMAGE"
+
+            echo "Stopping existing container..."
+            docker stop zaps-backend-staging 2>/dev/null || true
+            docker rm zaps-backend-staging 2>/dev/null || true
+
+            echo "Starting new container..."
+            docker run -d \
+              --name zaps-backend-staging \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e ZAPS_DATABASE__URL="${{ secrets.STAGING_DATABASE_URL }}" \
+              -e ZAPS_CACHE__REDIS_URL="${{ secrets.STAGING_REDIS_URL }}" \
+              -e ZAPS_QUEUE__REDIS_URL="${{ secrets.STAGING_REDIS_URL }}" \
+              -e ZAPS_JWT__SECRET="${{ secrets.STAGING_JWT_SECRET }}" \
+              -e ZAPS_ANCHOR__WEBHOOK_SECRET="${{ secrets.STAGING_ANCHOR_WEBHOOK_SECRET }}" \
+              -e ZAPS_OBSERVABILITY__SENTRY_DSN="${{ secrets.STAGING_SENTRY_DSN }}" \
+              -e RUN_ENV=staging \
+              -e LOG_FORMAT=json \
+              -e RUST_LOG=zaps_backend=info,tower_http=info \
+              "$IMAGE"
+
+            echo "Deployed $IMAGE to staging"
+
+      - name: Health check
+        run: |
+          echo "Waiting for service to be ready..."
+          sleep 15
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.STAGING_URL }}/health" || echo "000")
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Health check passed (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 10 attempts"
+          exit 1
+
+      - name: Notify deployment
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} Staging deployment *${{ job.status }}*\nImage: `${{ steps.tag.outputs.tag }}`\nCommit: ${{ github.sha }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

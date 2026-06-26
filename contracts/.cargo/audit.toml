@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2024-0344", # curve25519-dalek: wait for sdk upgrade
+    "RUSTSEC-2026-0009", # time: wait for sdk upgrade
+]

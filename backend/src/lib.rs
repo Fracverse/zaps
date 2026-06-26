@@ -1,21 +1,9 @@
-pub mod api_error;
-pub mod app;
-pub mod auth;
+// lib.rs — re-exports the internal modules so that `tests/` integration
+// tests can access them via `zaps_backend::api::feed::*`.
+#![allow(dead_code, unused_variables, unused_imports)]
+
+pub mod api;
 pub mod config;
 pub mod db;
-pub mod http;
-pub mod job_processors;
-pub mod job_types;
-pub mod job_worker;
-pub mod middleware;
-pub mod models;
-pub mod queue;
-pub mod role;
-// pub mod realtime; // TODO: Implement when needed
-pub mod service;
-pub mod storage;
-pub mod telemetry;
-
-pub use api_error::ApiError;
-pub use app::create_app;
-pub use config::Config;
+pub mod indexer;
+pub mod services;

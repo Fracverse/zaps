@@ -1,5 +1,2 @@
-# Rust's output directory
-target
-
-# Local Soroban settings
-.soroban
+target/
+.env
