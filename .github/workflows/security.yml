@@ -121,11 +121,11 @@ jobs:
           else
             LOG_OPTS="-1"
           fi
-
           docker run --rm \
             -v "$PWD:/repo" \
             zricethezav/gitleaks:latest detect \
             --source=/repo \
             --log-opts="$LOG_OPTS" \
+            --config=/repo/gitleaks.toml \
             --redact \
             --verbose

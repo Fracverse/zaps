@@ -39,11 +39,7 @@ impl SocialPaymentContract {
     }
 
     pub fn set_treasury(env: Env, new_treasury: Address) {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&ADMIN_KEY)
-            .expect("not initialized");
+        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
         admin.require_auth();
         env.storage().instance().set(&TREAS_KEY, &new_treasury);
     }
@@ -228,7 +224,7 @@ mod tests {
     fn test_pay_rejects_zero_amount() {
         let (env, client, admin, _treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000);
-        let result = client.try_pay(
+        let res = client.try_pay(
             &sender,
             &receiver,
             &token,
@@ -236,7 +232,7 @@ mod tests {
             &String::from_str(&env, "bad"),
             &Visibility::Private,
         );
-        assert!(result.is_err());
+        assert!(res.is_err());
     }
 
     // ── Like event ───────────────────────────────────────────────────────────
@@ -268,23 +264,21 @@ mod tests {
         client.comment_payment(&sender, &tx_id, &String::from_str(&env, "Nice one!"));
     }
 
-    // ── Comment: too long ────────────────────────────────────────────────────
     #[test]
     #[ignore = "raw contract panics abort the no_std Soroban test process"]
     fn comment_payment_rejects_overlong_comment() {
         let (env, client, _admin, _treasury, sender, _receiver) = setup();
         let tx_id = Symbol::new(&env, "tx789");
         let long = "x".repeat(121);
-        let result = client.try_comment_payment(&sender, &tx_id, &String::from_str(&env, &long));
-        assert!(result.is_err());
+        let res = client.try_comment_payment(&sender, &tx_id, &String::from_str(&env, &long));
+        assert!(res.is_err());
     }
 
-    // ── Double-initialize panics ─────────────────────────────────────────────
     #[test]
     #[ignore = "raw contract panics abort the no_std Soroban test process"]
     fn test_initialize_twice_panics() {
         let (_env, client, admin, treasury, _sender, _receiver) = setup();
-        let result = client.try_initialize(&admin, &treasury);
-        assert!(result.is_err());
+        let res = client.try_initialize(&admin, &treasury);
+        assert!(res.is_err());
     }
 }

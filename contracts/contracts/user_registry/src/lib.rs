@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, Address, Env, Map, String};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
 
 #[contract]
 pub struct UserRegistryContract;
@@ -8,7 +8,12 @@ pub struct UserRegistryContract;
 // Storage keys for persistent storage
 const ADDRESS_TO_USERNAME: &str = "address_to_username";
 const USERNAME_TO_ADDRESS: &str = "username_to_address";
-const ADDRESS_TO_AVATAR: &str = "address_to_avatar";
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Avatar(Address),
+}
 
 #[contractimpl]
 impl UserRegistryContract {
@@ -85,31 +90,16 @@ impl UserRegistryContract {
     /// Update user profile metadata (e.g. avatar URI)
     pub fn update_profile(env: Env, user: Address, avatar_uri: String) {
         user.require_auth();
-
-        let avatar_key = String::from_str(&env, ADDRESS_TO_AVATAR);
-        let mut address_to_avatar: Map<Address, String> = env
-            .storage()
-            .persistent()
-            .get(&avatar_key)
-            .unwrap_or(Map::new(&env));
-
-        address_to_avatar.set(user, avatar_uri);
         env.storage()
             .persistent()
-            .set(&avatar_key, &address_to_avatar);
+            .set(&DataKey::Avatar(user), &avatar_uri);
     }
 
     /// Retrieve the avatar URI associated with an Address
     pub fn get_avatar(env: Env, user: Address) -> String {
-        let avatar_key = String::from_str(&env, ADDRESS_TO_AVATAR);
-        let address_to_avatar: Map<Address, String> = env
-            .storage()
+        env.storage()
             .persistent()
-            .get(&avatar_key)
-            .unwrap_or(Map::new(&env));
-
-        address_to_avatar
-            .get(user)
+            .get(&DataKey::Avatar(user))
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 }
@@ -144,7 +134,6 @@ mod tests {
 
     #[test]
     #[ignore = "raw contract panics abort the no_std Soroban test process"]
-    #[should_panic]
     fn test_update_profile_fails_without_auth() {
         let env = Env::default();
         // Do NOT mock all auths here
@@ -155,7 +144,7 @@ mod tests {
         let user = Address::generate(&env);
         let avatar_uri = String::from_str(&env, "https://example.com/avatar.png");
 
-        // This should panic due to missing authorization
-        client.update_profile(&user, &avatar_uri);
+        let res = client.try_update_profile(&user, &avatar_uri);
+        assert!(res.is_err());
     }
 }
