@@ -113,10 +113,19 @@ jobs:
         with:
           fetch-depth: 0
       - name: Run Gitleaks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
         run: |
+          if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            LOG_OPTS="$BASE_SHA..HEAD"
+          else
+            LOG_OPTS="-1"
+          fi
+
           docker run --rm \
             -v "$PWD:/repo" \
             zricethezav/gitleaks:latest detect \
             --source=/repo \
+            --log-opts="$LOG_OPTS" \
             --redact \
             --verbose
