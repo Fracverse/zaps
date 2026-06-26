@@ -89,6 +89,19 @@ export const api = {
 
   contractAlerts: () =>
     serverReq<{ alerts: ContractAlert[] }>("/api/v1/admin/contracts/alerts"),
+
+  // Contract config (fee coefficient)
+  contractConfig: () =>
+    serverReq<ContractConfig>("/api/v1/admin/contracts/config"),
+
+  setFeeCoefficient: (fee_coefficient: number) =>
+    serverReq<{ fee_coefficient: number; tx_hash: string }>(
+      "/api/v1/admin/contracts/config/fee-coefficient",
+      {
+        method: "POST",
+        body: JSON.stringify({ fee_coefficient }),
+      },
+    ),
 };
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
@@ -235,4 +248,8 @@ export interface ContractAlert {
   value: number;
   threshold: number;
   timestamp: string;
+}
+
+export interface ContractConfig {
+  fee_coefficient: number;
 }

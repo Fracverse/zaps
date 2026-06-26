@@ -20,10 +20,7 @@ pub struct YieldBalanceResponse {
     pub apy: f64,
 }
 
-pub async fn get_balance(
-    State(pool): State<sqlx::PgPool>,
-    auth: AuthUser,
-) -> impl IntoResponse {
+pub async fn get_balance(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
     let balance = match crate::db::r#yield::get_or_create_yield_balance(&pool, auth.id).await {
         Ok(b) => b,
         Err(e) => {
@@ -91,23 +88,22 @@ pub async fn get_history(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let total: i64 = match sqlx::query_scalar(
-        "SELECT COUNT(*) FROM yield_transactions WHERE user_id = $1",
-    )
-    .bind(auth.id)
-    .fetch_one(&pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => {
-            tracing::error!("yield history count error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
-            )
-                .into_response();
-        }
-    };
+    let total: i64 =
+        match sqlx::query_scalar("SELECT COUNT(*) FROM yield_transactions WHERE user_id = $1")
+            .bind(auth.id)
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!("yield history count error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
+                )
+                    .into_response();
+            }
+        };
 
     let rows = match sqlx::query(
         r#"
@@ -291,7 +287,8 @@ pub async fn deposit(
     };
 
     // Build Stellar transaction envelope XDR for the user's wallet to sign.
-    let envelope_xdr = build_stellar_envelope_xdr(&auth.address, "yield_deposit", payload.amount, &tx_hash);
+    let envelope_xdr =
+        build_stellar_envelope_xdr(&auth.address, "yield_deposit", payload.amount, &tx_hash);
 
     Json(DepositResponse {
         available_balance: updated.available_balance,
@@ -356,8 +353,7 @@ pub async fn withdraw(
     let tx_hash = format!("zaps-yield-withdraw-{}", Uuid::new_v4());
 
     if let Err(e) =
-        crate::db::r#yield::process_yield_withdrawal(&pool, auth.id, payload.amount, &tx_hash)
-            .await
+        crate::db::r#yield::process_yield_withdrawal(&pool, auth.id, payload.amount, &tx_hash).await
     {
         tracing::error!("yield withdrawal DB error: {:?}", e);
         return (
@@ -379,7 +375,8 @@ pub async fn withdraw(
         }
     };
 
-    let envelope_xdr = build_stellar_envelope_xdr(&auth.address, "yield_withdraw", payload.amount, &tx_hash);
+    let envelope_xdr =
+        build_stellar_envelope_xdr(&auth.address, "yield_withdraw", payload.amount, &tx_hash);
 
     Json(WithdrawResponse {
         available_balance: updated.available_balance,

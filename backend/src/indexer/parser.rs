@@ -30,15 +30,23 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
             let address = find_nested_string(value, "address").unwrap_or_default();
             let amount = find_nested_i64(value, "amount").unwrap_or_default();
             let tx_hash = extract_tx_hash(value);
-            
-            ZapsEvent::YieldDeposited(YieldDepositedEvent { address, amount, tx_hash })
+
+            ZapsEvent::YieldDeposited(YieldDepositedEvent {
+                address,
+                amount,
+                tx_hash,
+            })
         }
         "YieldWithdrawn" => {
             let address = find_nested_string(value, "address").unwrap_or_default();
             let amount = find_nested_i64(value, "amount").unwrap_or_default();
             let tx_hash = extract_tx_hash(value);
 
-            ZapsEvent::YieldWithdrawn(YieldWithdrawnEvent { address, amount, tx_hash })
+            ZapsEvent::YieldWithdrawn(YieldWithdrawnEvent {
+                address,
+                amount,
+                tx_hash,
+            })
         }
         "YieldRateUpdated" => {
             let apy = find_nested_i64(value, "apy").unwrap_or_default() as i32;
@@ -77,10 +85,7 @@ pub fn find_nested_i64(value: &Value, key: &str) -> Option<i64> {
                 Value::String(text) => text.parse::<i64>().ok(),
                 _ => None,
             })
-            .or_else(|| {
-                map.values()
-                    .find_map(|nested| find_nested_i64(nested, key))
-            }),
+            .or_else(|| map.values().find_map(|nested| find_nested_i64(nested, key))),
         Value::Array(items) => items.iter().find_map(|item| find_nested_i64(item, key)),
         _ => None,
     }

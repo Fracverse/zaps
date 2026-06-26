@@ -333,7 +333,8 @@ pub async fn run_status_poller(state: BridgeState) {
                     let new_conf = status.confirmations.max(known_conf);
                     // Only write when something actually changed.
                     if status.status != BridgeStatusKind::Pending || new_conf != known_conf {
-                        update_status(&state.pool, &tx_hash, status.status.as_str(), new_conf).await;
+                        update_status(&state.pool, &tx_hash, status.status.as_str(), new_conf)
+                            .await;
                     }
                 }
                 Err(e) => {

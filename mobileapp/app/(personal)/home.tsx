@@ -79,6 +79,11 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [balance] = useState("₦32,450.00");
+  const [currentApy] = useState("8.75%");
+  const [totalYieldEarned] = useState("₦3,280.45");
+  const [earningsModalVisible, setEarningsModalVisible] = useState(false);
+  const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
+  const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -225,6 +230,46 @@ export default function HomeScreen() {
     );
   };
 
+  const openEarningsModal = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+    setEarningsModalVisible(true);
+    earningsSheetTranslateY.setValue(48);
+    earningsBackdropOpacity.setValue(0);
+    Animated.parallel([
+      Animated.timing(earningsSheetTranslateY, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(earningsBackdropOpacity, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const closeEarningsModal = () => {
+    Animated.parallel([
+      Animated.timing(earningsSheetTranslateY, {
+        toValue: 48,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(earningsBackdropOpacity, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) {
+        setEarningsModalVisible(false);
+      }
+    });
+  };
+
   const filteredFeed = feed.filter((item) => {
     if (item.visibility === "PRIVATE") return false;
     if (activeTab === "friends") {
@@ -306,6 +351,21 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        <TouchableOpacity
+          style={styles.earningBalanceCard}
+          activeOpacity={0.9}
+          onPress={openEarningsModal}
+        >
+          <View>
+            <Text style={styles.earningLabel}>Earning Balance</Text>
+            <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
+            <Text style={styles.earningHint}>Tap to view yield breakdown</Text>
+          </View>
+          <View style={styles.earningIconWrap}>
+            <Ionicons name="trending-up" size={20} color={COLORS.primary} />
+          </View>
+        </TouchableOpacity>
 
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
@@ -427,6 +487,60 @@ export default function HomeScreen() {
           ))}
         </View>
       </ScrollView>
+
+      {/* Earning Balance Modal */}
+      <Modal
+        visible={earningsModalVisible}
+        transparent={true}
+        animationType="none"
+        onRequestClose={closeEarningsModal}
+      >
+        <View style={styles.earningsModalRoot}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={StyleSheet.absoluteFill}
+            onPress={closeEarningsModal}
+          >
+            <Animated.View
+              style={[
+                styles.earningsBackdrop,
+                { opacity: earningsBackdropOpacity },
+              ]}
+            />
+          </TouchableOpacity>
+
+          <Animated.View
+            style={[
+              styles.earningsSheet,
+              { transform: [{ translateY: earningsSheetTranslateY }] },
+            ]}
+          >
+            <View style={styles.earningsGrabber} />
+            <View style={styles.earningsHeader}>
+              <Text style={styles.earningsTitle}>Earning Balance</Text>
+              <TouchableOpacity onPress={closeEarningsModal}>
+                <Ionicons name="close" size={22} color="#111827" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.earningsMetricCard}>
+              <Text style={styles.earningsMetricLabel}>Current APY</Text>
+              <Text style={styles.earningsMetricValue}>{currentApy}</Text>
+            </View>
+
+            <View style={styles.earningsMetricCard}>
+              <Text style={styles.earningsMetricLabel}>Total Yield Earned</Text>
+              <Text style={styles.earningsMetricValue}>{totalYieldEarned}</Text>
+            </View>
+
+            <Text style={styles.earningsInfoCopy}>
+              Your earnings are generated from your wallet balance and may vary
+              as rates change. APY is an annualized estimate and total yield is
+              updated automatically over time.
+            </Text>
+          </Animated.View>
+        </View>
+      </Modal>
 
       {/* Comments Modal */}
       <Modal
@@ -607,7 +721,105 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
   },
   feedContainer: {
-    marginTop: 8,
+    marginTop: 12,
+  },
+  earningBalanceCard: {
+    backgroundColor: "#EEF7EA",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "#D7EACF",
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  earningLabel: {
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#456047",
+    marginBottom: 6,
+  },
+  earningAmount: {
+    fontSize: 24,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.primary,
+    marginBottom: 2,
+  },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#56785A",
+  },
+  earningIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#DDEFD5",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  earningsModalRoot: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  earningsBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0, 0, 0, 0.38)",
+  },
+  earningsSheet: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 34,
+    gap: 12,
+  },
+  earningsGrabber: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "#E2E8F0",
+    marginBottom: 6,
+  },
+  earningsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  earningsTitle: {
+    fontSize: 19,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.primary,
+  },
+  earningsMetricCard: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "#FAFAFA",
+  },
+  earningsMetricLabel: {
+    fontSize: 12,
+    fontFamily: "Outfit_500Medium",
+    color: "#6B7280",
+    marginBottom: 4,
+  },
+  earningsMetricValue: {
+    fontSize: 22,
+    fontFamily: "Outfit_700Bold",
+    color: "#111827",
+  },
+  earningsInfoCopy: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: "#475569",
+    fontFamily: "Outfit_400Regular",
   },
   tabBar: {
     flexDirection: "row",

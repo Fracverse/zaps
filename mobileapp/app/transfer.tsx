@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ErrorBoundary } from "../src/components/ErrorBoundary";
 import {
   View,
@@ -10,6 +10,7 @@ import {
   Platform,
   UIManager,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -100,6 +101,17 @@ const TokenSelectCard = ({
   </TouchableOpacity>
 );
 
+const API_BASE =
+  (typeof process !== "undefined" &&
+    process.env?.EXPO_PUBLIC_API_URL) ||
+  "http://localhost:8080";
+
+interface ZapsUser {
+  username: string;
+  address: string;
+  avatar_url: string | null;
+}
+
 function TransferScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
@@ -118,6 +130,53 @@ function TransferScreen() {
   );
   const [connecting, setConnecting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Recipient search state
+  const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const searchUsers = useCallback(async (query: string) => {
+    if (!query || query.length < 2) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+    setSearching(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/users/search?q=${encodeURIComponent(query)}&limit=6`
+      );
+      if (!res.ok) throw new Error("Search failed");
+      const data: ZapsUser[] = await res.json();
+      setSearchResults(data);
+      setShowDropdown(data.length > 0);
+    } catch {
+      setSearchResults([]);
+      setShowDropdown(false);
+    } finally {
+      setSearching(false);
+    }
+  }, []);
+
+  // Debounce search while user types (ZAPS mode only)
+  useEffect(() => {
+    if (transferType !== "ZAPS") return;
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      searchUsers(recipient);
+    }, 350);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    };
+  }, [recipient, transferType, searchUsers]);
+
+  const handleSelectUser = useCallback((user: ZapsUser) => {
+    setRecipient(user.username);
+    setSearchResults([]);
+    setShowDropdown(false);
+  }, []);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
 
@@ -269,17 +328,63 @@ function TransferScreen() {
   const renderStep1 = () => (
     <View style={styles.stepContainer}>
       <View style={styles.inputsSection}>
-        <Input
-          placeholder={
-            transferType === "ZAPS"
-              ? "Recipient ZAPS ID (e.g. tolu.zaps)"
-              : "Wallet Address"
-          }
-          value={recipient}
-          onChangeText={setRecipient}
-          autoCapitalize="none"
-          style={styles.transferInput}
-        />
+        {/* Recipient input + live-search dropdown (ZAPS mode only) */}
+        <View style={styles.recipientSearchWrapper}>
+          <Input
+            placeholder={
+              transferType === "ZAPS"
+                ? "Recipient ZAPS ID (e.g. tolu.zaps)"
+                : "Wallet Address"
+            }
+            value={recipient}
+            onChangeText={(text: string) => {
+              setRecipient(text);
+              if (transferType !== "ZAPS") return;
+              if (text.length < 2) {
+                setShowDropdown(false);
+                setSearchResults([]);
+              }
+            }}
+            autoCapitalize="none"
+            style={styles.transferInput}
+          />
+          {/* Searching indicator */}
+          {transferType === "ZAPS" && searching && (
+            <ActivityIndicator
+              size="small"
+              color="#1A4B4A"
+              style={styles.searchingIndicator}
+            />
+          )}
+          {/* Dropdown results */}
+          {transferType === "ZAPS" && showDropdown && searchResults.length > 0 && (
+            <View style={styles.dropdownContainer}>
+              {searchResults.map((user) => (
+                <TouchableOpacity
+                  key={user.address}
+                  style={styles.dropdownItem}
+                  onPress={() => handleSelectUser(user)}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.dropdownAvatar}>
+                    <Text style={styles.dropdownAvatarText}>
+                      {user.username.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.dropdownInfo}>
+                    <Text style={styles.dropdownUsername}>
+                      {user.username}
+                    </Text>
+                    <Text style={styles.dropdownAddress} numberOfLines={1}>
+                      {user.address.slice(0, 10)}…{user.address.slice(-6)}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#BDBDBD" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
 
         {/* Custom Amount Display */}
         <TouchableOpacity
@@ -1073,6 +1178,70 @@ const styles = StyleSheet.create({
   footer: {
     padding: 20,
     paddingBottom: Platform.OS === "ios" ? 40 : 20,
+  },
+
+  // ── Recipient search dropdown ──────────────────────────────────────────────
+  recipientSearchWrapper: {
+    position: "relative",
+    zIndex: 10,
+  },
+  searchingIndicator: {
+    position: "absolute",
+    right: 16,
+    top: 20,
+  },
+  dropdownContainer: {
+    position: "absolute",
+    top: 64,
+    left: 0,
+    right: 0,
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: "#E8E8E8",
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 6,
+    overflow: "hidden",
+    zIndex: 20,
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F5F5F5",
+    gap: 12,
+  },
+  dropdownAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: COLORS.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  dropdownAvatarText: {
+    fontSize: 16,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
+  },
+  dropdownInfo: {
+    flex: 1,
+  },
+  dropdownUsername: {
+    fontSize: 15,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.black,
+  },
+  dropdownAddress: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
+    marginTop: 2,
   },
 });
 
