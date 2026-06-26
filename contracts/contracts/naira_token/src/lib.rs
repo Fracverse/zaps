@@ -18,7 +18,11 @@ pub struct NairaTokenContract;
 #[contractimpl]
 impl NairaTokenContract {
     fn require_admin(env: &Env) -> Address {
-        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
         admin.require_auth();
         admin
     }

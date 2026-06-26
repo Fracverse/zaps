@@ -102,8 +102,7 @@ const TokenSelectCard = ({
 );
 
 const API_BASE =
-  (typeof process !== "undefined" &&
-    process.env?.EXPO_PUBLIC_API_URL) ||
+  (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
 interface ZapsUser {
@@ -357,33 +356,39 @@ function TransferScreen() {
             />
           )}
           {/* Dropdown results */}
-          {transferType === "ZAPS" && showDropdown && searchResults.length > 0 && (
-            <View style={styles.dropdownContainer}>
-              {searchResults.map((user) => (
-                <TouchableOpacity
-                  key={user.address}
-                  style={styles.dropdownItem}
-                  onPress={() => handleSelectUser(user)}
-                  activeOpacity={0.75}
-                >
-                  <View style={styles.dropdownAvatar}>
-                    <Text style={styles.dropdownAvatarText}>
-                      {user.username.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.dropdownInfo}>
-                    <Text style={styles.dropdownUsername}>
-                      {user.username}
-                    </Text>
-                    <Text style={styles.dropdownAddress} numberOfLines={1}>
-                      {user.address.slice(0, 10)}…{user.address.slice(-6)}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color="#BDBDBD" />
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
+          {transferType === "ZAPS" &&
+            showDropdown &&
+            searchResults.length > 0 && (
+              <View style={styles.dropdownContainer}>
+                {searchResults.map((user) => (
+                  <TouchableOpacity
+                    key={user.address}
+                    style={styles.dropdownItem}
+                    onPress={() => handleSelectUser(user)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.dropdownAvatar}>
+                      <Text style={styles.dropdownAvatarText}>
+                        {user.username.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.dropdownInfo}>
+                      <Text style={styles.dropdownUsername}>
+                        {user.username}
+                      </Text>
+                      <Text style={styles.dropdownAddress} numberOfLines={1}>
+                        {user.address.slice(0, 10)}…{user.address.slice(-6)}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color="#BDBDBD"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
         </View>
 
         {/* Custom Amount Display */}

@@ -104,10 +104,7 @@ async fn seed_friendship(pool: &PgPool, user_id: Uuid, friend_id: Uuid) {
 }
 
 /// Parse the JSON response body from a oneshot call.
-async fn response_json(
-    router: Router,
-    req: Request<Body>,
-) -> (StatusCode, Value) {
+async fn response_json(router: Router, req: Request<Body>) -> (StatusCode, Value) {
     let response = router.oneshot(req).await.expect("oneshot failed");
     let status = response.status();
     let bytes = response
@@ -142,8 +139,14 @@ async fn test_public_feed_pagination() {
 
     // Use stable, collision-resistant address suffixes based on a random run id
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let sender_addr = format!("GSENDER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
-    let receiver_addr = format!("GRECEIVER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
+    let sender_addr = format!(
+        "GSENDER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let receiver_addr = format!(
+        "GRECEIVER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
 
     let sender_id = seed_user(&pool, &format!("sender_{run}"), &sender_addr).await;
     let receiver_id = seed_user(&pool, &format!("receiver_{run}"), &receiver_addr).await;
@@ -159,25 +162,27 @@ async fn test_public_feed_pagination() {
     let router = feed_router(pool.clone());
 
     // Page 1
-    let (status, body) = response_json(
-        router.clone(),
-        get_req("/public?limit=10&offset=0", None),
-    )
-    .await;
+    let (status, body) =
+        response_json(router.clone(), get_req("/public?limit=10&offset=0", None)).await;
     assert_eq!(status, StatusCode::OK, "page 1 status");
     let items = body.as_array().expect("expected array on page 1");
-    assert!(items.len() >= 10, "page 1 should have at least 10 items; got {}", items.len());
+    assert!(
+        items.len() >= 10,
+        "page 1 should have at least 10 items; got {}",
+        items.len()
+    );
 
     // Page 2 (different offset)
-    let (status2, body2) = response_json(
-        router.clone(),
-        get_req("/public?limit=10&offset=10", None),
-    )
-    .await;
+    let (status2, body2) =
+        response_json(router.clone(), get_req("/public?limit=10&offset=10", None)).await;
     assert_eq!(status2, StatusCode::OK, "page 2 status");
     let items2 = body2.as_array().expect("expected array on page 2");
     // Must have at least 5 from our seed; the exact count depends on other data in the DB
-    assert!(items2.len() >= 5, "page 2 should have at least 5 items; got {}", items2.len());
+    assert!(
+        items2.len() >= 5,
+        "page 2 should have at least 5 items; got {}",
+        items2.len()
+    );
 
     // Cleanup
     for id in &payment_ids {
@@ -212,8 +217,14 @@ async fn test_friends_feed_privacy() {
     let pool = test_pool().await;
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let addr_a = format!("GUSERA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
-    let addr_b = format!("GUSERB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
+    let addr_a = format!(
+        "GUSERA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let addr_b = format!(
+        "GUSERB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
 
     let user_a = seed_user(&pool, &format!("user_a_{run}"), &addr_a).await;
     let user_b = seed_user(&pool, &format!("user_b_{run}"), &addr_b).await;
@@ -232,8 +243,11 @@ async fn test_friends_feed_privacy() {
     let token_a = addr_a.clone();
 
     let router = feed_router(pool.clone());
-    let (status, body) =
-        response_json(router, get_req("/friends?limit=50&offset=0", Some(&token_a))).await;
+    let (status, body) = response_json(
+        router,
+        get_req("/friends?limit=50&offset=0", Some(&token_a)),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "friends feed status");
     let items = body.as_array().expect("expected array");
@@ -290,9 +304,18 @@ async fn test_private_feed_isolation() {
     let pool = test_pool().await;
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let addr_a = format!("GISOA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
-    let addr_b = format!("GISOB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
-    let addr_c = format!("GISOC{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", run);
+    let addr_a = format!(
+        "GISOA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let addr_b = format!(
+        "GISOB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let addr_c = format!(
+        "GISOC{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
 
     let user_a = seed_user(&pool, &format!("iso_a_{run}"), &addr_a).await;
     let user_b = seed_user(&pool, &format!("iso_b_{run}"), &addr_b).await;
@@ -305,8 +328,11 @@ async fn test_private_feed_isolation() {
     let token_a = addr_a.clone();
 
     let router = feed_router(pool.clone());
-    let (status, body) =
-        response_json(router, get_req("/private?limit=50&offset=0", Some(&token_a))).await;
+    let (status, body) = response_json(
+        router,
+        get_req("/private?limit=50&offset=0", Some(&token_a)),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "private feed status");
     let items = body.as_array().expect("expected array");

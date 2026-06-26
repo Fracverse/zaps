@@ -50,7 +50,11 @@ impl SocialPaymentContract {
     }
 
     pub fn set_fee_coefficient(env: Env, fee_coef: u32) {
-        let admin: Address = env.storage().instance().get(&ADMIN_KEY).expect("not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
         admin.require_auth();
         if fee_coef > 10000 {
             panic!("fee coefficient cannot exceed 10000 basis points");
@@ -80,8 +84,16 @@ impl SocialPaymentContract {
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         if visibility == Visibility::Public {
-            let treasury: Address = env.storage().instance().get(&TREAS_KEY).expect("treasury not initialized");
-            let fee_coef = env.storage().instance().get(&FEE_COEFF_KEY).unwrap_or(10u32);
+            let treasury: Address = env
+                .storage()
+                .instance()
+                .get(&TREAS_KEY)
+                .expect("treasury not initialized");
+            let fee_coef = env
+                .storage()
+                .instance()
+                .get(&FEE_COEFF_KEY)
+                .unwrap_or(10u32);
             let fee = amount * (fee_coef as i128) / 10000;
             let receiver_amount = amount - fee;
             token_client.transfer(&sender, &receiver, &receiver_amount);
@@ -311,7 +323,14 @@ mod tests {
         client.set_fee_coefficient(&50);
         assert_eq!(client.fee_coefficient(), 50);
 
-        client.pay(&sender, &receiver, &token, &1000, &String::from_str(&env, "Public payment"), &Visibility::Public);
+        client.pay(
+            &sender,
+            &receiver,
+            &token,
+            &1000,
+            &String::from_str(&env, "Public payment"),
+            &Visibility::Public,
+        );
 
         // 1000 * 50 / 10000 = 5 fee, 995 receiver
         assert_eq!(token_client.balance(&receiver), 995);
