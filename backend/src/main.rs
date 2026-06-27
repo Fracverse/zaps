@@ -6,11 +6,14 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use chrono::Utc;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
 use tracing::Span;
@@ -23,7 +26,61 @@ use zaps_backend::db;
 use zaps_backend::indexer;
 use zaps_backend::services;
 
-// Rate limiter state: token bucket per client (IP address)
+// ── Health check types ────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct HealthState {
+    pool: sqlx::PgPool,
+    stellar_rpc_url: String,
+}
+
+#[derive(Serialize)]
+struct DbHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct YieldDbHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_yield_accounts: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    yield_rate_bps: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RpcHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_ledger: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HealthComponents {
+    database: DbHealth,
+    yield_db: YieldDbHealth,
+    soroban_rpc: RpcHealth,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    /// "ok" when all components are healthy; "degraded" otherwise.
+    status: &'static str,
+    components: HealthComponents,
+    checked_at: String,
+}
+
+// ── Rate limiter state: token bucket per client (IP address) ──────────────────
+
 #[derive(Clone)]
 struct RateLimiter {
     buckets: Arc<Mutex<HashMap<String, (i64, std::time::Instant)>>>,
@@ -121,8 +178,16 @@ async fn main() {
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
 
+    // Health check state: pool + Soroban RPC URL for live component probing.
+    let health_state = HealthState {
+        pool: pool.clone(),
+        stellar_rpc_url: config.stellar_rpc_url.clone(),
+    };
+
     // Setup routes
-    let public_routes = Router::new().route("/health", get(health_check));
+    let public_routes = Router::new()
+        .route("/health", get(health_check))
+        .with_state(health_state);
 
     let sensitive_routes = Router::new()
         .nest("/api/auth", api::auth_routes(pool.clone()))
@@ -217,6 +282,153 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+// ── /health handler ───────────────────────────────────────────────────────────
+
+async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
+    // Run all three probes concurrently so latencies don't stack.
+    let (db, yield_db, rpc) = tokio::join!(
+        probe_database(&state.pool),
+        probe_yield_db(&state.pool),
+        probe_soroban_rpc(&state.stellar_rpc_url),
+    );
+
+    let all_ok = db.status == "ok" && yield_db.status == "ok" && rpc.status == "ok";
+
+    let body = HealthResponse {
+        status: if all_ok { "ok" } else { "degraded" },
+        components: HealthComponents {
+            database: db,
+            yield_db,
+            soroban_rpc: rpc,
+        },
+        checked_at: Utc::now().to_rfc3339(),
+    };
+
+    let code = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (code, Json(body))
+}
+
+// ── Component probes ──────────────────────────────────────────────────────────
+
+/// Basic Postgres connectivity: a single round-trip to the DB pool.
+async fn probe_database(pool: &sqlx::PgPool) -> DbHealth {
+    let start = Instant::now();
+    match sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(pool)
+        .await
+    {
+        Ok(_) => DbHealth {
+            status: "ok",
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: None,
+        },
+        Err(e) => DbHealth {
+            status: "error",
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Yield-specific DB probe: verifies `user_yield_balances` and
+/// `yield_rates_history` are reachable and returns live metrics.
+async fn probe_yield_db(pool: &sqlx::PgPool) -> YieldDbHealth {
+    let start = Instant::now();
+
+    let result: Result<(i64, Option<i32>), sqlx::Error> = async {
+        let active_yield_accounts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM user_yield_balances")
+                .fetch_one(pool)
+                .await?;
+
+        let yield_rate_bps: Option<i32> = sqlx::query_scalar(
+            "SELECT apy FROM yield_rates_history ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        Ok((active_yield_accounts, yield_rate_bps))
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok((count, rate)) => YieldDbHealth {
+            status: "ok",
+            latency_ms,
+            active_yield_accounts: Some(count),
+            yield_rate_bps: rate,
+            error: None,
+        },
+        Err(e) => YieldDbHealth {
+            status: "error",
+            latency_ms,
+            active_yield_accounts: None,
+            yield_rate_bps: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Soroban RPC probe: issues a real `getLatestLedger` JSON-RPC call.
+/// Fails if the node is unreachable, returns a non-2xx status, or the
+/// response shape is unexpected.
+async fn probe_soroban_rpc(rpc_url: &str) -> RpcHealth {
+    let start = Instant::now();
+
+    let result: Result<u32, String> = async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestLedger",
+            "params": {}
+        });
+
+        let res = client
+            .post(rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !res.status().is_success() {
+            return Err(format!("RPC returned HTTP {}", res.status()));
+        }
+
+        let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+
+        body["result"]["sequence"]
+            .as_u64()
+            .map(|n| n as u32)
+            .ok_or_else(|| "unexpected RPC response shape".to_string())
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(ledger) => RpcHealth {
+            status: "ok",
+            latency_ms,
+            latest_ledger: Some(ledger),
+            error: None,
+        },
+        Err(e) => RpcHealth {
+            status: "error",
+            latency_ms,
+            latest_ledger: None,
+            error: Some(e),
+        },
+    }
 }

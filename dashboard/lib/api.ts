@@ -102,6 +102,9 @@ export const api = {
         body: JSON.stringify({ fee_coefficient }),
       },
     ),
+
+  // Yield vault aggregate metrics
+  yieldStats: () => req<YieldStats>("/admin/vault/stats"),
 };
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
@@ -252,4 +255,10 @@ export interface ContractAlert {
 
 export interface ContractConfig {
   fee_coefficient: number;
+}
+
+export interface YieldStats {
+  total_value_locked: number;
+  total_yield_distributed: number;
+  apy: number;
 }

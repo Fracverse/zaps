@@ -1,5 +1,15 @@
 version: '3.8'
 
+# Shared environment block for application services.
+# Both backend and yield-scheduler inherit these; override per-service as needed.
+x-app-env: &app-env
+  DATABASE_URL: postgres://postgres:password@db:5432/zaps_dev
+  REDIS_URL: redis://redis:6379
+  STELLAR_RPC_URL: http://soroban-rpc:8000
+  ALLBRIDGE_API_URL: https://core-api.allbridge.io
+  JWT_SECRET: dev-jwt-secret-change-in-production
+  RUST_LOG: info
+
 services:
   # --- PostgreSQL Database ---
   db:
@@ -53,6 +63,47 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+
+  # --- Rust API Backend ---
+  backend:
+    image: ghcr.io/fracverse/zaps-backend:latest
+    container_name: zaps-backend
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      soroban-rpc:
+        condition: service_healthy
+
+  # --- Yield Scheduler (background sweep + yield calculation cron) ---
+  # Runs the same binary as `backend` in scheduler-only mode.
+  # ROLE=scheduler is the hook for the binary to suppress the HTTP listener
+  # and run only the tokio-spawned cron workers (sweep_worker, notifications).
+  # Set SWEEP_POLL_INTERVAL_SECS / YIELD_REPORT_*_INTERVAL_SECS to tune cadence.
+  yield-scheduler:
+    image: ghcr.io/fracverse/zaps-backend:latest
+    container_name: zaps-yield-scheduler
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      ROLE: scheduler
+      SWEEP_POLL_INTERVAL_SECS: "300"
+      SWEEP_MIN_IDLE_AMOUNT: "100000"
+      YIELD_REPORT_DAILY_INTERVAL_SECS: "86400"
+      YIELD_REPORT_WEEKLY_INTERVAL_SECS: "604800"
+      YIELD_REPORT_THRESHOLD: "1000"
+      # EXPO_ACCESS_TOKEN: ""  # set via .env or secret manager in production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
