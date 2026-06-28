@@ -150,6 +150,9 @@ impl SocialPaymentContract {
 
     pub fn comment_payment(env: Env, sender: Address, tx_id: Symbol, comment: String) {
         sender.require_auth();
+        if comment.len() == 0 || comment.to_string().trim().is_empty() {
+            panic!("comment cannot be empty or whitespace only");
+        }
         if comment.len() > 120 {
             panic!("comment exceeds maximum length of 120 characters");
         }
@@ -322,7 +325,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    fn comment_payment_rejects_empty_comment() {
+        let (env, client, _admin, _treasury, sender, _receiver) = setup();
+        let tx_id = Symbol::new(&env, "tx-empty");
+        let res = client.try_comment_payment(&sender, &tx_id, &String::from_str(&env, ""));
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn comment_payment_rejects_whitespace_only_comment() {
+        let (env, client, _admin, _treasury, sender, _receiver) = setup();
+        let tx_id = Symbol::new(&env, "tx-space");
+        let res = client.try_comment_payment(&sender, &tx_id, &String::from_str(&env, "   	  "));
+        assert!(res.is_err());
+    }
+
+    #[test]
     fn comment_payment_rejects_overlong_comment() {
         let (env, client, _admin, _treasury, sender, _receiver) = setup();
         let tx_id = Symbol::new(&env, "tx789");
