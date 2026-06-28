@@ -1480,7 +1480,7 @@ const styles = StyleSheet.create({
   },
   tabItemActive: {
     borderBottomWidth: 2,
-    borderBottomColor: COLORS.primary,
+    borderBottomColor: "#0F3D2E",
   },
   tabLabel: {
     fontSize: 15,
@@ -1488,7 +1488,7 @@ const styles = StyleSheet.create({
     color: "#888",
   },
   tabLabelActive: {
-    color: COLORS.primary,
+    color: "#0F3D2E",
     fontFamily: "Outfit_700Bold",
   },
   feedCard: {
