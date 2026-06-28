@@ -95,6 +95,7 @@ impl SocialPaymentContract {
                 .get(&FEE_COEFF_KEY)
                 .unwrap_or(10u32);
             let fee = amount * (fee_coef as i128) / 10000;
+            let fee = if fee == 0 { 1 } else { fee };
             let receiver_amount = amount - fee;
             token_client.transfer(&sender, &receiver, &receiver_amount);
             if fee > 0 {
