@@ -7,6 +7,7 @@ use soroban_sdk::{
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const TREAS_KEY: Symbol = symbol_short!("treasury");
 const FEE_COEFF_KEY: Symbol = symbol_short!("fee_coef");
+const NAIRA_TOKEN_KEY: Symbol = symbol_short!("ngn_tok");
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +50,23 @@ impl SocialPaymentContract {
         env.storage().instance().set(&TREAS_KEY, &new_treasury);
     }
 
+    pub fn set_naira_token(env: Env, naira_token: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage().instance().set(&NAIRA_TOKEN_KEY, &naira_token);
+    }
+
+    pub fn naira_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&NAIRA_TOKEN_KEY)
+            .expect("naira token not initialized")
+    }
+
     pub fn set_fee_coefficient(env: Env, fee_coef: u32) {
         let admin: Address = env
             .storage()
@@ -66,7 +84,7 @@ impl SocialPaymentContract {
         env.storage().instance().get(&FEE_COEFF_KEY).unwrap_or(10)
     }
 
-    /// SC-005: Execute a P2P social payment using the Naira token (or any SEP-41 token).
+    /// SC-005: Execute a P2P social payment using the configured Naira token.
     /// For Public payments a 0.1% platform fee is routed to the treasury.
     /// For Friends/Private payments the full amount goes to the receiver.
     pub fn pay(
@@ -80,6 +98,13 @@ impl SocialPaymentContract {
     ) {
         sender.require_auth();
         assert!(amount > 0, "amount must be positive");
+
+        let naira_token: Address = env
+            .storage()
+            .instance()
+            .get(&NAIRA_TOKEN_KEY)
+            .expect("naira token not initialized");
+        assert!(token == naira_token, "token must be configured Naira token");
 
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
@@ -173,6 +198,7 @@ mod tests {
     fn test_social_payment_public_visibility_deducts_fee() {
         let (env, client, admin, treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         client.pay(
@@ -209,6 +235,7 @@ mod tests {
     fn test_social_payment_private_visibility_no_fee() {
         let (env, client, admin, _treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         client.pay(
@@ -229,6 +256,7 @@ mod tests {
     fn test_social_payment_friends_visibility_no_fee() {
         let (env, client, admin, treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 5_000);
+        client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         client.pay(
@@ -251,6 +279,7 @@ mod tests {
     fn test_pay_rejects_zero_amount() {
         let (env, client, admin, _treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000);
+        client.set_naira_token(&token);
         let res = client.try_pay(
             &sender,
             &receiver,
@@ -309,11 +338,62 @@ mod tests {
         assert!(res.is_err());
     }
 
+    #[test]
+    fn test_set_naira_token_stores_primary_token() {
+        let (env, client, admin, _treasury, sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &sender, 1_000);
+
+        client.set_naira_token(&token);
+
+        assert_eq!(client.naira_token(), token);
+    }
+
+    #[test]
+    fn test_public_payment_rejects_non_naira_token_for_fee() {
+        let (env, client, admin, treasury, sender, receiver) = setup();
+        let naira_token = mint_token(&env, &admin, &sender, 10_000);
+        let junk_token = mint_token(&env, &admin, &sender, 10_000);
+        let junk_client = soroban_sdk::token::Client::new(&env, &junk_token);
+        client.set_naira_token(&naira_token);
+
+        let res = client.try_pay(
+            &sender,
+            &receiver,
+            &junk_token,
+            &1000,
+            &String::from_str(&env, "Junk public payment"),
+            &Visibility::Public,
+        );
+
+        assert!(res.is_err(), "public payments must reject non-Naira token");
+        assert_eq!(junk_client.balance(&receiver), 0);
+        assert_eq!(junk_client.balance(&treasury), 0);
+        assert_eq!(junk_client.balance(&sender), 10_000);
+    }
+
+    #[test]
+    fn test_pay_rejects_when_naira_token_not_configured() {
+        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let token = mint_token(&env, &admin, &sender, 1_000);
+
+        let res = client.try_pay(
+            &sender,
+            &receiver,
+            &token,
+            &100,
+            &String::from_str(&env, "Missing config"),
+            &Visibility::Private,
+        );
+
+        assert!(res.is_err(), "pay must require configured Naira token");
+    }
+
     // ── Adjust fee coefficient: updates value, affects payout calculation ─────
     #[test]
     fn test_adjust_fee_coefficient() {
         let (env, client, admin, treasury, sender, receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         // Verify default is 10 (0.1%)
