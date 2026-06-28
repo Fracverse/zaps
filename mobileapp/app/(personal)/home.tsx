@@ -12,6 +12,7 @@ import {
   Switch,
   ViewStyle,
   StyleProp,
+  LayoutChangeEvent,
 } from "react-native";
 import Svg, {
   Defs,
@@ -49,6 +50,13 @@ interface YieldSnapshot {
   apy: string;
   totalYieldEarned: string;
   explanation: string;
+}
+
+interface Comment {
+  id: string;
+  user: string;
+  text: string;
+  time: string;
 }
 
 interface MonthlyEarningPoint {
@@ -149,9 +157,7 @@ export default function HomeScreen() {
   const [commentsModalVisible, setCommentsModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<FeedItem | null>(null);
   const [commentText, setCommentText] = useState("");
-  const [commentsList, setCommentsList] = useState<
-    { id: string; user: string; text: string; time: string }[]
-  >([]);
+  const [commentsList, setCommentsList] = useState<Comment[]>([]);
 
   const FEED_CACHE_KEY = "feed_items_cache";
   const YIELD_REQUEST_TIMEOUT_MS = 4500;
@@ -376,7 +382,7 @@ export default function HomeScreen() {
         duration: 200,
         useNativeDriver: true,
       }),
-    ]).start(({ finished }) => {
+    ]).start(({ finished }: { finished: boolean }) => {
       if (finished) {
         setEarningsModalVisible(false);
       }
@@ -624,7 +630,8 @@ export default function HomeScreen() {
 
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
-          {/* Feed Header tabs */}
+          <Text style={styles.feedSectionTitle}>Activity</Text>
+          {/* Feed Tabs — Segment Control */}
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={[
@@ -632,6 +639,7 @@ export default function HomeScreen() {
                 activeTab === "public" && styles.tabItemActive,
               ]}
               onPress={() => setActiveTab("public")}
+              activeOpacity={0.85}
             >
               <Text
                 style={[
@@ -648,6 +656,7 @@ export default function HomeScreen() {
                 activeTab === "friends" && styles.tabItemActive,
               ]}
               onPress={() => setActiveTab("friends")}
+              activeOpacity={0.85}
             >
               <Text
                 style={[
@@ -830,7 +839,7 @@ export default function HomeScreen() {
 
                 <View
                   style={styles.earningsChartSection}
-                  onLayout={(event) =>
+                  onLayout={(event: LayoutChangeEvent) =>
                     setChartWidth(event.nativeEvent.layout.width - 24)
                   }
                 >
@@ -968,11 +977,11 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
 
-            <FlatList
+            <FlatList<Comment>
               data={commentsList}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item: Comment) => item.id}
               contentContainerStyle={{ paddingVertical: 12 }}
-              renderItem={({ item }) => (
+              renderItem={({ item }: { item: Comment }) => (
                 <View style={styles.commentItem}>
                   <View style={styles.commentAvatar}>
                     <Text style={styles.avatarText}>{item.user[0]}</Text>
@@ -1160,7 +1169,13 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
   },
   feedContainer: {
-    marginTop: 12,
+    marginTop: 16,
+  },
+  feedSectionTitle: {
+    fontSize: 18,
+    fontFamily: "Outfit_700Bold",
+    color: "#111827",
+    marginBottom: 14,
   },
   earningBalanceCard: {
     backgroundColor: "#0F3D2E",
@@ -1469,26 +1484,32 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
-    marginBottom: 16,
+    backgroundColor: "#EDEDED",
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 20,
   },
   tabItem: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: "center",
+    borderRadius: 10,
   },
   tabItemActive: {
-    borderBottomWidth: 2,
-    borderBottomColor: "#0F3D2E",
+    backgroundColor: "#0F3D2E",
+    shadowColor: "#0F3D2E",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 2,
   },
   tabLabel: {
-    fontSize: 15,
-    fontFamily: "Outfit_500Medium",
-    color: "#888",
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#7A8A7A",
   },
   tabLabelActive: {
-    color: "#0F3D2E",
+    color: "#FFFFFF",
     fontFamily: "Outfit_700Bold",
   },
   feedCard: {
