@@ -3,6 +3,7 @@
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol};
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
+const RELAYER_KEY: Symbol = symbol_short!("relayer");
 const BRIDGE_TOK_KEY: Symbol = symbol_short!("brdg_tok");
 
 #[contract]
@@ -19,13 +20,23 @@ impl AllbridgeReceiverContract {
         assert!(caller == &admin, "only admin");
     }
 
+    fn require_relayer(env: &Env, caller: &Address) {
+        let relayer: Address = env
+            .storage()
+            .instance()
+            .get(&RELAYER_KEY)
+            .expect("not initialized");
+        assert!(caller == &relayer, "unauthorized relayer");
+    }
+
     /// One-time initializer. Sets the admin address and the bridge-critical token
     /// that must never be swept by salvage_token.
-    pub fn initialize(env: Env, admin: Address, bridge_token: Address) {
+    pub fn initialize(env: Env, admin: Address, relayer: Address, bridge_token: Address) {
         if env.storage().instance().has(&ADMIN_KEY) {
             panic!("already initialized");
         }
         env.storage().instance().set(&ADMIN_KEY, &admin);
+        env.storage().instance().set(&RELAYER_KEY, &relayer);
         env.storage().instance().set(&BRIDGE_TOK_KEY, &bridge_token);
     }
 
@@ -39,8 +50,8 @@ impl AllbridgeReceiverContract {
         source_chain_id: u32,
         source_tx_hash: BytesN<32>,
     ) {
-        // TODO: Implement SC-014 (Allbridge cross-chain incoming transfer listener stub)
         bridge_authority.require_auth();
+        Self::require_relayer(&env, &bridge_authority);
         panic!("unimplemented: receive_deposit");
     }
 
@@ -97,6 +108,7 @@ mod tests {
         AllbridgeReceiverContractClient<'static>,
         Address, // contract_id
         Address, // admin
+        Address, // relayer
         Address, // bridge_token
         Address, // treasury
     ) {
@@ -105,15 +117,16 @@ mod tests {
         let contract_id = env.register_contract(None, AllbridgeReceiverContract);
         let client = AllbridgeReceiverContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let relayer = Address::generate(&env);
         let bridge_token = env.register_stellar_asset_contract(admin.clone());
         let treasury = Address::generate(&env);
-        client.initialize(&admin, &bridge_token);
-        (env, client, contract_id, admin, bridge_token, treasury)
+        client.initialize(&admin, &relayer, &bridge_token);
+        (env, client, contract_id, admin, relayer, bridge_token, treasury)
     }
 
     #[test]
     fn test_salvage_random_token_succeeds() {
-        let (env, client, contract_id, admin, _bridge_token, treasury) = setup();
+        let (env, client, contract_id, admin, _relayer, _bridge_token, treasury) = setup();
         let stray_admin = Address::generate(&env);
         let stray = env.register_stellar_asset_contract(stray_admin.clone());
         token::StellarAssetClient::new(&env, &stray).mint(&contract_id, &5_000);
@@ -133,7 +146,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_salvage_bridge_token_rejected() {
-        let (_env, client, _contract_id, admin, bridge_token, treasury) = setup();
+        let (_env, client, _contract_id, admin, _relayer, bridge_token, treasury) = setup();
         let result = client.try_salvage_token(&admin, &bridge_token, &treasury);
         assert!(result.is_err());
     }
@@ -141,7 +154,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_salvage_zero_balance_rejected() {
-        let (env, client, _contract_id, _admin, _bridge_token, treasury) = setup();
+        let (env, client, _contract_id, _admin, _relayer, _bridge_token, treasury) = setup();
         let stray_admin = Address::generate(&env);
         let stray = env.register_stellar_asset_contract(stray_admin);
         // nothing minted to the contract — balance is 0
@@ -152,7 +165,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_salvage_non_admin_rejected() {
-        let (env, client, contract_id, admin, _bridge_token, treasury) = setup();
+        let (env, client, contract_id, admin, _relayer, _bridge_token, treasury) = setup();
         let intruder = Address::generate(&env);
         let stray_admin = Address::generate(&env);
         let stray = env.register_stellar_asset_contract(stray_admin.clone());
@@ -164,8 +177,8 @@ mod tests {
     #[test]
     #[ignore]
     fn test_initialize_twice_rejected() {
-        let (_env, client, _contract_id, admin, bridge_token, _treasury) = setup();
-        let result = client.try_initialize(&admin, &bridge_token);
+        let (_env, client, _contract_id, admin, relayer, bridge_token, _treasury) = setup();
+        let result = client.try_initialize(&admin, &relayer, &bridge_token);
         assert!(result.is_err());
     }
 }
