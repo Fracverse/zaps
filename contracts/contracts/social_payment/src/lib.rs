@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
 };
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
@@ -21,6 +21,16 @@ pub enum Visibility {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocialPaymentEvent {
     pub sender: Address,
+    pub receiver: Address,
+    pub amount: i128,
+    pub memo: String,
+    pub visibility: Visibility,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Payment {
+    pub token: Address,
     pub receiver: Address,
     pub amount: i128,
     pub memo: String,
@@ -140,6 +150,22 @@ impl SocialPaymentContract {
                 visibility,
             },
         );
+    }
+
+    /// SC-037: Execute multiple payments in a single contract call.
+    pub fn batch_pay(env: Env, sender: Address, payments: Vec<Payment>) {
+        sender.require_auth();
+        for payment in payments.iter() {
+            Self::pay(
+                env.clone(),
+                sender.clone(),
+                payment.receiver.clone(),
+                payment.token.clone(),
+                payment.amount,
+                payment.memo.clone(),
+                payment.visibility,
+            );
+        }
     }
 
     pub fn like_payment(env: Env, sender: Address, tx_id: Symbol) {
@@ -365,6 +391,51 @@ mod tests {
         client.set_naira_token(&token);
 
         assert_eq!(client.naira_token(), token);
+    }
+
+    // ── Batch pay ─────────────────────────────────────────────────────────────
+    #[test]
+    fn test_batch_pay_processes_multiple_payments() {
+        let (env, client, admin, treasury, sender, receiver) = setup();
+        let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        let receiver2 = Address::generate(&env);
+
+        let payments = vec![
+            &env,
+            Payment {
+                token: token.clone(),
+                receiver: receiver.clone(),
+                amount: 1000,
+                memo: String::from_str(&env, "First"),
+                visibility: Visibility::Public,
+            },
+            Payment {
+                token: token.clone(),
+                receiver: receiver2.clone(),
+                amount: 2000,
+                memo: String::from_str(&env, "Second"),
+                visibility: Visibility::Private,
+            },
+        ];
+
+        client.batch_pay(&sender, &payments);
+
+        assert_eq!(token_client.balance(&receiver), 999);
+        assert_eq!(token_client.balance(&treasury), 1);
+        assert_eq!(token_client.balance(&receiver2), 2000);
+        assert_eq!(token_client.balance(&sender), 7_000);
+    }
+
+    #[test]
+    fn test_batch_pay_empty_vector_succeeds() {
+        let (env, client, admin, _treasury, sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &sender, 1_000);
+        client.set_naira_token(&token);
+
+        let payments: Vec<Payment> = vec![&env];
+        client.batch_pay(&sender, &payments);
     }
 
     #[test]
