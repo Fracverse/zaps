@@ -1,10 +1,18 @@
 #![no_std]
 #![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol,
+};
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const RELAYER_KEY: Symbol = symbol_short!("relayer");
 const BRIDGE_TOK_KEY: Symbol = symbol_short!("brdg_tok");
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Processed(BytesN<32>),
+}
 
 #[contract]
 pub struct AllbridgeReceiverContract;
@@ -52,12 +60,29 @@ impl AllbridgeReceiverContract {
     ) {
         bridge_authority.require_auth();
         Self::require_relayer(&env, &bridge_authority);
-        panic!("unimplemented: receive_deposit");
+
+        assert!(
+            !Self::is_tx_processed(env.clone(), source_tx_hash.clone()),
+            "source tx already processed"
+        );
+
+        let key = DataKey::Processed(source_tx_hash);
+        env.storage().persistent().set(&key, &true);
+
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&contract_addr, &recipient, &amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "DepositReceived"),),
+            (recipient, token, amount, source_chain_id),
+        );
     }
 
     /// Query bridging status/state
     pub fn is_tx_processed(env: Env, source_tx_hash: BytesN<32>) -> bool {
-        panic!("unimplemented: is_tx_processed");
+        let key = DataKey::Processed(source_tx_hash);
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     /// SC-042: Sweep any unsupported token accidentally sent to this receiver
