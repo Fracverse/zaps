@@ -1,6 +1,13 @@
 #![no_std]
 #![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol};
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Processed(BytesN<32>),
+}
+
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const BRIDGE_TOK_KEY: Symbol = symbol_short!("brdg_tok");
@@ -41,12 +48,17 @@ impl AllbridgeReceiverContract {
     ) {
         // TODO: Implement SC-014 (Allbridge cross-chain incoming transfer listener stub)
         bridge_authority.require_auth();
-        panic!("unimplemented: receive_deposit");
+
+        let key = DataKey::Processed(source_tx_hash.clone());
+        if env.storage().persistent().has(&key) {
+            panic!("already processed");
+        }
+        env.storage().persistent().set(&key, &true);
     }
 
     /// Query bridging status/state
     pub fn is_tx_processed(env: Env, source_tx_hash: BytesN<32>) -> bool {
-        panic!("unimplemented: is_tx_processed");
+        env.storage().persistent().has(&DataKey::Processed(source_tx_hash))
     }
 
     /// SC-042: Sweep any unsupported token accidentally sent to this receiver
