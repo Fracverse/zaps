@@ -24,6 +24,7 @@ const TYPE_OPTIONS: { label: string; value: TransactionFilters["type"] }[] = [
   { label: "All", value: "all" },
   { label: "Sent", value: "sent" },
   { label: "Received", value: "received" },
+  { label: "Yield", value: "yield" },
 ];
 
 const STATUS_OPTIONS: { label: string; value: TransactionFilters["status"] }[] =
@@ -69,6 +70,8 @@ function ChipGroup<T extends string>({
 const chipStyles = StyleSheet.create({
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 100,
@@ -93,7 +96,8 @@ export function TransactionFilterSheet({
     value: TransactionFilters[K]
   ) => setLocal((prev) => ({ ...prev, [key]: value }));
 
-  const reset = () => setLocal({ type: "all", status: "all", search: "" });
+  const reset = () =>
+    setLocal({ type: "all", status: "all", search: "", yieldOnly: false });
 
   const apply = () => {
     onApply(local);
@@ -145,6 +149,36 @@ export function TransactionFilterSheet({
               value={local.status}
               onChange={(v) => update("status", v)}
             />
+
+            {/* Yield */}
+            <Text style={styles.sectionLabel}>Yield</Text>
+            <View style={chipStyles.row}>
+              <TouchableOpacity
+                style={[
+                  chipStyles.chip,
+                  local.yieldOnly && chipStyles.chipActive,
+                ]}
+                onPress={() => update("yieldOnly", !local.yieldOnly)}
+                activeOpacity={0.8}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: !!local.yieldOnly }}
+              >
+                <Ionicons
+                  name="trending-up"
+                  size={14}
+                  color={local.yieldOnly ? COLORS.primary : "#666"}
+                  style={{ marginRight: 6 }}
+                />
+                <Text
+                  style={[
+                    chipStyles.chipText,
+                    local.yieldOnly && chipStyles.chipTextActive,
+                  ]}
+                >
+                  Yield only
+                </Text>
+              </TouchableOpacity>
+            </View>
 
             {/* Date range */}
             <Text style={styles.sectionLabel}>Date From</Text>

@@ -13,6 +13,7 @@ import {
   ViewStyle,
   StyleProp,
   LayoutChangeEvent,
+  RefreshControl,
 } from "react-native";
 import Svg, {
   Defs,
@@ -32,6 +33,7 @@ import {
   unlikePayment,
   fetchFeed,
 } from "../../src/services/socialService";
+import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
 
 interface FeedItem {
   id: string;
@@ -138,9 +140,14 @@ export default function HomeScreen() {
   );
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
+  const [autoEarnSyncing, setAutoEarnSyncing] = useState(false);
+  const [autoEarnTooltipVisible, setAutoEarnTooltipVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
+  const earningGlowAnim = useRef(new Animated.Value(0)).current;
+  const earningPulseAnim = useRef(new Animated.Value(1)).current;
   const yieldRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
@@ -163,12 +170,12 @@ export default function HomeScreen() {
   const YIELD_REQUEST_TIMEOUT_MS = 4500;
 
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const data = await fetchYieldBalance();
+    setAutoYieldEnabled(data.autoEarnEnabled);
     return {
-      apy: "8.75%",
-      totalYieldEarned: "₦3,280.45",
-      explanation:
-        "Your earnings are generated from your wallet balance and may vary as rates change. APY is an annualized estimate and total yield is updated automatically over time.",
+      apy: data.apy,
+      totalYieldEarned: data.totalYieldEarned,
+      explanation: data.explanation,
     };
   };
 
@@ -252,6 +259,66 @@ export default function HomeScreen() {
     shimmerLoop.start();
     return () => shimmerLoop.stop();
   }, [shimmerAnim]);
+
+  // Glow + pulse on the earning balance card while earning is active
+  useEffect(() => {
+    if (!autoYieldEnabled || yieldStatus !== "success") {
+      earningGlowAnim.stopAnimation();
+      earningPulseAnim.stopAnimation();
+      earningGlowAnim.setValue(0);
+      earningPulseAnim.setValue(1);
+      return;
+    }
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(earningGlowAnim, {
+          toValue: 1,
+          duration: 1400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningGlowAnim, {
+          toValue: 0,
+          duration: 1400,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(earningPulseAnim, {
+          toValue: 1.08,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningPulseAnim, {
+          toValue: 1,
+          duration: 900,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    glowLoop.start();
+    pulseLoop.start();
+    return () => {
+      glowLoop.stop();
+      pulseLoop.stop();
+    };
+  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim]);
+
+  const onPullRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const fresh = await fetchFeed();
+      if (fresh && fresh.length > 0) {
+        setFeed(fresh);
+        await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+      }
+    } catch {
+      // keep current feed
+    }
+    await loadYieldData();
+    setRefreshing(false);
+  }, [loadYieldData]);
 
   const handleLike = async (id: string) => {
     const currentItem = feed.find((f) => f.id === id);
@@ -389,12 +456,26 @@ export default function HomeScreen() {
     });
   };
 
-  const handleAutoYieldToggle = (value: boolean) => {
-    // Light haptic bump on yield preference change (and resulting deposit)
+  const handleAutoYieldToggle = async (value: boolean) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
       () => undefined
     );
+    const previous = autoYieldEnabled;
     setAutoYieldEnabled(value);
+    setAutoEarnSyncing(true);
+    try {
+      await updateAutoEarn(value);
+    } catch {
+      // Revert on failure
+      setAutoYieldEnabled(previous);
+    } finally {
+      setAutoEarnSyncing(false);
+    }
+  };
+
+  const toggleAutoEarnTooltip = () => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setAutoEarnTooltipVisible((prev) => !prev);
   };
 
   const handleYieldRetry = () => {
@@ -526,6 +607,14 @@ export default function HomeScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onPullRefresh}
+            tintColor={COLORS.primary}
+            colors={[COLORS.primary]}
+          />
+        }
       >
         {/* Balance Card */}
         <View style={styles.balanceCard}>
@@ -580,18 +669,46 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.earningBalanceCard}
-          activeOpacity={0.9}
-          onPress={openEarningsModal}
-        >
+        <View style={styles.earningCardWrapper}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.earningGlow,
+              {
+                opacity: earningGlowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.15, 0.55],
+                }),
+                transform: [
+                  {
+                    scale: earningGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.98, 1.04],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
+          <TouchableOpacity
+            style={styles.earningBalanceCard}
+            activeOpacity={0.9}
+            onPress={openEarningsModal}
+          >
           <View>
             <Text style={styles.earningLabel}>Earning Balance</Text>
             <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
             <View style={styles.earningStatusRow}>
-              <View style={styles.earningStatusDot} />
+              <Animated.View
+                style={[
+                  styles.earningStatusDot,
+                  { transform: [{ scale: earningPulseAnim }] },
+                ]}
+              />
               <Text style={styles.earningStatusText}>
-                Your money is working
+                {autoYieldEnabled
+                  ? "Your money is working"
+                  : "Auto-earn is off"}
               </Text>
             </View>
           </View>
@@ -626,7 +743,59 @@ export default function HomeScreen() {
           <View style={styles.earningIconWrap}>
             <Ionicons name="trending-up" size={20} color="#A7F3C0" />
           </View>
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
+
+        {/* Auto-Earn on Idle Funds toggle widget */}
+        <View style={styles.autoEarnCard}>
+          <View style={styles.autoEarnHeader}>
+            <View style={styles.autoEarnIconWrap}>
+              <Ionicons name="flash" size={18} color="#16A34A" />
+            </View>
+            <View style={styles.autoEarnTitleWrap}>
+              <View style={styles.autoEarnTitleRow}>
+                <Text style={styles.autoEarnCardTitle}>
+                  Auto-Earn on Idle Funds
+                </Text>
+                <TouchableOpacity
+                  onPress={toggleAutoEarnTooltip}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="What is Auto-Earn?"
+                  accessibilityRole="button"
+                >
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={18}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.autoEarnCardSubtitle}>
+                Sweep idle balance into yield automatically
+              </Text>
+            </View>
+            <Switch
+              value={autoYieldEnabled}
+              onValueChange={handleAutoYieldToggle}
+              disabled={autoEarnSyncing}
+              trackColor={{ false: "#E2E8F0", true: "#34D399" }}
+              thumbColor={COLORS.white}
+            />
+          </View>
+          {autoEarnTooltipVisible && (
+            <View style={styles.autoEarnTooltip}>
+              <Ionicons
+                name="shield-checkmark"
+                size={14}
+                color="#16A34A"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.autoEarnTooltipText}>
+                No DeFi knowledge required.
+              </Text>
+            </View>
+          )}
+        </View>
 
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
@@ -1177,12 +1346,29 @@ const styles = StyleSheet.create({
     color: "#111827",
     marginBottom: 14,
   },
+  earningCardWrapper: {
+    position: "relative",
+    marginBottom: 8,
+  },
+  earningGlow: {
+    position: "absolute",
+    top: -8,
+    left: -8,
+    right: -8,
+    bottom: -8,
+    borderRadius: 30,
+    backgroundColor: "#34D399",
+    shadowColor: "#34D399",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 22,
+    elevation: 8,
+  },
   earningBalanceCard: {
     backgroundColor: "#0F3D2E",
     borderRadius: 22,
     paddingVertical: 18,
     paddingHorizontal: 18,
-    marginBottom: 8,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -1191,6 +1377,64 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 16,
     elevation: 3,
+  },
+  autoEarnCard: {
+    backgroundColor: COLORS.white,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  autoEarnHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  autoEarnIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F0FDF4",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  autoEarnTitleWrap: {
+    flex: 1,
+  },
+  autoEarnTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  autoEarnCardTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#111827",
+  },
+  autoEarnCardSubtitle: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  autoEarnTooltip: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  autoEarnTooltipText: {
+    fontSize: 12,
+    fontFamily: "Outfit_500Medium",
+    color: "#166534",
   },
   earningContent: {
     flex: 1,
