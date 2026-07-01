@@ -38,12 +38,27 @@ function typeIcon(type: Transaction["type"]) {
       return { name: "arrow-up" as const, bg: "#FFEBEE", color: "#EF4444" };
     case "received":
       return { name: "arrow-down" as const, bg: "#E8F5E9", color: "#22C55E" };
+    case "yield":
+      return { name: "trending-up" as const, bg: "#F0FDF4", color: "#16A34A" };
     default:
       return {
         name: "swap-horizontal" as const,
         bg: "#E3F2FD",
         color: "#2196F3",
       };
+  }
+}
+
+function yieldTagLabel(yieldType: Transaction["yieldType"]): string {
+  switch (yieldType) {
+    case "interest":
+      return "Interest";
+    case "reward":
+      return "Reward";
+    case "apy":
+      return "APY";
+    default:
+      return "Yield";
   }
 }
 
@@ -59,7 +74,8 @@ function hasActiveFilters(f: TransactionFilters): boolean {
     !!f.dateFrom ||
     !!f.dateTo ||
     !!f.amountMin ||
-    !!f.amountMax
+    !!f.amountMax ||
+    !!f.yieldOnly
   );
 }
 
@@ -74,6 +90,7 @@ const TransactionRow = React.memo(function TransactionRow({
 }) {
   const icon = typeIcon(item.type);
   const isOutgoing = item.type === "sent";
+  const isYield = item.type === "yield";
   const label = item.addressLabel ?? truncateAddress(item.address);
   const time = formatDate(item.timestamp, {
     month: "short",
@@ -102,6 +119,14 @@ const TransactionRow = React.memo(function TransactionRow({
         </Text>
         <View style={styles.txMeta}>
           <Text style={styles.txTime}>{time}</Text>
+          {isYield && (
+            <View style={styles.yieldTag}>
+              <Ionicons name="trending-up" size={10} color="#16A34A" />
+              <Text style={styles.yieldTagText}>
+                {yieldTagLabel(item.yieldType)}
+              </Text>
+            </View>
+          )}
           {item.status !== "completed" && (
             <View
               style={[
@@ -331,6 +356,42 @@ export default function HistoryScreen() {
         </View>
       </View>
 
+      {/* Quick filter — Yield only */}
+      <View style={styles.quickFilterRow}>
+        <TouchableOpacity
+          style={[
+            styles.quickFilterChip,
+            filters.yieldOnly && styles.quickFilterChipActive,
+          ]}
+          onPress={() =>
+            applyFilters({
+              ...filters,
+              yieldOnly: !filters.yieldOnly,
+              search: searchText,
+            })
+          }
+          activeOpacity={0.8}
+          accessibilityRole="switch"
+          accessibilityLabel="Filter by yield only"
+          accessibilityState={{ checked: !!filters.yieldOnly }}
+        >
+          <Ionicons
+            name="trending-up"
+            size={14}
+            color={filters.yieldOnly ? COLORS.secondary : "#16A34A"}
+            style={{ marginRight: 6 }}
+          />
+          <Text
+            style={[
+              styles.quickFilterChipText,
+              filters.yieldOnly && styles.quickFilterChipTextActive,
+            ]}
+          >
+            Yield only
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Summary row */}
       {!loading && items.length > 0 && (
         <View style={styles.summaryRow}>
@@ -513,6 +574,47 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: "Outfit_600SemiBold",
     textTransform: "capitalize",
+  },
+  yieldTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 100,
+    backgroundColor: "#F0FDF4",
+    gap: 3,
+  },
+  yieldTagText: {
+    fontSize: 10,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  quickFilterRow: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  quickFilterChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#16A34A",
+    backgroundColor: "#F0FDF4",
+  },
+  quickFilterChipActive: {
+    backgroundColor: "#16A34A",
+  },
+  quickFilterChipText: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  quickFilterChipTextActive: {
+    color: COLORS.secondary,
   },
   txAmount: { alignItems: "flex-end" },
   txAmountText: {
