@@ -8,9 +8,9 @@ pub struct UserRegistryContract;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    User(Address),     // Maps Address -> Username (String)
-    Username(String),  // Maps Username (String) -> Address
-    Avatar(Address),   // Maps Address -> Avatar URI (String)
+    User(Address),    // Maps Address -> Username (String)
+    Username(String), // Maps Username (String) -> Address
+    Avatar(Address),  // Maps Address -> Avatar URI (String)
 }
 
 #[contractimpl]
@@ -103,10 +103,8 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&username_key, &username_to_address);
-            
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Avatar(user));
+
+        env.storage().persistent().remove(&DataKey::Avatar(user));
     }
 }
 

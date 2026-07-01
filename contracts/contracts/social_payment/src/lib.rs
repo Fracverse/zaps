@@ -201,9 +201,7 @@ impl SocialPaymentContract {
         env.storage().temporary().set(&key, &current_ledger);
         // ~1 day expressed in ledgers (17280 ledgers ≈ 24h at 5s/ledger)
         let ttl: u32 = 17280;
-        env.storage()
-            .temporary()
-            .extend_ttl(&key, ttl, ttl);
+        env.storage().temporary().extend_ttl(&key, ttl, ttl);
 
         env.events()
             .publish((Symbol::new(&env, "PaymentLiked"),), (tx_id, sender));
