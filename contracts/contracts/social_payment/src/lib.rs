@@ -1,7 +1,7 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, String, Symbol, Vec,
 };
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");

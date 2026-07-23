@@ -166,11 +166,11 @@ async fn test_yield_balance_history_toggle() {
     assert!(body.get("apy").is_some(), "apy missing");
 
     // auto_earn_enabled default comes from `users.auto_earn_enabled`.
-    assert_eq!(
-        body.get("auto_earn_enabled")
+    assert!(
+        !body
+            .get("auto_earn_enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(true),
-        false,
         "auto_earn_enabled should default to false"
     );
 
