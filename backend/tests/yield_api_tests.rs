@@ -284,3 +284,176 @@ async fn test_yield_balance_history_toggle() {
     let _ = AuthUser;
 }
 
+// ── Decimal precision validation tests ───────────────────────────────────────
+//
+// Naira token amounts are integers in micro-units. Any fractional value is
+// meaningless on-chain and must be rejected with HTTP 422 Unprocessable Entity
+// (Axum returns 422 when JSON deserialization fails).
+
+#[tokio::test]
+async fn test_deposit_rejects_fractional_amount() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = format!(
+        "GTESTPRECDEPOSIT{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // 1000.5 — fractional micro-unit — must be rejected.
+    let (status, body) = response_json(
+        &router,
+        post_req_json(
+            "/deposit",
+            Some(&token),
+            serde_json::json!({ "amount": 1000.5_f64 }),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "deposit with fractional amount must return 422, body: {:?}",
+        body
+    );
+
+    // 0.1 — also fractional
+    let (status2, body2) = response_json(
+        &router,
+        post_req_json(
+            "/deposit",
+            Some(&token),
+            serde_json::json!({ "amount": 0.1_f64 }),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        status2,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "deposit with 0.1 must return 422, body: {:?}",
+        body2
+    );
+
+    // A whole-number float (1000.0) must be accepted by the deserializer itself
+    // (may still fail with 400 for insufficient balance, but not 422).
+    let (status3, _body3) = response_json(
+        &router,
+        post_req_json(
+            "/deposit",
+            Some(&token),
+            serde_json::json!({ "amount": 1000.0_f64 }),
+        ),
+    )
+    .await;
+    assert_ne!(
+        status3,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "deposit with whole-number float 1000.0 must not return 422"
+    );
+
+    // Cleanup.
+    sqlx::query("DELETE FROM yield_transactions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM user_yield_balances WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn test_withdraw_rejects_fractional_amount() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = format!(
+        "GTESTPRECWITHDRAW{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        run
+    );
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // 500.99 — fractional micro-unit — must be rejected.
+    let (status, body) = response_json(
+        &router,
+        post_req_json(
+            "/withdraw",
+            Some(&token),
+            serde_json::json!({ "amount": 500.99_f64 }),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "withdraw with fractional amount must return 422, body: {:?}",
+        body
+    );
+
+    // 1.1 — also fractional.
+    let (status2, body2) = response_json(
+        &router,
+        post_req_json(
+            "/withdraw",
+            Some(&token),
+            serde_json::json!({ "amount": 1.1_f64 }),
+        ),
+    )
+    .await;
+
+    assert_eq!(
+        status2,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "withdraw with 1.1 must return 422, body: {:?}",
+        body2
+    );
+
+    // A whole-number float (500.0) must pass the precision check.
+    let (status3, _body3) = response_json(
+        &router,
+        post_req_json(
+            "/withdraw",
+            Some(&token),
+            serde_json::json!({ "amount": 500.0_f64 }),
+        ),
+    )
+    .await;
+    assert_ne!(
+        status3,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "withdraw with whole-number float 500.0 must not return 422"
+    );
+
+    // Cleanup.
+    sqlx::query("DELETE FROM yield_transactions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM user_yield_balances WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+

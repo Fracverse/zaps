@@ -7,11 +7,39 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::services::yield_calc;
+
+// ── Decimal precision validation ──────────────────────────────────────────
+//
+// Naira token amounts are integers expressed in micro-units (the smallest
+// indivisible denomination of the token). Fractional micro-units are
+// meaningless — e.g. 1000.5 cannot be represented on-chain.
+//
+// This deserializer accepts any JSON number but rejects it if it carries a
+// fractional part (i.e. it is not a whole number), returning a clear error
+// message rather than silently truncating or failing with a type error.
+
+fn deserialize_whole_number<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Deserialize as f64 first so we can inspect the fractional part.
+    let raw = f64::deserialize(deserializer)?;
+    if raw.fract() != 0.0 {
+        return Err(serde::de::Error::custom(
+            "amount must be a whole number — fractional micro-units are not supported by the Naira token",
+        ));
+    }
+    // Check that the value fits in i64 without loss.
+    if raw < i64::MIN as f64 || raw > i64::MAX as f64 {
+        return Err(serde::de::Error::custom("amount is out of range for i64"));
+    }
+    Ok(raw as i64)
+}
 
 // ── #373 — GET /api/yield/balance ─────────────────────────────────────────
 
@@ -226,6 +254,8 @@ pub async fn toggle_auto_earn(
 #[derive(Deserialize)]
 pub struct DepositRequest {
     /// Amount to move from available to earning balance (in micro-units).
+    /// Must be a whole number; fractional micro-units are rejected.
+    #[serde(deserialize_with = "deserialize_whole_number")]
     pub amount: i64,
 }
 
@@ -371,6 +401,8 @@ pub async fn deposit(
 pub struct WithdrawRequest {
     /// Amount to move from earning to available balance (in micro-units).
     /// Pass the full earning balance to withdraw everything.
+    /// Must be a whole number; fractional micro-units are rejected.
+    #[serde(deserialize_with = "deserialize_whole_number")]
     pub amount: i64,
 }
 
