@@ -16,6 +16,8 @@ const IDX_LED_KEY: Symbol = symbol_short!("idx_led");
 const PROTO_BAL_KEY: Symbol = symbol_short!("p_bal");
 const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
 const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
+const PAUSED_KEY: Symbol = symbol_short!("paused");
+const MAX_APY_BPS: u32 = 2_000;
 
 /// Precision factor used in all fixed-point math (1e8).
 const PRECISION: i128 = 100_000_000;
@@ -158,6 +160,14 @@ impl YieldVaultContract {
         assert!(caller == &owner, "only owner");
     }
 
+    fn is_paused(env: &Env) -> bool {
+        env.storage().instance().get(&PAUSED_KEY).unwrap_or(false)
+    }
+
+    fn require_not_paused(env: &Env) {
+        assert!(!Self::is_paused(env), "deposits paused");
+    }
+
     /// SC-016: One-time initializer. Sets owner, token address, and initial APY.
     /// `apy_bps` is the annual percentage yield in basis points (e.g. 500 = 5%).
     pub fn initialize(env: Env, owner: Address, token: Address, apy_bps: u32) {
@@ -166,7 +176,9 @@ impl YieldVaultContract {
         }
         env.storage().instance().set(&OWNER_KEY, &owner);
         env.storage().instance().set(&TOKEN_KEY, &token);
+        assert!(apy_bps <= MAX_APY_BPS, "apy out of bounds");
         env.storage().instance().set(&APY_KEY, &apy_bps);
+        env.storage().instance().set(&PAUSED_KEY, &false);
         // Yield index starts at 1.0 (represented as PRECISION)
         env.storage().instance().set(&IDX_KEY, &PRECISION);
         env.storage()
@@ -223,6 +235,7 @@ impl YieldVaultContract {
     pub fn deposit(env: Env, depositor: Address, amount: i128) {
         depositor.require_auth();
         assert!(amount > 0, "amount must be positive");
+        Self::require_not_paused(&env);
 
         Self::checkpoint_index(&env);
 
@@ -260,8 +273,78 @@ impl YieldVaultContract {
             .set(&ASSETS_KEY, &(tot_assets + amount));
 
         env.events().publish(
-            (Symbol::new(&env, "Deposited"),),
+            (Symbol::new(&env, "YieldDeposited"),),
             (depositor, amount, shares),
+        );
+    }
+
+    /// Update the vault target APY in basis points.
+    /// Only the owner may call this entrypoint.
+    pub fn update_apy(env: Env, caller: Address, new_apy_bps: u32) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(new_apy_bps <= MAX_APY_BPS, "apy out of bounds");
+
+        Self::checkpoint_index(&env);
+        let old_apy: u32 = env.storage().instance().get(&APY_KEY).unwrap_or(0);
+        env.storage().instance().set(&APY_KEY, &new_apy_bps);
+        env.events().publish(
+            (Symbol::new(&env, "ApyUpdated"),),
+            (old_apy, new_apy_bps),
+        );
+    }
+
+    /// Toggle paused state. While paused, new deposits are rejected.
+    pub fn set_paused(env: Env, caller: Address, paused: bool) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &paused);
+        env.events().publish(
+            (Symbol::new(&env, "PauseToggled"),),
+            (paused,),
+        );
+    }
+
+    /// Emergency withdraw path for the owner to recover shares for a user.
+    pub fn emergency_withdraw(env: Env, caller: Address, user: Address, shares: i128) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(shares > 0, "shares must be positive");
+
+        let user_key = DataKey::UserShares(user.clone());
+        let user_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
+        assert!(user_shares >= shares, "insufficient shares");
+
+        Self::checkpoint_index(&env);
+        let index = Self::current_index(&env);
+        let assets_out = shares.checked_mul(index).expect("overflow") / PRECISION;
+        assert!(assets_out > 0, "withdrawal too small");
+
+        sandbox_protocol::redeem(&env, assets_out);
+
+        env.storage()
+            .persistent()
+            .set(&user_key, &(user_shares - shares));
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
+        let vault_addr = env.current_contract_address();
+        token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+
+        env.events().publish(
+            (Symbol::new(&env, "YieldWithdrawn"),),
+            (user, assets_out, shares, 0i128),
         );
     }
 
@@ -309,8 +392,8 @@ impl YieldVaultContract {
         token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
 
         env.events().publish(
-            (Symbol::new(&env, "Withdrawn"),),
-            (user, shares, assets_out),
+            (Symbol::new(&env, "YieldWithdrawn"),),
+            (user, assets_out, shares, 0i128),
         );
     }
 

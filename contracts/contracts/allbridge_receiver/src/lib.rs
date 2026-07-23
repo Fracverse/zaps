@@ -4,7 +4,14 @@ use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, 
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const RELAYER_KEY: Symbol = symbol_short!("relayer");
+const BRIDGE_AUTH_KEY: Symbol = symbol_short!("brdg_auth");
 const BRIDGE_TOK_KEY: Symbol = symbol_short!("brdg_tok");
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Processed(BytesN<32>),
+}
 
 #[contract]
 pub struct AllbridgeReceiverContract;
@@ -21,12 +28,12 @@ impl AllbridgeReceiverContract {
     }
 
     fn require_relayer(env: &Env, caller: &Address) {
-        let relayer: Address = env
+        let authority: Address = env
             .storage()
             .instance()
-            .get(&RELAYER_KEY)
+            .get(&BRIDGE_AUTH_KEY)
             .expect("not initialized");
-        assert!(caller == &relayer, "unauthorized relayer");
+        assert!(caller == &authority, "unauthorized relayer");
     }
 
     /// One-time initializer. Sets the admin address and the bridge-critical token
@@ -37,7 +44,32 @@ impl AllbridgeReceiverContract {
         }
         env.storage().instance().set(&ADMIN_KEY, &admin);
         env.storage().instance().set(&RELAYER_KEY, &relayer);
+        env.storage().instance().set(&BRIDGE_AUTH_KEY, &relayer);
         env.storage().instance().set(&BRIDGE_TOK_KEY, &bridge_token);
+    }
+
+    /// Update the trusted bridge authority address. Only the admin can perform this.
+    pub fn update_bridge_authority(env: Env, caller: Address, new_authority: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+
+        env.storage()
+            .instance()
+            .set(&BRIDGE_AUTH_KEY, &new_authority);
+        env.storage().instance().set(&RELAYER_KEY, &new_authority);
+
+        env.events().publish(
+            (Symbol::new(&env, "BridgeAuthorityUpdated"),),
+            (new_authority,),
+        );
+    }
+
+    /// Read the currently trusted bridge authority address.
+    pub fn get_bridge_authority(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&BRIDGE_AUTH_KEY)
+            .expect("not initialized")
     }
 
     /// Receive a bridged deposit from the Allbridge messenger protocol
@@ -52,12 +84,29 @@ impl AllbridgeReceiverContract {
     ) {
         bridge_authority.require_auth();
         Self::require_relayer(&env, &bridge_authority);
-        panic!("unimplemented: receive_deposit");
+
+        assert!(
+            !Self::is_tx_processed(env.clone(), source_tx_hash.clone()),
+            "source tx already processed"
+        );
+
+        let key = DataKey::Processed(source_tx_hash);
+        env.storage().persistent().set(&key, &true);
+
+        let contract_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&contract_addr, &recipient, &amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "DepositReceived"),),
+            (recipient, token, amount, source_chain_id),
+        );
     }
 
     /// Query bridging status/state
     pub fn is_tx_processed(env: Env, source_tx_hash: BytesN<32>) -> bool {
-        panic!("unimplemented: is_tx_processed");
+        let key = DataKey::Processed(source_tx_hash);
+        env.storage().persistent().get(&key).unwrap_or(false)
     }
 
     /// SC-042: Sweep any unsupported token accidentally sent to this receiver
@@ -121,7 +170,15 @@ mod tests {
         let bridge_token = env.register_stellar_asset_contract(admin.clone());
         let treasury = Address::generate(&env);
         client.initialize(&admin, &relayer, &bridge_token);
-        (env, client, contract_id, admin, relayer, bridge_token, treasury)
+        (
+            env,
+            client,
+            contract_id,
+            admin,
+            relayer,
+            bridge_token,
+            treasury,
+        )
     }
 
     #[test]
@@ -172,6 +229,16 @@ mod tests {
         token::StellarAssetClient::new(&env, &stray).mint(&contract_id, &1_000);
         let result = client.try_salvage_token(&intruder, &stray, &treasury);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_bridge_authority_by_admin_succeeds() {
+        let (env, client, _contract_id, admin, _relayer, _bridge_token, _treasury) = setup();
+        let new_authority = Address::generate(&env);
+
+        client.update_bridge_authority(&admin, &new_authority);
+
+        assert_eq!(client.get_bridge_authority(), new_authority);
     }
 
     #[test]
