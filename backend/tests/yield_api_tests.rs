@@ -19,8 +19,6 @@ use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
 
 // Re-exported from crate.
-use zaps_backend::api::feed::AuthUser;
-
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async fn test_pool() -> PgPool {
@@ -300,7 +298,4 @@ async fn test_yield_balance_history_toggle() {
         .execute(&pool)
         .await
         .ok();
-
-    // Avoid unused import warning.
-    let _ = AuthUser;
 }
