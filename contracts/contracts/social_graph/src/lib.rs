@@ -2,10 +2,13 @@
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
+pub const MAX_FRIENDS: u32 = 100;
+
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
     Friendship(Address, Address),
+    FriendCount(Address),
 }
 
 #[contracttype]
@@ -29,20 +32,38 @@ impl SocialGraphContract {
         user.require_auth();
         assert!(user != friend, "cannot friend yourself");
 
-        let key = DataKey::Friendship(user, friend);
-        env.storage()
-            .persistent()
-            .set(&key, &FriendshipStatus::Active);
+        let friendship_key = DataKey::Friendship(user.clone(), friend.clone());
+        let status: Option<FriendshipStatus> = env.storage().persistent().get(&friendship_key);
+
+        if status != Some(FriendshipStatus::Active) {
+            let count_key = DataKey::FriendCount(user.clone());
+            let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+            assert!(count < MAX_FRIENDS, "max friend cap exceeded");
+
+            env.storage().persistent().set(&count_key, &(count + 1));
+            env.storage()
+                .persistent()
+                .set(&friendship_key, &FriendshipStatus::Active);
+        }
     }
 
     /// Remove a directed friend relationship on-chain.
     pub fn remove_friend(env: Env, user: Address, friend: Address) {
         user.require_auth();
 
-        let key = DataKey::Friendship(user, friend);
-        env.storage()
-            .persistent()
-            .set(&key, &FriendshipStatus::Removed);
+        let friendship_key = DataKey::Friendship(user.clone(), friend.clone());
+        let status: Option<FriendshipStatus> = env.storage().persistent().get(&friendship_key);
+        
+        if status == Some(FriendshipStatus::Active) {
+            let count_key = DataKey::FriendCount(user.clone());
+            let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+            if count > 0 {
+                env.storage().persistent().set(&count_key, &(count - 1));
+            }
+            env.storage()
+                .persistent()
+                .set(&friendship_key, &FriendshipStatus::Removed);
+        }
     }
 
     /// Check if two addresses are friends on-chain.
@@ -103,4 +124,17 @@ mod tests {
         assert!(!client.is_friend(&user, &friend));
     }
 
+    #[test]
+    #[should_panic(expected = "max friend cap exceeded")]
+    fn add_friend_enforces_max_friends_limit() {
+        let (env, client, user, _friend, _other) = setup();
+
+        for _ in 0..MAX_FRIENDS {
+            let new_friend = Address::generate(&env);
+            client.add_friend(&user, &new_friend);
+        }
+
+        let one_too_many = Address::generate(&env);
+        client.add_friend(&user, &one_too_many);
+    }
 }
