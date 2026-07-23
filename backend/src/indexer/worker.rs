@@ -177,38 +177,59 @@ async fn poll_soroban_events(
     start_ledger: i64,
 ) -> Result<(Vec<Value>, u64), Box<dyn Error + Send + Sync>> {
     let contract_id = env::var("SOCIAL_PAYMENT_CONTRACT_ID").ok();
-    let payload = build_get_events_payload(start_ledger, contract_id.as_deref());
+    let client = reqwest::Client::new();
+    let mut all_events: Vec<Value> = Vec::new();
+    let mut latest_ledger = 0u64;
+    let mut cursor: Option<String> = None;
 
-    let response = reqwest::Client::new()
-        .post(rpc_url)
-        .timeout(RPC_TIMEOUT)
-        .json(&payload)
-        .send()
-        .await?;
+    loop {
+        let payload =
+            build_get_events_payload(start_ledger, contract_id.as_deref(), cursor.as_deref());
 
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("Soroban RPC returned HTTP {status}").into());
+        let response = client
+            .post(rpc_url)
+            .timeout(RPC_TIMEOUT)
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("Soroban RPC returned HTTP {status}").into());
+        }
+
+        let body: Value = response.json().await?;
+        let result = body
+            .get("result")
+            .ok_or("Soroban RPC response did not include result")?;
+
+        if let Some(events) = result.get("events").and_then(Value::as_array) {
+            all_events.extend(events.iter().cloned());
+        }
+
+        if let Some(ledger) = result.get("latestLedger").and_then(Value::as_u64) {
+            latest_ledger = latest_ledger.max(ledger);
+        }
+
+        cursor = result
+            .get("paginationToken")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(String::from);
+
+        if cursor.is_none() {
+            break;
+        }
     }
 
-    let body: Value = response.json().await?;
-    let result = body
-        .get("result")
-        .ok_or("Soroban RPC response did not include result")?;
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let latest_ledger = result
-        .get("latestLedger")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-
-    Ok((events, latest_ledger))
+    Ok((all_events, latest_ledger))
 }
 
-fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Value {
+fn build_get_events_payload(
+    start_ledger: i64,
+    contract_id: Option<&str>,
+    cursor: Option<&str>,
+) -> Value {
     let mut filters = vec![
         json!({ "topics": [[{ "type": "symbol", "value": "SocialPaymentEvent" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldDeposited" }]] }),
@@ -224,14 +245,22 @@ fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Val
         }
     }
 
+    let mut params = json!({
+        "startLedger": start_ledger,
+        "filters": filters,
+    });
+
+    if let Some(c) = cursor {
+        if let Some(obj) = params.as_object_mut() {
+            obj.insert("cursor".to_string(), json!(c));
+        }
+    }
+
     json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "getEvents",
-        "params": [{
-            "startLedger": start_ledger,
-            "filters": filters
-        }]
+        "params": [params]
     })
 }
 
@@ -379,7 +408,7 @@ mod tests {
 
     #[test]
     fn builds_payload_with_contract_and_topic_filters() {
-        let payload = build_get_events_payload(12, Some("CAKE"));
+        let payload = build_get_events_payload(12, Some("CAKE"), None);
         let params = payload["params"].as_array().unwrap();
         let filter = &params[0]["filters"][0];
 
@@ -388,6 +417,21 @@ mod tests {
             filter["topics"][0][0]["value"].as_str(),
             Some("SocialPaymentEvent")
         );
+    }
+
+    #[test]
+    fn includes_cursor_in_payload_when_provided() {
+        let payload = build_get_events_payload(42, None, Some("abc-123"));
+        let params = payload["params"].as_array().unwrap();
+        assert_eq!(params[0]["cursor"].as_str(), Some("abc-123"));
+        assert_eq!(params[0]["startLedger"].as_i64(), Some(42));
+    }
+
+    #[test]
+    fn omits_cursor_when_not_provided() {
+        let payload = build_get_events_payload(7, None, None);
+        let params = payload["params"].as_array().unwrap();
+        assert!(params[0].get("cursor").is_none());
     }
 
     #[test]
