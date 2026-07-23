@@ -145,6 +145,8 @@ async fn send_yield_reports(
 
         for token in &candidate.push_tokens {
             if let Err(err) = send_expo_push(
+                pool,
+                candidate.user_id,
                 token,
                 title,
                 &body,
@@ -273,6 +275,8 @@ async fn mark_report_sent(
 }
 
 async fn send_expo_push(
+    pool: &PgPool,
+    user_id: Uuid,
     token: &str,
     title: &str,
     body: &str,
@@ -299,7 +303,39 @@ async fn send_expo_push(
         return Err(format!("Expo push API returned {status}: {text}").into());
     }
 
+    let body: serde_json::Value = response.json().await?;
+    if has_device_not_registered(&body) {
+        sqlx::query(
+            "DELETE FROM user_push_tokens WHERE user_id = $1 AND expo_push_token = $2",
+        )
+        .bind(user_id)
+        .bind(token)
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            user_id = %user_id,
+            %token,
+            "Deleted invalid Expo push token (DeviceNotRegistered)"
+        );
+    }
+
     Ok(())
+}
+
+fn has_device_not_registered(body: &serde_json::Value) -> bool {
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter().any(|ticket| {
+                ticket.get("status").and_then(|s| s.as_str()) == Some("error")
+                    && ticket
+                        .get("details")
+                        .and_then(|d| d.get("error"))
+                        .and_then(|e| e.as_str())
+                        == Some("DeviceNotRegistered")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Upsert an Expo push token for a user (used by mobile registration endpoint).
@@ -336,5 +372,72 @@ mod tests {
         let earned = estimate_period_yield(2_000_000, 500, 86_400);
         let expected = 2_000_000 * 500 * 86_400 / (10_000 * SECONDS_PER_YEAR);
         assert_eq!(earned, expected);
+    }
+
+    #[test]
+    fn has_device_not_registered_no_data_field() {
+        let body = serde_json::json!({});
+        assert!(!has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_empty_data_array() {
+        let body = serde_json::json!({ "data": [] });
+        assert!(!has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_ok_status() {
+        let body = serde_json::json!({
+            "data": [{ "status": "ok", "id": "abc-123" }]
+        });
+        assert!(!has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_error_without_details() {
+        let body = serde_json::json!({
+            "data": [{ "status": "error", "message": "something went wrong" }]
+        });
+        assert!(!has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_device_not_registered() {
+        let body = serde_json::json!({
+            "data": [{
+                "status": "error",
+                "message": "\"DeviceNotRegistered\" is not a recognized push notification transport",
+                "details": { "error": "DeviceNotRegistered" }
+            }]
+        });
+        assert!(has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_other_error() {
+        let body = serde_json::json!({
+            "data": [{
+                "status": "error",
+                "message": "Message too big",
+                "details": { "error": "MessageTooBig" }
+            }]
+        });
+        assert!(!has_device_not_registered(&body));
+    }
+
+    #[test]
+    fn has_device_not_registered_multiple_tickets_one_invalid() {
+        let body = serde_json::json!({
+            "data": [
+                { "status": "ok", "id": "abc-123" },
+                {
+                    "status": "error",
+                    "message": "\"DeviceNotRegistered\" is not a recognized push notification transport",
+                    "details": { "error": "DeviceNotRegistered" }
+                }
+            ]
+        });
+        assert!(has_device_not_registered(&body));
     }
 }
