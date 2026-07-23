@@ -95,6 +95,17 @@ impl SocialGraphContract {
             return Err(Error::NoPendingRequest);
         }
 
+        let count_key_req = DataKey::FriendCount(requester.clone());
+        let count_req: u32 = env.storage().persistent().get(&count_key_req).unwrap_or(0);
+        assert!(count_req < MAX_FRIENDS, "max friend cap exceeded");
+
+        let count_key_friend = DataKey::FriendCount(friend.clone());
+        let count_friend: u32 = env.storage().persistent().get(&count_key_friend).unwrap_or(0);
+        assert!(count_friend < MAX_FRIENDS, "max friend cap exceeded");
+
+        env.storage().persistent().set(&count_key_req, &(count_req + 1));
+        env.storage().persistent().set(&count_key_friend, &(count_friend + 1));
+
         env.storage().persistent().set(
             &DataKey::Friendship(requester.clone(), friend.clone()),
             &FriendshipStatus::Active,
@@ -131,6 +142,20 @@ impl SocialGraphContract {
     /// [`Removed`]: FriendshipStatus::Removed
     pub fn remove_friend(env: Env, user: Address, friend: Address) {
         user.require_auth();
+
+        if Self::is_friend(env.clone(), user.clone(), friend.clone()) {
+            let count_key_user = DataKey::FriendCount(user.clone());
+            let count_user: u32 = env.storage().persistent().get(&count_key_user).unwrap_or(0);
+            if count_user > 0 {
+                env.storage().persistent().set(&count_key_user, &(count_user - 1));
+            }
+
+            let count_key_friend = DataKey::FriendCount(friend.clone());
+            let count_friend: u32 = env.storage().persistent().get(&count_key_friend).unwrap_or(0);
+            if count_friend > 0 {
+                env.storage().persistent().set(&count_key_friend, &(count_friend - 1));
+            }
+        }
 
         env.storage().persistent().set(
             &DataKey::Friendship(user.clone(), friend.clone()),
