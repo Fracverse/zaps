@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
 
 #[contract]
 pub struct UserRegistryContract;
@@ -75,35 +75,16 @@ impl UserRegistryContract {
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
-        let address_key = String::from_str(&env, ADDRESS_TO_USERNAME);
-        let username_key = String::from_str(&env, USERNAME_TO_ADDRESS);
-
-        let mut address_to_username: Map<Address, String> = env
+        let user_key = DataKey::User(user.clone());
+        let username: String = env
             .storage()
             .persistent()
-            .get(&address_key)
-            .unwrap_or(Map::new(&env));
-
-        let username = address_to_username
-            .get(user.clone())
+            .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"));
+        let username_key = DataKey::Username(username);
 
-        let mut username_to_address: Map<String, Address> = env
-            .storage()
-            .persistent()
-            .get(&username_key)
-            .unwrap_or(Map::new(&env));
-
-        address_to_username.remove(user.clone());
-        username_to_address.remove(username);
-
-        env.storage()
-            .persistent()
-            .set(&address_key, &address_to_username);
-        env.storage()
-            .persistent()
-            .set(&username_key, &username_to_address);
-
+        env.storage().persistent().remove(&user_key);
+        env.storage().persistent().remove(&username_key);
         env.storage().persistent().remove(&DataKey::Avatar(user));
     }
 }
@@ -134,6 +115,28 @@ mod tests {
         client.update_profile(&user, &avatar_uri);
 
         assert_eq!(client.get_avatar(&user), avatar_uri);
+    }
+
+    #[test]
+    fn test_unregister_user_removes_profile_and_mappings() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let user = Address::generate(&env);
+        let username = String::from_str(&env, "ebube");
+
+        client.register_user(&user, &username);
+        client.update_profile(
+            &user,
+            &String::from_str(&env, "https://example.com/avatar.png"),
+        );
+        client.unregister_user(&user);
+
+        assert!(client.try_get_username(&user).is_err());
+        assert!(client.try_get_address(&username).is_err());
+        assert_eq!(client.get_avatar(&user), String::from_str(&env, ""));
     }
 
     #[test]
