@@ -8,6 +8,7 @@ use crate::db::r#yield::get_current_yield_rate;
 use crate::services::yield_calc::SECONDS_PER_YEAR;
 
 const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
+const EXPO_PUSH_BATCH_SIZE: usize = 100;
 const DEFAULT_YIELD_REPORT_THRESHOLD: i64 = 1_000;
 const DEFAULT_DAILY_INTERVAL_SECS: u64 = 86_400;
 const DEFAULT_WEEKLY_INTERVAL_SECS: u64 = 604_800;
@@ -59,12 +60,12 @@ struct YieldReportCandidate {
 }
 
 #[derive(Serialize)]
-struct ExpoPushMessage<'a> {
-    to: &'a str,
-    title: &'a str,
-    body: &'a str,
+struct ExpoPushMessage {
+    to: String,
+    title: &'static str,
+    body: String,
     data: serde_json::Value,
-    sound: &'a str,
+    sound: &'static str,
 }
 
 /// BE-032: Fire daily and weekly yield summary push notifications.
@@ -115,6 +116,8 @@ async fn send_yield_reports(
     let now = Utc::now();
 
     let mut sent = 0usize;
+    let mut messages = Vec::new();
+    let mut report_user_ids = Vec::new();
     for candidate in candidates {
         let period_start = candidate
             .last_report_at
@@ -124,11 +127,7 @@ async fn send_yield_reports(
             continue;
         }
 
-        let earned = estimate_period_yield(
-            candidate.earning_balance,
-            apy_bps,
-            period_secs,
-        );
+        let earned = estimate_period_yield(candidate.earning_balance, apy_bps, period_secs);
 
         if earned < config.yield_threshold {
             continue;
@@ -142,39 +141,51 @@ async fn send_yield_reports(
             "@{}, you earned {} micro-units in yield. Tap to view details.",
             candidate.username, earned
         );
+        let data = json!({
+            "target": "home",
+            "cadence": match cadence {
+                YieldReportCadence::Daily => "daily",
+                YieldReportCadence::Weekly => "weekly",
+            },
+            "earned": earned,
+        });
 
-        for token in &candidate.push_tokens {
-            if let Err(err) = send_expo_push(
-                token,
+        for token in candidate.push_tokens {
+            messages.push(ExpoPushMessage {
+                to: token,
                 title,
-                &body,
-                json!({
-                    "target": "home",
-                    "cadence": match cadence {
-                        YieldReportCadence::Daily => "daily",
-                        YieldReportCadence::Weekly => "weekly",
-                    },
-                    "earned": earned,
-                }),
-                config.expo_access_token.as_deref(),
-            )
-            .await
-            {
-                tracing::warn!(
-                    user_id = %candidate.user_id,
-                    error = ?err,
-                    "Failed to send yield report push notification"
-                );
-            }
+                body: body.clone(),
+                data: data.clone(),
+                sound: "default",
+            });
         }
 
-        mark_report_sent(pool, candidate.user_id, cadence, now).await?;
+        report_user_ids.push(candidate.user_id);
         sent += 1;
+    }
+
+    let client = reqwest::Client::new();
+    for (batch_index, batch) in expo_push_batches(&messages).enumerate() {
+        if let Err(err) =
+            send_expo_push_batch(&client, batch, config.expo_access_token.as_deref()).await
+        {
+            tracing::warn!(
+                batch_number = batch_index + 1,
+                batch_size = batch.len(),
+                error = ?err,
+                "Failed to send yield report push notification batch"
+            );
+        }
+    }
+
+    for user_id in report_user_ids {
+        mark_report_sent(pool, user_id, cadence, now).await?;
     }
 
     tracing::info!(
         cadence = ?cadence,
         sent,
+        notifications = messages.len(),
         "Yield report notification cycle complete"
     );
     Ok(())
@@ -251,48 +262,47 @@ async fn mark_report_sent(
     let naive = now.naive_utc();
     match cadence {
         YieldReportCadence::Daily => {
-            sqlx::query(
-                "UPDATE users SET last_daily_yield_report_at = $2 WHERE id = $1",
-            )
-            .bind(user_id)
-            .bind(naive)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE users SET last_daily_yield_report_at = $2 WHERE id = $1")
+                .bind(user_id)
+                .bind(naive)
+                .execute(pool)
+                .await?;
         }
         YieldReportCadence::Weekly => {
-            sqlx::query(
-                "UPDATE users SET last_weekly_yield_report_at = $2 WHERE id = $1",
-            )
-            .bind(user_id)
-            .bind(naive)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE users SET last_weekly_yield_report_at = $2 WHERE id = $1")
+                .bind(user_id)
+                .bind(naive)
+                .execute(pool)
+                .await?;
         }
     }
     Ok(())
 }
 
-async fn send_expo_push(
-    token: &str,
-    title: &str,
-    body: &str,
-    data: serde_json::Value,
-    access_token: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let message = ExpoPushMessage {
-        to: token,
-        title,
-        body,
-        data,
-        sound: "default",
-    };
+fn expo_push_batches(messages: &[ExpoPushMessage]) -> impl Iterator<Item = &[ExpoPushMessage]> {
+    messages.chunks(EXPO_PUSH_BATCH_SIZE)
+}
 
-    let mut request = reqwest::Client::new().post(EXPO_PUSH_URL).json(&message);
+fn build_expo_push_request(
+    client: &reqwest::Client,
+    messages: &[ExpoPushMessage],
+    access_token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let mut request = client.post(EXPO_PUSH_URL).json(messages);
     if let Some(token) = access_token.filter(|t| !t.is_empty()) {
         request = request.bearer_auth(token);
     }
+    request
+}
 
-    let response = request.send().await?;
+async fn send_expo_push_batch(
+    client: &reqwest::Client,
+    messages: &[ExpoPushMessage],
+    access_token: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let response = build_expo_push_request(client, messages, access_token)
+        .send()
+        .await?;
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
@@ -336,5 +346,48 @@ mod tests {
         let earned = estimate_period_yield(2_000_000, 500, 86_400);
         let expected = 2_000_000 * 500 * 86_400 / (10_000 * SECONDS_PER_YEAR);
         assert_eq!(earned, expected);
+    }
+
+    #[test]
+    fn expo_push_messages_are_batched_in_groups_of_100() {
+        let messages = (0..201)
+            .map(|index| test_message(format!("ExponentPushToken[{index}]")))
+            .collect::<Vec<_>>();
+
+        let batch_sizes = expo_push_batches(&messages)
+            .map(|batch| batch.len())
+            .collect::<Vec<_>>();
+
+        assert_eq!(batch_sizes, vec![100, 100, 1]);
+    }
+
+    #[test]
+    fn expo_push_request_serializes_a_message_array() {
+        let client = reqwest::Client::new();
+        let messages = vec![
+            test_message("ExponentPushToken[first]".to_string()),
+            test_message("ExponentPushToken[second]".to_string()),
+        ];
+
+        let request = build_expo_push_request(&client, &messages, None)
+            .build()
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+
+        let payload = payload.as_array().unwrap();
+        assert_eq!(payload.len(), 2);
+        assert_eq!(payload[0]["to"], "ExponentPushToken[first]");
+        assert_eq!(payload[1]["to"], "ExponentPushToken[second]");
+    }
+
+    fn test_message(to: String) -> ExpoPushMessage {
+        ExpoPushMessage {
+            to,
+            title: "Test notification",
+            body: "Test body".to_string(),
+            data: json!({ "target": "home" }),
+            sound: "default",
+        }
     }
 }
