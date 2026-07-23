@@ -48,7 +48,10 @@ async fn seed_user(pool: &PgPool, address: &str) -> Uuid {
         "#,
     )
     .bind(address)
-    .bind(format!("user_{}", &address[1..std::cmp::min(10, address.len())]))
+    .bind(format!(
+        "user_{}",
+        &address[1..std::cmp::min(10, address.len())]
+    ))
     .fetch_one(pool)
     .await
     .expect("Failed to seed user")
@@ -95,13 +98,13 @@ async fn test_yield_endpoints_require_auth() {
     let router = yield_router(pool);
 
     // Missing auth header
-    for path in [
-        "/balance",
-        "/history?limit=1&offset=0",
-    ]
-    {
+    for path in ["/balance", "/history?limit=1&offset=0"] {
         let (status, _) = response_json(&router, get_req(path, None)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 
     // Missing auth header for POST
@@ -112,7 +115,11 @@ async fn test_yield_endpoints_require_auth() {
     ] {
         let req = post_req_json(path, None, payload);
         let (status, _) = response_json(&router, req).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 }
 
@@ -142,15 +149,29 @@ async fn test_yield_balance_history_toggle() {
     assert_eq!(status, StatusCode::OK);
 
     // Validate shape & defaults.
-    assert!(body.get("available_balance").is_some(), "available_balance missing");
-    assert!(body.get("earning_balance").is_some(), "earning_balance missing");
-    assert!(body.get("accrued_interest").is_some(), "accrued_interest missing");
-    assert!(body.get("total_earning_balance").is_some(), "total_earning_balance missing");
+    assert!(
+        body.get("available_balance").is_some(),
+        "available_balance missing"
+    );
+    assert!(
+        body.get("earning_balance").is_some(),
+        "earning_balance missing"
+    );
+    assert!(
+        body.get("accrued_interest").is_some(),
+        "accrued_interest missing"
+    );
+    assert!(
+        body.get("total_earning_balance").is_some(),
+        "total_earning_balance missing"
+    );
     assert!(body.get("apy").is_some(), "apy missing");
 
     // auto_earn_enabled default comes from `users.auto_earn_enabled`.
     assert_eq!(
-        body.get("auto_earn_enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+        body.get("auto_earn_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         false,
         "auto_earn_enabled should default to false"
     );
@@ -206,18 +227,18 @@ async fn test_yield_balance_history_toggle() {
     }
 
     // 3) GET /api/yield/history
-    let (hist_status, hist_body) = response_json(
-        &router,
-        get_req("/history?limit=10&offset=0", Some(&token)),
-    )
-    .await;
+    let (hist_status, hist_body) =
+        response_json(&router, get_req("/history?limit=10&offset=0", Some(&token))).await;
     assert_eq!(hist_status, StatusCode::OK);
 
     let items = hist_body
         .get("items")
         .and_then(|v| v.as_array())
         .expect("history items must be array");
-    assert!(!items.is_empty(), "expected at least one yield history item");
+    assert!(
+        !items.is_empty(),
+        "expected at least one yield history item"
+    );
 
     // Validate item fields exist.
     let first = &items[0];
@@ -283,4 +304,3 @@ async fn test_yield_balance_history_toggle() {
     // Avoid unused import warning.
     let _ = AuthUser;
 }
-

@@ -56,18 +56,17 @@ pub async fn get_balance(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 
     let estimate = yield_calc::estimate_for_balance(&balance, Some(apy_bps), Utc::now());
 
-    let auto_earn_enabled =
-        match crate::db::r#yield::get_auto_earn_enabled(&pool, auth.id).await {
-            Ok(enabled) => enabled,
-            Err(e) => {
-                tracing::error!("auto-earn preference fetch error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "Failed to retrieve auto-earn preference" })),
-                )
-                    .into_response();
-            }
-        };
+    let auto_earn_enabled = match crate::db::r#yield::get_auto_earn_enabled(&pool, auth.id).await {
+        Ok(enabled) => enabled,
+        Err(e) => {
+            tracing::error!("auto-earn preference fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve auto-earn preference" })),
+            )
+                .into_response();
+        }
+    };
 
     Json(YieldBalanceResponse {
         available_balance: balance.available_balance,

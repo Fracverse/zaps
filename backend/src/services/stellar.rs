@@ -1,6 +1,6 @@
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 // Stellar/Soroban Horizon & RPC operations client stub
 // This client interacts with Stellar RPC nodes and Horizon endpoints.
@@ -12,7 +12,7 @@ pub struct StellarClient {
 
 impl StellarClient {
     pub fn new(rpc_url: String) -> Self {
-        Self { 
+        Self {
             rpc_url,
             http_client: reqwest::Client::new(),
         }
@@ -37,7 +37,9 @@ impl StellarClient {
                 "params": params
             });
 
-            let response = self.http_client.post(&self.rpc_url)
+            let response = self
+                .http_client
+                .post(&self.rpc_url)
                 .json(&payload)
                 .send()
                 .await;
@@ -48,7 +50,10 @@ impl StellarClient {
                     if status.is_success() {
                         let json_resp: Value = resp.json().await?;
                         return Ok(json_resp);
-                    } else if status.as_u16() == 503 || status.as_u16() == 504 || status.as_u16() == 429 {
+                    } else if status.as_u16() == 503
+                        || status.as_u16() == 504
+                        || status.as_u16() == 429
+                    {
                         // Server errors / rate limits, eligible for retry
                     } else {
                         return Err(format!("RPC call failed with status: {}", status).into());

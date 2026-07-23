@@ -288,10 +288,8 @@ impl YieldVaultContract {
         Self::checkpoint_index(&env);
         let old_apy: u32 = env.storage().instance().get(&APY_KEY).unwrap_or(0);
         env.storage().instance().set(&APY_KEY, &new_apy_bps);
-        env.events().publish(
-            (Symbol::new(&env, "ApyUpdated"),),
-            (old_apy, new_apy_bps),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "ApyUpdated"),), (old_apy, new_apy_bps));
     }
 
     /// Toggle paused state. While paused, new deposits are rejected.
@@ -299,10 +297,8 @@ impl YieldVaultContract {
         caller.require_auth();
         Self::require_owner(&env, &caller);
         env.storage().instance().set(&PAUSED_KEY, &paused);
-        env.events().publish(
-            (Symbol::new(&env, "PauseToggled"),),
-            (paused,),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (paused,));
     }
 
     /// Emergency withdraw path for the owner to recover shares for a user.
