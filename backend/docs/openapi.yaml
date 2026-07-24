@@ -42,6 +42,41 @@ components:
           type: string
           description: Human-readable error message
 
+    Error400:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message describing what was invalid
+        available:
+          type: integer
+          format: int64
+          description: Current available balance, included when a deposit fails due to insufficient funds
+        earning:
+          type: integer
+          format: int64
+          description: Current earning balance, included when a withdrawal fails due to insufficient funds
+
+    Error401:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message describing the authentication failure
+
+    Error429:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message indicating rate limit exceeded
+
     ChallengeResponse:
       type: object
       required:
@@ -538,6 +573,14 @@ paths:
                 $ref: '#/components/schemas/ChallengeResponse'
               example:
                 challenge: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
 
   /api/auth/verify:
     post:
@@ -563,7 +606,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
               example:
                 error: Invalid signature format (must be hex or base64)
         '401':
@@ -571,9 +614,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
               example:
                 error: Signature verification failed
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -603,9 +654,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
               example:
                 error: Missing authorization header
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -640,7 +699,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -677,7 +744,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -707,7 +782,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -742,7 +825,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '404':
           description: Target user not found
           content:
@@ -755,6 +838,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error429'
+              example:
+                error: Too many requests, please try again later.
         '500':
           description: Internal server error
           content:
@@ -784,7 +875,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -814,7 +905,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -844,7 +935,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -878,7 +969,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '500':
           description: Internal server error
           content:
@@ -912,7 +1003,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '500':
           description: Internal server error
           content:
@@ -946,7 +1037,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '500':
           description: Internal server error
           content:
@@ -981,7 +1072,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '404':
           description: Comment not found or not owned by authenticated user
           content:
@@ -1019,7 +1110,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '502':
           description: Allbridge upstream API failure
           content:
@@ -1051,7 +1142,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
         '500':
           description: Internal server error during DB insertion
           content:
@@ -1119,7 +1210,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
               example:
                 error: Missing authorization header
         '500':
@@ -1181,7 +1272,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -1217,7 +1308,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
               examples:
                 non_positive:
                   summary: Non-positive amount
@@ -1233,7 +1324,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -1269,7 +1360,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error400'
               examples:
                 non_positive:
                   summary: Non-positive amount
@@ -1285,7 +1376,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
@@ -1324,7 +1415,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/Error401'
         '500':
           description: Internal server error
           content:
