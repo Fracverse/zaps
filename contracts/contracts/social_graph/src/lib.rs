@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone)]
@@ -97,9 +97,17 @@ impl SocialGraphContract {
             &FriendshipStatus::Active,
         );
         env.storage().persistent().set(
-            &DataKey::Friendship(friend, requester),
+            &DataKey::Friendship(friend.clone(), requester.clone()),
             &FriendshipStatus::Active,
         );
+
+        // Emit a `FriendAdded` event so off-chain indexers and
+        // applications can react when a mutual friendship is established.
+        env.events().publish(
+            (Symbol::new(&env, "FriendAdded"),),
+            (requester, friend),
+        );
+
         Ok(())
     }
 
@@ -134,8 +142,15 @@ impl SocialGraphContract {
             &FriendshipStatus::Removed,
         );
         env.storage().persistent().set(
-            &DataKey::Friendship(friend, user),
+            &DataKey::Friendship(friend.clone(), user.clone()),
             &FriendshipStatus::Removed,
+        );
+
+        // Emit a `FriendRemoved` event so off-chain indexers and
+        // applications can react when a mutual friendship is dissolved.
+        env.events().publish(
+            (Symbol::new(&env, "FriendRemoved"),),
+            (user, friend),
         );
     }
 
@@ -160,7 +175,10 @@ impl SocialGraphContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        Address, Env, IntoVal, Symbol, TryIntoVal, Val,
+    };
 
     fn setup() -> (
         Env,
@@ -195,7 +213,7 @@ mod tests {
 
     #[test]
     fn accept_makes_friendship_mutual() {
-        let (_env, client, user, friend, other) = setup();
+        let (env, client, user, friend, other) = setup();
 
         client.request_friend(&user, &friend);
         client.accept_friend(&friend, &user);
@@ -204,6 +222,21 @@ mod tests {
         assert!(client.is_friend(&friend, &user));
         // Unrelated parties remain unaffected.
         assert!(!client.is_friend(&user, &other));
+
+        // Verify FriendAdded event was emitted with both addresses.
+        let events = env.events().all();
+        let topic_filter: Val = Symbol::new(&env, "FriendAdded").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic_filter) {
+                let (ev_requester, ev_friend): (Address, Address) =
+                    item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev_requester, user);
+                assert_eq!(ev_friend, friend);
+                found = true;
+            }
+        }
+        assert!(found, "FriendAdded event not emitted");
     }
 
     #[test]
@@ -225,7 +258,7 @@ mod tests {
 
     #[test]
     fn remove_friend_unfriends_both_directions() {
-        let (_env, client, user, friend, _other) = setup();
+        let (env, client, user, friend, _other) = setup();
 
         client.request_friend(&user, &friend);
         client.accept_friend(&friend, &user);
@@ -234,6 +267,21 @@ mod tests {
         client.remove_friend(&user, &friend);
         assert!(!client.is_friend(&user, &friend));
         assert!(!client.is_friend(&friend, &user));
+
+        // Verify FriendRemoved event was emitted with both addresses.
+        let events = env.events().all();
+        let topic_filter: Val = Symbol::new(&env, "FriendRemoved").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic_filter) {
+                let (ev_user, ev_friend): (Address, Address) =
+                    item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev_user, user);
+                assert_eq!(ev_friend, friend);
+                found = true;
+            }
+        }
+        assert!(found, "FriendRemoved event not emitted");
     }
 
     #[test]
