@@ -103,10 +103,8 @@ impl SocialGraphContract {
 
         // Emit a `FriendAdded` event so off-chain indexers and
         // applications can react when a mutual friendship is established.
-        env.events().publish(
-            (Symbol::new(&env, "FriendAdded"),),
-            (requester, friend),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "FriendAdded"),), (requester, friend));
 
         Ok(())
     }
@@ -148,10 +146,8 @@ impl SocialGraphContract {
 
         // Emit a `FriendRemoved` event so off-chain indexers and
         // applications can react when a mutual friendship is dissolved.
-        env.events().publish(
-            (Symbol::new(&env, "FriendRemoved"),),
-            (user, friend),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "FriendRemoved"),), (user, friend));
     }
 
     /// Check if two addresses are mutual friends on-chain.
@@ -274,8 +270,7 @@ mod tests {
         let mut found = false;
         for item in events.iter() {
             if item.1.contains(topic_filter) {
-                let (ev_user, ev_friend): (Address, Address) =
-                    item.2.try_into_val(&env).unwrap();
+                let (ev_user, ev_friend): (Address, Address) = item.2.try_into_val(&env).unwrap();
                 assert_eq!(ev_user, user);
                 assert_eq!(ev_friend, friend);
                 found = true;

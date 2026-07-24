@@ -124,11 +124,7 @@ async fn send_yield_reports(
             continue;
         }
 
-        let earned = estimate_period_yield(
-            candidate.earning_balance,
-            apy_bps,
-            period_secs,
-        );
+        let earned = estimate_period_yield(candidate.earning_balance, apy_bps, period_secs);
 
         if earned < config.yield_threshold {
             continue;
@@ -251,22 +247,18 @@ async fn mark_report_sent(
     let naive = now.naive_utc();
     match cadence {
         YieldReportCadence::Daily => {
-            sqlx::query(
-                "UPDATE users SET last_daily_yield_report_at = $2 WHERE id = $1",
-            )
-            .bind(user_id)
-            .bind(naive)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE users SET last_daily_yield_report_at = $2 WHERE id = $1")
+                .bind(user_id)
+                .bind(naive)
+                .execute(pool)
+                .await?;
         }
         YieldReportCadence::Weekly => {
-            sqlx::query(
-                "UPDATE users SET last_weekly_yield_report_at = $2 WHERE id = $1",
-            )
-            .bind(user_id)
-            .bind(naive)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE users SET last_weekly_yield_report_at = $2 WHERE id = $1")
+                .bind(user_id)
+                .bind(naive)
+                .execute(pool)
+                .await?;
         }
     }
     Ok(())
