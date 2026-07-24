@@ -11,6 +11,7 @@ pub enum DataKey {
     User(Address),    // Maps Address -> Username (String)
     Username(String), // Maps Username (String) -> Address
     Avatar(Address),  // Maps Address -> Avatar URI (String)
+    PrivyDid(String), // Maps Privy DID -> wallet Address
 }
 
 #[contractimpl]
@@ -69,6 +70,39 @@ impl UserRegistryContract {
             .persistent()
             .get(&DataKey::Avatar(user))
             .unwrap_or_else(|| String::from_str(&env, ""))
+    }
+
+    /// Register a Privy DID → wallet address mapping and emit a PrivyLinkCreated event.
+    pub fn register_privy_did(env: Env, did: String, wallet: Address) {
+        wallet.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        if env.storage().persistent().has(&did_key) {
+            panic!("DID already registered");
+        }
+        env.storage().persistent().set(&did_key, &wallet);
+        env.events().publish(
+            (soroban_sdk::symbol_short!("privy_add"),),
+            (did, wallet),
+        );
+    }
+
+    /// Remove a Privy DID → wallet address mapping and emit a PrivyLinkRemoved event.
+    pub fn unregister_privy_did(env: Env, did: String, wallet: Address) {
+        wallet.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        let stored_wallet: Address = env
+            .storage()
+            .persistent()
+            .get(&did_key)
+            .unwrap_or_else(|| panic!("DID not registered"));
+        if stored_wallet != wallet {
+            panic!("unauthorized: wallet does not match registered wallet");
+        }
+        env.storage().persistent().remove(&did_key);
+        env.events().publish(
+            (soroban_sdk::symbol_short!("privy_rem"),),
+            (did, wallet),
+        );
     }
 
     /// Unregister a user's profile and mapping
