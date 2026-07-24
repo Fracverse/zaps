@@ -261,7 +261,7 @@ pub async fn process_internal_sweep_deposit(
     sqlx::query(
         r#"
         INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
-        VALUES ($1, $2, 'DEPOSIT', $3, NOW())
+        VALUES ($1, $2, 'SWEEP', $3, NOW())
         "#,
     )
     .bind(user_id)

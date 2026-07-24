@@ -81,6 +81,56 @@ pub async fn get_balance(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 
 // ── #374 — GET /api/yield/history ─────────────────────────────────────────
 
+/// Friendly categories for yield transactions logged in history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum YieldTransactionType {
+    Deposit,
+    Withdraw,
+    Earned,
+    Sweep,
+    Reward,
+}
+
+impl YieldTransactionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deposit => "DEPOSIT",
+            Self::Withdraw => "WITHDRAW",
+            Self::Earned => "EARNED",
+            Self::Sweep => "SWEEP",
+            Self::Reward => "REWARD",
+        }
+    }
+}
+
+impl std::fmt::Display for YieldTransactionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for YieldTransactionType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_uppercase().as_str() {
+            "DEPOSIT" => Self::Deposit,
+            "WITHDRAW" => Self::Withdraw,
+            "EARNED" => Self::Earned,
+            "SWEEP" | "AUTO_SWEEP" => Self::Sweep,
+            "REWARD" | "YIELD_REWARD" => Self::Reward,
+            _ => Self::Deposit,
+        })
+    }
+}
+
+impl From<&str> for YieldTransactionType {
+    fn from(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Deposit)
+    }
+}
+
 #[derive(Deserialize)]
 pub struct HistoryQuery {
     pub limit: Option<i64>,
@@ -92,7 +142,7 @@ pub struct YieldHistoryItem {
     pub id: String,
     pub tx_hash: String,
     #[serde(rename = "type")]
-    pub tx_type: String,
+    pub tx_type: YieldTransactionType,
     pub amount: i64,
     pub created_at: String,
 }
@@ -161,10 +211,11 @@ pub async fn get_history(
         .map(|r| {
             let id: Uuid = r.get("id");
             let created_at: chrono::NaiveDateTime = r.get("created_at");
+            let raw_type: String = r.get("type");
             YieldHistoryItem {
                 id: id.to_string(),
                 tx_hash: r.get("tx_hash"),
-                tx_type: r.get("type"),
+                tx_type: raw_type.as_str().into(),
                 amount: r.get("amount"),
                 created_at: created_at.to_string(),
             }
