@@ -134,8 +134,13 @@ mod tests {
         );
         client.unregister_user(&user);
 
-        assert!(client.try_get_username(&user).is_err());
-        assert!(client.try_get_address(&username).is_err());
+        env.as_contract(&contract_id, || {
+            assert!(!env.storage().persistent().has(&DataKey::User(user.clone())));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::Username(username.clone())));
+        });
         assert_eq!(client.get_avatar(&user), String::from_str(&env, ""));
     }
 
