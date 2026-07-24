@@ -36,13 +36,13 @@ jobs:
         run: npm ci
 
       - name: Lint
-        run: npm run lint || true
+        run: npm run lint
 
       - name: Format check
-        run: npm run format:check || true
+        run: npm run format:check
 
       - name: Test
-        run: npm test -- --watchAll=false --passWithNoTests || true
+        run: npm test -- --watchAll=false --passWithNoTests
         env:
           CI: true
 
@@ -77,7 +77,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://postgres:password@localhost:5432/ZAPS
       ZAPS_DATABASE__URL: postgres://postgres:password@localhost:5432/ZAPS
       ZAPS_CACHE__REDIS_URL: redis://localhost:6379
       ZAPS_QUEUE__REDIS_URL: redis://localhost:6379
@@ -96,19 +95,19 @@ jobs:
 
       - name: Check
         working-directory: ./backend
-        run: cargo check || true
+        run: cargo check
 
       - name: Format
         working-directory: ./backend
-        run: cargo fmt --all -- --check || true
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         working-directory: ./backend
-        run: cargo clippy -- -D warnings || true
+        run: cargo clippy -- -D warnings
 
       - name: Test
         working-directory: ./backend
-        run: cargo test || true
+        run: cargo test
 
   # ─── Contracts ───────────────────────────────────────────────────────────────
   contracts:
@@ -119,7 +118,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.91.0
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
@@ -129,19 +127,19 @@ jobs:
 
       - name: Format
         working-directory: ./contracts
-        run: cargo fmt --all -- --check || true
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         working-directory: ./contracts
-        run: cargo clippy --all-targets --all-features -- -D warnings || true
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build
         working-directory: ./contracts
-        run: cargo build --release --workspace || true
+        run: cargo build --release --workspace
 
       - name: Test
         working-directory: ./contracts
-        run: cargo test --workspace || true
+        run: cargo test --workspace
 
   # ─── All checks passed gate ───────────────────────────────────────────────────
   ci-pass:

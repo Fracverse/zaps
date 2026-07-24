@@ -4,7 +4,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent};
+use super::parser::{parse_zaps_event, FriendAddedEvent, FriendRemovedEvent, ZapsEvent};
 use crate::db::r#yield::{
     log_yield_rate_update_tx, process_yield_deposit_tx, process_yield_withdrawal_tx,
 };
@@ -100,6 +100,12 @@ pub async fn process_event_batch_with_guard(
                 ZapsEvent::YieldRateUpdated(e) => {
                     log_yield_rate_update_tx(&mut tx, e.apy).await?;
                 }
+                ZapsEvent::FriendAdded(e) => {
+                    process_friend_added_event(e, &mut tx).await?;
+                }
+                ZapsEvent::FriendRemoved(e) => {
+                    process_friend_removed_event(e, &mut tx).await?;
+                }
                 ZapsEvent::Unknown => {
                     if let Some(payment_event) = extract_social_payment_event(event) {
                         process_social_payment_event(payment_event, &mut tx).await?;
@@ -157,6 +163,47 @@ pub async fn process_social_payment_event(
     Ok(())
 }
 
+async fn process_friend_added_event(
+    event: FriendAddedEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let requester_id = get_or_create_user_id_tx(tx, &event.requester).await?;
+    let target_id = get_or_create_user_id_tx(tx, &event.target).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO friendships (user_id, friend_id, status)
+        VALUES ($1, $2, 'ACCEPTED')
+        ON CONFLICT (user_id, friend_id) DO UPDATE
+        SET status = 'ACCEPTED'
+        "#,
+    )
+    .bind(requester_id)
+    .bind(target_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn process_friend_removed_event(
+    event: FriendRemovedEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let requester_id = get_or_create_user_id_tx(tx, &event.requester).await?;
+    let target_id = get_or_create_user_id_tx(tx, &event.target).await?;
+
+    sqlx::query(
+        "DELETE FROM friendships WHERE user_id = $1 AND friend_id = $2",
+    )
+    .bind(requester_id)
+    .bind(target_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 async fn poll_soroban_events(
     rpc_url: &str,
     start_ledger: i64,
@@ -199,6 +246,8 @@ fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Val
         json!({ "topics": [[{ "type": "symbol", "value": "YieldDeposited" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldWithdrawn" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
+        json!({ "topics": [[{ "type": "symbol", "value": "FriendAdded" }]] }),
+        json!({ "topics": [[{ "type": "symbol", "value": "FriendRemoved" }]] }),
     ];
 
     if let Some(contract_id) = contract_id.filter(|value| !value.is_empty()) {

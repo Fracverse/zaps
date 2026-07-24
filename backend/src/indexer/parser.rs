@@ -18,10 +18,24 @@ pub struct YieldRateUpdatedEvent {
     pub tx_hash: String,
 }
 
+pub struct FriendAddedEvent {
+    pub requester: String,
+    pub target: String,
+    pub tx_hash: String,
+}
+
+pub struct FriendRemovedEvent {
+    pub requester: String,
+    pub target: String,
+    pub tx_hash: String,
+}
+
 pub enum ZapsEvent {
     YieldDeposited(YieldDepositedEvent),
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
+    FriendAdded(FriendAddedEvent),
+    FriendRemoved(FriendRemovedEvent),
     Unknown,
 }
 
@@ -92,6 +106,26 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
 
             ZapsEvent::YieldRateUpdated(YieldRateUpdatedEvent { apy, tx_hash })
         }
+        "FriendAdded" => {
+            let (requester, target) = extract_friend_pair(value);
+            let tx_hash = extract_tx_hash(value);
+
+            ZapsEvent::FriendAdded(FriendAddedEvent {
+                requester,
+                target,
+                tx_hash,
+            })
+        }
+        "FriendRemoved" => {
+            let (requester, target) = extract_friend_pair(value);
+            let tx_hash = extract_tx_hash(value);
+
+            ZapsEvent::FriendRemoved(FriendRemovedEvent {
+                requester,
+                target,
+                tx_hash,
+            })
+        }
         _ => ZapsEvent::Unknown,
     }
 }
@@ -136,6 +170,52 @@ pub fn extract_tx_hash(value: &Value) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+pub fn extract_friend_pair(value: &Value) -> (String, String) {
+    let requester = find_nested_string(value, "requester")
+        .or_else(|| find_nested_string(value, "user"));
+    let target = find_nested_string(value, "target")
+        .or_else(|| find_nested_string(value, "friend"));
+
+    if let (Some(r), Some(t)) = (requester, target) {
+        return (r, t);
+    }
+
+    let addrs = collect_addresses(value);
+    if addrs.len() >= 2 {
+        return (addrs[0].clone(), addrs[1].clone());
+    }
+
+    (
+        find_nested_string(value, "requester").unwrap_or_default(),
+        find_nested_string(value, "target").unwrap_or_default(),
+    )
+}
+
+fn collect_addresses(value: &Value) -> Vec<String> {
+    let mut results = Vec::new();
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(s)) = map.get("address") {
+                results.push(s.clone());
+            }
+            for v in map.values() {
+                results.extend(collect_addresses(v));
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                results.extend(collect_addresses(item));
+            }
+        }
+        Value::String(s) => {
+            if (s.starts_with('G') || s.starts_with('C')) && s.len() == 56 {
+                results.push(s.clone());
+            }
+        }
+        _ => {}
+    }
+    results
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +272,44 @@ mod tests {
     fn extract_event_topic_returns_none_for_missing_topic() {
         let event = serde_json::json!({ "other_field": "value" });
         assert_eq!(extract_event_topic(&event), None);
+    }
+    #[test]
+    fn parses_friend_added_event_with_named_fields() {
+        let payload = serde_json::json!({
+            "requester": "GA11111111111111111111111111111111111111111111111111111111",
+            "target": "GA22222222222222222222222222222222222222222222222222222222",
+            "tx_hash": "tx123"
+        });
+
+        match parse_zaps_event("FriendAdded", &payload) {
+            ZapsEvent::FriendAdded(e) => {
+                assert_eq!(e.requester, "GA11111111111111111111111111111111111111111111111111111111");
+                assert_eq!(e.target, "GA22222222222222222222222222222222222222222222222222222222");
+                assert_eq!(e.tx_hash, "tx123");
+            }
+            _ => panic!("Expected FriendAdded event"),
+        }
+    }
+
+    #[test]
+    fn parses_friend_removed_event_with_array_data() {
+        let payload = serde_json::json!({
+            "data": {
+                "vec": [
+                    { "address": "GA11111111111111111111111111111111111111111111111111111111" },
+                    { "address": "GA22222222222222222222222222222222222222222222222222222222" }
+                ]
+            },
+            "tx_hash": "tx456"
+        });
+
+        match parse_zaps_event("FriendRemoved", &payload) {
+            ZapsEvent::FriendRemoved(e) => {
+                assert_eq!(e.requester, "GA11111111111111111111111111111111111111111111111111111111");
+                assert_eq!(e.target, "GA22222222222222222222222222222222222222222222222222222222");
+                assert_eq!(e.tx_hash, "tx456");
+            }
+            _ => panic!("Expected FriendRemoved event"),
+        }
     }
 }
