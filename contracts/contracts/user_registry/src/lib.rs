@@ -11,6 +11,7 @@ pub enum DataKey {
     User(Address),    // Maps Address -> Username (String)
     Username(String), // Maps Username (String) -> Address
     Avatar(Address),  // Maps Address -> Avatar URI (String)
+    PrivyDid(String), // Maps Privy DID -> wallet Address
 }
 
 #[contractimpl]
@@ -69,6 +70,52 @@ impl UserRegistryContract {
             .persistent()
             .get(&DataKey::Avatar(user))
             .unwrap_or_else(|| String::from_str(&env, ""))
+    }
+
+    /// Register a Privy DID → wallet address mapping.
+    /// Validates the DID has the required "did:privy:" prefix and is not already registered.
+    pub fn register_privy_did(env: Env, did: String, wallet: Address) {
+        wallet.require_auth();
+
+        // Validate DID format: must start with "did:privy:" and have content after prefix.
+        // copy_into_slice requires an exact-length buffer, so we allocate enough for the prefix
+        // check and compare only the first 10 bytes.
+        const PREFIX: &[u8] = b"did:privy:";
+        const PREFIX_LEN: u32 = 10;
+        if did.len() <= PREFIX_LEN {
+            panic!("invalid DID format: must start with did:privy:");
+        }
+        // Build a String of exactly PREFIX_LEN bytes from the DID for prefix comparison.
+        // We do this by comparing against the known prefix string directly.
+        // Since Soroban String PartialEq compares full strings, build one from the same bytes.
+        // Strategy: Copy the full DID into a fixed stack buffer and inspect prefix bytes.
+        // Maximum DID length for validation: PREFIX_LEN + 256 (well within contract limits).
+        const MAX_LEN: usize = 266;
+        let did_len = did.len() as usize;
+        if did_len > MAX_LEN {
+            panic!("DID too long");
+        }
+        let mut buf = [0u8; MAX_LEN];
+        did.copy_into_slice(&mut buf[..did_len]);
+        if &buf[..PREFIX_LEN as usize] != PREFIX {
+            panic!("invalid DID format: must start with did:privy:");
+        }
+
+        // Prevent duplicate DID registrations
+        let did_key = DataKey::PrivyDid(did.clone());
+        if env.storage().persistent().has(&did_key) {
+            panic!("DID already registered");
+        }
+
+        env.storage().persistent().set(&did_key, &wallet);
+    }
+
+    /// Get the wallet address registered for a Privy DID
+    pub fn get_wallet_for_did(env: Env, did: String) -> Address {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PrivyDid(did))
+            .unwrap_or_else(|| panic!("DID not registered"))
     }
 
     /// Unregister a user's profile and mapping
