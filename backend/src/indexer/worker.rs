@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use super::parser::{parse_zaps_event, ZapsEvent};
 use crate::db::r#yield::{
-    log_yield_rate_update, process_yield_deposit_tx, process_yield_withdrawal_tx,
+    log_yield_rate_update_tx, process_yield_deposit_tx, process_yield_withdrawal_tx,
 };
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
@@ -53,68 +53,11 @@ pub async fn run(
                     next_cursor = cursor + 1;
                 }
 
-                // AC1 + AC2: Open one transaction; write all events AND the new
-                // checkpoint inside it so they commit or roll back atomically.
-                let mut tx = pool.begin().await?;
-
-                for event in &events {
-                    // BE-043: Decode the XDR topic from the Soroban RPC event payload.
-                    // Falls back to heuristic field scanning if topics are absent.
-                    let topic = super::parser::extract_event_topic(event)
-                        .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
-                        .or_else(|| super::parser::find_nested_string(event, "event_type"))
-                        .unwrap_or_default();
-
-                    match parse_zaps_event(&topic, event) {
-                        ZapsEvent::YieldDeposited(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool)
-                                .await
-                                .unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) =
-                                process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash)
-                                    .await
-                            {
-                                tracing::warn!("Failed to process YieldDeposited event: {err}");
-                            }
-                        }
-                        ZapsEvent::YieldWithdrawn(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool)
-                                .await
-                                .unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) =
-                                process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash)
-                                    .await
-                            {
-                                tracing::warn!("Failed to process YieldWithdrawn event: {err}");
-                            }
-                        }
-                        ZapsEvent::YieldRateUpdated(e) => {
-                            if let Err(err) = log_yield_rate_update(&pool, e.apy).await {
-                                tracing::warn!("Failed to process YieldRateUpdated event: {err}");
-                            }
-                        }
-                        ZapsEvent::Unknown => {
-                            if let Some(payment_event) = extract_social_payment_event(event) {
-                                if let Err(err) =
-                                    process_social_payment_event(payment_event, &pool, &mut tx)
-                                        .await
-                                {
-                                    tracing::warn!(
-                                        "Failed to process Stellar payment event: {err}"
-                                    );
-                                }
-                            }
-                        }
-                    }
+                // BE-045: Process batch within transaction guard to ensure explicit rollback on error
+                if process_event_batch_with_guard(&pool, &events, next_cursor).await.is_ok() {
+                    cursor = next_cursor;
+                    tracing::debug!("Indexer cursor advanced to ledger {cursor}");
                 }
-
-                // AC1: Persist the new ledger checkpoint inside the same transaction.
-                persist_cursor(&mut tx, next_cursor).await?;
-
-                tx.commit().await?;
-
-                cursor = next_cursor;
-                tracing::debug!("Indexer cursor advanced to ledger {cursor}");
 
                 tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
             }
@@ -128,15 +71,71 @@ pub async fn run(
     }
 }
 
+/// BE-045: Process a batch of events within a guarded PostgreSQL transaction block.
+/// If any parser error or database query fails during processing, `tx.rollback().await`
+/// is explicitly called to release the connection back to the pool immediately without leaking.
+pub async fn process_event_batch_with_guard(
+    pool: &PgPool,
+    events: &[Value],
+    next_cursor: i64,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut tx = pool.begin().await?;
+
+    let process_res: Result<(), Box<dyn Error + Send + Sync>> = async {
+        for event in events {
+            let topic = super::parser::extract_event_topic(event)
+                .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
+                .or_else(|| super::parser::find_nested_string(event, "event_type"))
+                .unwrap_or_default();
+
+            match parse_zaps_event(&topic, event) {
+                ZapsEvent::YieldDeposited(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldWithdrawn(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldRateUpdated(e) => {
+                    log_yield_rate_update_tx(&mut tx, e.apy).await?;
+                }
+                ZapsEvent::Unknown => {
+                    if let Some(payment_event) = extract_social_payment_event(event) {
+                        process_social_payment_event(payment_event, &mut tx).await?;
+                    }
+                }
+            }
+        }
+
+        persist_cursor(&mut tx, next_cursor).await?;
+        Ok(())
+    }
+    .await;
+
+    match process_res {
+        Ok(()) => {
+            tx.commit().await?;
+            Ok(())
+        }
+        Err(err) => {
+            tracing::error!("Transaction failed during indexer event processing, rolling back: {err}");
+            if let Err(rb_err) = tx.rollback().await {
+                tracing::warn!("Failed to roll back database transaction: {rb_err}");
+            }
+            Err(err)
+        }
+    }
+}
+
 /// Process a single payment event within the provided transaction.
 /// Taking `&mut Transaction` ensures this write is part of the caller's atomic scope.
 pub async fn process_social_payment_event(
     event: SocialPaymentEvent,
-    pool: &PgPool,
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let sender_id = get_or_create_user_id(&event.sender, pool).await?;
-    let receiver_id = get_or_create_user_id(&event.receiver, pool).await?;
+    let sender_id = get_or_create_user_id_tx(tx, &event.sender).await?;
+    let receiver_id = get_or_create_user_id_tx(tx, &event.receiver).await?;
 
     sqlx::query(
         r#"
@@ -348,6 +347,29 @@ async fn get_or_create_user_id(
     .bind(&username)
     .bind(Some(&username))
     .fetch_one(pool)
+    .await?;
+
+    Ok(row.get("id"))
+}
+
+async fn get_or_create_user_id_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    address: &str,
+) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+    let username = slugify_address(address);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO users (address, username, display_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (address)
+        DO UPDATE SET username = COALESCE(users.username, EXCLUDED.username)
+        RETURNING id
+        "#,
+    )
+    .bind(address)
+    .bind(&username)
+    .bind(Some(&username))
+    .fetch_one(&mut **tx)
     .await?;
 
     Ok(row.get("id"))

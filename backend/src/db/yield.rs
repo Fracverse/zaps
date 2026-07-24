@@ -139,6 +139,18 @@ pub async fn process_yield_withdrawal_tx(
 
 /// Log an APY update
 pub async fn log_yield_rate_update(pool: &PgPool, apy: i32) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    log_yield_rate_update_tx(&mut tx, apy).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Same as above, but accepts an existing transaction so the rate update can
+/// participate in a larger atomic batch.
+pub async fn log_yield_rate_update_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    apy: i32,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT INTO yield_rates_history (apy, created_at)
@@ -146,7 +158,7 @@ pub async fn log_yield_rate_update(pool: &PgPool, apy: i32) -> Result<(), sqlx::
         "#,
     )
     .bind(apy)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
