@@ -18,10 +18,20 @@ pub struct YieldRateUpdatedEvent {
     pub tx_hash: String,
 }
 
+/// SC-024 / BE-061: emitted when the vault compounds interest and publishes a
+/// new yield index. Payload: `(elapsed_ledgers, added_yield, new_index)`.
+pub struct YieldAccruedEvent {
+    pub elapsed_ledgers: i64,
+    pub added_yield: i64,
+    pub new_index: i64,
+    pub tx_hash: String,
+}
+
 pub enum ZapsEvent {
     YieldDeposited(YieldDepositedEvent),
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
+    YieldAccrued(YieldAccruedEvent),
     Unknown,
 }
 
@@ -91,6 +101,23 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
             let tx_hash = extract_tx_hash(value);
 
             ZapsEvent::YieldRateUpdated(YieldRateUpdatedEvent { apy, tx_hash })
+        }
+        "YieldAccrued" => {
+            let elapsed_ledgers = find_nested_i64(value, "elapsed_ledgers")
+                .or_else(|| find_nested_i64(value, "elapsed"))
+                .unwrap_or_default();
+            let added_yield = find_nested_i64(value, "added_yield").unwrap_or_default();
+            let new_index = find_nested_i64(value, "new_index")
+                .or_else(|| find_nested_i64(value, "index"))
+                .unwrap_or_default();
+            let tx_hash = extract_tx_hash(value);
+
+            ZapsEvent::YieldAccrued(YieldAccruedEvent {
+                elapsed_ledgers,
+                added_yield,
+                new_index,
+                tx_hash,
+            })
         }
         _ => ZapsEvent::Unknown,
     }
@@ -186,6 +213,28 @@ mod tests {
             extract_event_topic(&event),
             Some("YieldWithdrawn".to_string())
         );
+    }
+
+    #[test]
+    fn parses_yield_accrued_payload() {
+        let payload = serde_json::json!({
+            "value": {
+                "elapsed_ledgers": 120,
+                "added_yield": 45_000,
+                "new_index": 1_004_500,
+                "tx_hash": "accrue123"
+            }
+        });
+
+        match parse_zaps_event("YieldAccrued", &payload) {
+            ZapsEvent::YieldAccrued(event) => {
+                assert_eq!(event.elapsed_ledgers, 120);
+                assert_eq!(event.added_yield, 45_000);
+                assert_eq!(event.new_index, 1_004_500);
+                assert_eq!(event.tx_hash, "accrue123");
+            }
+            _ => panic!("expected a YieldAccrued event"),
+        }
     }
 
     #[test]
