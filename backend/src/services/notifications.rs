@@ -208,14 +208,15 @@ async fn load_report_candidates(
             b.earning_balance,
             b.last_yield_sync_at,
             {report_column} AS last_report_at,
-            COALESCE(
-                array_agg(t.expo_push_token) FILTER (WHERE t.expo_push_token IS NOT NULL),
-                '{{}}'
+            array_agg(t.expo_push_token) FILTER (
+                WHERE t.expo_push_token IS NOT NULL AND t.expo_push_token <> ''
             ) AS push_tokens
         FROM users u
         JOIN user_yield_balances b ON b.user_id = u.id
-        LEFT JOIN user_push_tokens t ON t.user_id = u.id
+        JOIN user_push_tokens t ON t.user_id = u.id
         WHERE b.earning_balance > 0
+          AND t.expo_push_token IS NOT NULL
+          AND t.expo_push_token <> ''
         GROUP BY u.id, u.username, b.earning_balance, b.last_yield_sync_at, {report_column}
         "#
     );
