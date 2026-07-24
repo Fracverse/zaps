@@ -367,9 +367,28 @@ async fn get_or_create_user_id(
     Ok(row.get("id"))
 }
 
+const ADDRESS_SLUG_SKIP_CHARS: usize = 1;
+const ADDRESS_SLUG_TAKE_CHARS: usize = 14;
+const DEFAULT_ADDRESS_SLUG: &str = "u_unknown";
+
+/// Derive a short username slug from a chain address. Bounds are checked in
+/// terms of character counts (not byte offsets) before slicing so malformed
+/// or unexpectedly short/multibyte addresses can never panic; anything too
+/// short to slice falls back to a default placeholder slug.
 fn slugify_address(address: &str) -> String {
     let trimmed = address.trim();
-    let snippet = trimmed.get(1..15).unwrap_or(trimmed);
+    let char_count = trimmed.chars().count();
+
+    if char_count < ADDRESS_SLUG_SKIP_CHARS + ADDRESS_SLUG_TAKE_CHARS {
+        return DEFAULT_ADDRESS_SLUG.to_string();
+    }
+
+    let snippet: String = trimmed
+        .chars()
+        .skip(ADDRESS_SLUG_SKIP_CHARS)
+        .take(ADDRESS_SLUG_TAKE_CHARS)
+        .collect();
+
     format!("u_{}", snippet.to_lowercase())
 }
 
@@ -395,6 +414,37 @@ mod tests {
         assert_eq!(compute_backoff_delay(0), INITIAL_BACKOFF);
         assert_eq!(compute_backoff_delay(1), Duration::from_secs(2));
         assert_eq!(compute_backoff_delay(6), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn slugifies_a_well_formed_address() {
+        let slug = slugify_address("GABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+        assert_eq!(slug, "u_abcdefghijklmn");
+    }
+
+    #[test]
+    fn falls_back_to_default_slug_for_short_addresses() {
+        assert_eq!(slugify_address(""), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("G"), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("short"), DEFAULT_ADDRESS_SLUG);
+    }
+
+    #[test]
+    fn never_panics_on_multibyte_or_boundary_lengths() {
+        // Multibyte characters must not cause a byte-index panic when slicing.
+        let multibyte: String = std::iter::repeat('é').take(20).collect();
+        assert_eq!(
+            slugify_address(&multibyte),
+            format!("u_{}", "é".repeat(14))
+        );
+
+        // Exactly at the minimum char count boundary (1 skipped + 14 taken).
+        let exact = "G".repeat(15);
+        assert_eq!(slugify_address(&exact), format!("u_{}", "g".repeat(14)));
+
+        // One char short of the boundary falls back to the default slug.
+        let one_short = "G".repeat(14);
+        assert_eq!(slugify_address(&one_short), DEFAULT_ADDRESS_SLUG);
     }
 
     #[test]
