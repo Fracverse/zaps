@@ -82,7 +82,7 @@ impl UserRegistryContract {
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
-    /// Register a Privy DID → wallet address mapping and emit a PrivyLinkCreated event.
+    /// Register a Privy DID → wallet address mapping
     pub fn register_privy_did(env: Env, did: String, wallet: Address) {
         wallet.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
@@ -93,10 +93,6 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::WalletDid(wallet.clone()), &did);
-        env.events().publish(
-            (soroban_sdk::symbol_short!("privy_add"),),
-            (did, wallet),
-        );
     }
 
     /// Update the wallet address for an existing Privy DID mapping.
@@ -112,9 +108,11 @@ impl UserRegistryContract {
         if stored_wallet != old_wallet {
             panic!("unauthorized: old wallet does not match registered wallet");
         }
+        // Remove old reverse mapping
         env.storage()
             .persistent()
             .remove(&DataKey::WalletDid(old_wallet.clone()));
+        // Update forward and reverse mappings
         env.storage().persistent().set(&did_key, &new_wallet);
         env.storage()
             .persistent()
@@ -122,7 +120,7 @@ impl UserRegistryContract {
     }
 
     /// Admin recovery: reassign a DID mapping to a new wallet.
-    /// Requires authorization from the contract admin.
+    /// Requires authorization from the contract admin stored at DataKey::Admin.
     pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
         let admin: Address = env
             .storage()
@@ -131,6 +129,7 @@ impl UserRegistryContract {
             .unwrap_or_else(|| panic!("admin not set"));
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
+        // Remove old reverse mapping if present
         if let Some(old_wallet) = env
             .storage()
             .persistent()
