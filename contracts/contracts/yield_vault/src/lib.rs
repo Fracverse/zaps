@@ -341,6 +341,8 @@ impl YieldVaultContract {
         let shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
         assert!(shares > 0, "no shares to withdraw");
 
+        Self::checkpoint_index(&env);
+
         let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
         let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
 
