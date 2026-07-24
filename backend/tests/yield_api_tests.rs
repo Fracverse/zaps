@@ -25,9 +25,13 @@ async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .expect("Set TEST_DATABASE_URL or DATABASE_URL to run integration tests");
-    PgPool::connect(&url)
+    let pool = PgPool::connect(&url)
         .await
-        .expect("Failed to connect to test database")
+        .expect("Failed to connect to test database");
+    zaps_backend::db::run_migrations(&pool)
+        .await
+        .expect("Failed to apply test database migrations");
+    pool
 }
 
 fn yield_router(pool: PgPool) -> Router {
