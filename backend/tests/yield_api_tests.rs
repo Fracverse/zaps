@@ -34,6 +34,11 @@ async fn test_pool() -> PgPool {
     pool
 }
 
+fn test_address(prefix: &str, run: &str) -> String {
+    let padding = 56 - prefix.len() - run.len();
+    format!("{prefix}{run}{}", "X".repeat(padding))
+}
+
 fn yield_router(pool: PgPool) -> Router {
     // Build the yield-only router at the same paths used by the app.
     zaps_backend::api::yield_routes(pool)
@@ -135,10 +140,7 @@ async fn test_yield_balance_history_toggle() {
 
     // This address string is what the AuthUser extractor maps from JWT `sub`.
     // It may not be a real Stellar address; the extractor only uses it as an opaque key.
-    let address = format!(
-        "GTESTYIELDUSER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GTESTYIELDUSER", &run);
     let user_id = seed_user(&pool, &address).await;
 
     // Token mapping:
