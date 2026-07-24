@@ -348,3 +348,34 @@ fn test_full_lifecycle_deposit_yield_withdraw() {
     assert_eq!(client.shares_of(&depositor), shares - half_shares);
     assert!(client.total_assets() > 0);
 }
+
+#[test]
+fn test_pause_unpause_and_deposit_rejection() {
+    let (_env, client, _contract_id, owner, depositor, _token) = setup();
+
+    client.pause(&owner);
+
+    let res = client.try_deposit(&depositor, &1_000_000);
+    assert!(res.is_err(), "deposit must fail when vault is paused");
+
+    client.unpause(&owner);
+    client.deposit(&depositor, &1_000_000);
+    assert_eq!(client.shares_of(&depositor), 1_000_000);
+}
+
+#[test]
+fn test_emergency_exit_rescues_assets() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 2_000_000i128;
+
+    client.deposit(&depositor, &amount);
+    let _shares = client.shares_of(&depositor);
+
+    client.pause(&owner);
+
+    client.emergency_exit(&depositor);
+
+    assert_eq!(client.shares_of(&depositor), 0);
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT);
+}

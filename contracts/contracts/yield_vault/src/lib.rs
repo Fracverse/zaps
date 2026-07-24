@@ -316,6 +316,69 @@ impl YieldVaultContract {
             .publish((Symbol::new(&env, "PauseToggled"),), (paused,));
     }
 
+    /// Pause vault deposits in case of security incidents.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &true);
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (true,));
+    }
+
+    /// Unpause vault deposits.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &false);
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (false,));
+    }
+
+    /// Emergency exit for users to rescue assets directly by redeeming all their shares.
+    pub fn emergency_exit(env: Env, user: Address) {
+        user.require_auth();
+        let user_key = DataKey::UserShares(user.clone());
+        let shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
+        assert!(shares > 0, "no shares to withdraw");
+
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+
+        let assets_out = if tot_shares > 0 {
+            shares
+                .checked_mul(tot_assets + VIRTUAL_OFFSET)
+                .expect("overflow")
+                .checked_div(tot_shares + VIRTUAL_OFFSET)
+                .expect("divide by zero")
+        } else {
+            shares
+        };
+        assert!(assets_out > 0, "withdrawal too small");
+
+        sandbox_protocol::redeem(&env, assets_out);
+
+        env.storage().persistent().set(&user_key, &0i128);
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
+        let vault_addr = env.current_contract_address();
+        token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+
+        env.events().publish(
+            (Symbol::new(&env, "EmergencyExit"),),
+            (user, assets_out, shares),
+        );
+    }
+
     /// Emergency withdraw path for the owner to recover shares for a user.
     pub fn emergency_withdraw(env: Env, caller: Address, user: Address, shares: i128) {
         caller.require_auth();
