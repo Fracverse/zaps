@@ -22,6 +22,10 @@ const MAX_APY_BPS: u32 = 2_000;
 /// Precision factor used in all fixed-point math (1e8).
 const PRECISION: i128 = 100_000_000;
 
+/// SC-051: Virtual offset (1e8) added to both shares and assets in exchange rate
+/// calculations to prevent the ERC-4626 inflation attack.
+const VIRTUAL_OFFSET: i128 = 100_000_000;
+
 /// Mock lending protocol annualized reward rate (basis points).
 #[cfg(any(feature = "mock-protocol", test))]
 const MOCK_PROTOCOL_REWARD_BPS: i128 = 650; // 6.50%
@@ -252,7 +256,20 @@ impl YieldVaultContract {
         sandbox_protocol::supply(&env, amount);
 
         let index = Self::current_index(&env);
-        let shares = amount.checked_mul(PRECISION).expect("overflow") / index;
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+
+        // SC-051: Use virtual shares/assets offset to prevent inflation attack.
+        // shares_minted = amount * (total_shares + VIRTUAL_OFFSET) / (total_assets + VIRTUAL_OFFSET)
+        // At genesis (both zero) this simplifies to amount * 1, identical to the prior formula.
+        let virtual_shares = tot_shares + VIRTUAL_OFFSET;
+        let virtual_assets = tot_assets + VIRTUAL_OFFSET;
+        let shares = amount
+            .checked_mul(virtual_shares)
+            .expect("overflow")
+            .checked_div(virtual_assets)
+            .expect("divide by zero");
+        let _ = index; // index still used by withdraw path; not needed here with virtual formula
         assert!(shares > 0, "deposit too small");
 
         // Update user shares
@@ -263,8 +280,6 @@ impl YieldVaultContract {
             .set(&user_key, &(prev_shares + shares));
 
         // Update totals
-        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
-        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
         env.storage()
             .instance()
             .set(&SHARES_KEY, &(tot_shares + shares));
@@ -312,8 +327,14 @@ impl YieldVaultContract {
         assert!(user_shares >= shares, "insufficient shares");
 
         Self::checkpoint_index(&env);
-        let index = Self::current_index(&env);
-        let assets_out = shares.checked_mul(index).expect("overflow") / PRECISION;
+
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+        let assets_out = shares
+            .checked_mul(tot_assets + VIRTUAL_OFFSET)
+            .expect("overflow")
+            .checked_div(tot_shares + VIRTUAL_OFFSET)
+            .expect("divide by zero");
         assert!(assets_out > 0, "withdrawal too small");
 
         sandbox_protocol::redeem(&env, assets_out);
@@ -321,8 +342,6 @@ impl YieldVaultContract {
         env.storage()
             .persistent()
             .set(&user_key, &(user_shares - shares));
-        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
-        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
         env.storage()
             .instance()
             .set(&SHARES_KEY, &(tot_shares - shares).max(0));
@@ -347,7 +366,7 @@ impl YieldVaultContract {
     // ─── SC-018: Withdraw ─────────────────────────────────────────────────────
 
     /// Burn `shares` from `user` and return the equivalent tokens (principal + yield).
-    /// assets_out = shares * current_index / PRECISION
+    /// SC-051: assets_out = shares * (total_assets + VIRTUAL_OFFSET) / (total_shares + VIRTUAL_OFFSET)
     pub fn withdraw(env: Env, user: Address, shares: i128) {
         user.require_auth();
         assert!(shares > 0, "shares must be positive");
@@ -358,8 +377,15 @@ impl YieldVaultContract {
         let user_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
         assert!(user_shares >= shares, "insufficient shares");
 
-        let index = Self::current_index(&env);
-        let assets_out = shares.checked_mul(index).expect("overflow") / PRECISION;
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+
+        // SC-051: virtual offset prevents share price manipulation
+        let assets_out = shares
+            .checked_mul(tot_assets + VIRTUAL_OFFSET)
+            .expect("overflow")
+            .checked_div(tot_shares + VIRTUAL_OFFSET)
+            .expect("divide by zero");
         assert!(assets_out > 0, "withdrawal too small");
         // Simulate retrieving liquidity from the external lending protocol adapter.
         sandbox_protocol::redeem(&env, assets_out);
@@ -370,8 +396,6 @@ impl YieldVaultContract {
             .set(&user_key, &(user_shares - shares));
 
         // Update totals (clamp to zero to guard against rounding drift)
-        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
-        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
         env.storage()
             .instance()
             .set(&SHARES_KEY, &(tot_shares - shares).max(0));

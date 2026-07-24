@@ -58,28 +58,14 @@ pub async fn run(
                 let mut tx = pool.begin().await?;
 
                 for event in &events {
-                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings,
-                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type
-                    // or assume the topic is available in the payload somehow (e.g. decoded by a proxy or we check fields).
-                    // For now, we will use a heuristic: if it has "apy", it's YieldRateUpdated.
-                    // Otherwise we try extracting topic.
+                    // BE-043: Decode the XDR topic from the Soroban RPC event payload.
+                    // Falls back to heuristic field scanning if topics are absent.
+                    let topic = super::parser::extract_event_topic(event)
+                        .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
+                        .or_else(|| super::parser::find_nested_string(event, "event_type"))
+                        .unwrap_or_default();
 
-                    let topic_hint = super::parser::find_nested_string(event, "topic_symbol")
-                        .or_else(|| super::parser::find_nested_string(event, "event_type"));
-
-                    let guessed_topic = if let Some(t) = topic_hint {
-                        t
-                    } else if super::parser::find_nested_i64(event, "apy").is_some() {
-                        "YieldRateUpdated".to_string()
-                    } else if super::parser::find_nested_string(event, "sender").is_some() {
-                        "SocialPaymentEvent".to_string()
-                    } else if let Some(t) = super::parser::find_nested_string(event, "type") {
-                        t // maybe type="DEPOSIT" etc.
-                    } else {
-                        "".to_string()
-                    };
-
-                    match parse_zaps_event(&guessed_topic, event) {
+                    match parse_zaps_event(&topic, event) {
                         ZapsEvent::YieldDeposited(e) => {
                             let user_id = get_or_create_user_id(&e.address, &pool)
                                 .await
@@ -432,11 +418,8 @@ mod tests {
     #[test]
     fn never_panics_on_multibyte_or_boundary_lengths() {
         // Multibyte characters must not cause a byte-index panic when slicing.
-        let multibyte: String = std::iter::repeat('é').take(20).collect();
-        assert_eq!(
-            slugify_address(&multibyte),
-            format!("u_{}", "é".repeat(14))
-        );
+        let multibyte = "é".repeat(20);
+        assert_eq!(slugify_address(&multibyte), format!("u_{}", "é".repeat(14)));
 
         // Exactly at the minimum char count boundary (1 skipped + 14 taken).
         let exact = "G".repeat(15);

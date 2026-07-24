@@ -221,6 +221,14 @@
                       },
                       {
                         "key": {
+                          "symbol": "paused"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "token"
                         },
                         "val": {
