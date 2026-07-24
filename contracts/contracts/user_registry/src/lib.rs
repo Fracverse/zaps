@@ -8,14 +8,24 @@ pub struct UserRegistryContract;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    User(Address),    // Maps Address -> Username (String)
-    Username(String), // Maps Username (String) -> Address
-    Avatar(Address),  // Maps Address -> Avatar URI (String)
-    PrivyDid(String), // Maps Privy DID -> wallet Address
+    User(Address),      // Maps Address -> Username (String)
+    Username(String),   // Maps Username (String) -> Address
+    Avatar(Address),    // Maps Address -> Avatar URI (String)
+    PrivyDid(String),   // Maps Privy DID -> wallet Address
+    WalletDid(Address), // Maps wallet Address -> Privy DID (reverse index)
+    Admin,              // Stores the contract admin Address
 }
 
 #[contractimpl]
 impl UserRegistryContract {
+    /// Initialize the contract with an admin address for recovery operations
+    pub fn initialize(env: Env, admin: Address) {
+        if env.storage().persistent().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+    }
+
     /// Register a username mapping to the sender's address
     pub fn register_user(env: Env, user: Address, username: String) {
         user.require_auth();
@@ -72,42 +82,67 @@ impl UserRegistryContract {
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
-    /// Register a Privy DID → wallet address mapping.
-    /// Validates the DID has the required "did:privy:" prefix and is not already registered.
+    /// Register a Privy DID → wallet address mapping
     pub fn register_privy_did(env: Env, did: String, wallet: Address) {
         wallet.require_auth();
-
-        // Validate DID format: must start with "did:privy:" and have content after prefix.
-        // copy_into_slice requires an exact-length buffer, so we allocate enough for the prefix
-        // check and compare only the first 10 bytes.
-        const PREFIX: &[u8] = b"did:privy:";
-        const PREFIX_LEN: u32 = 10;
-        if did.len() <= PREFIX_LEN {
-            panic!("invalid DID format: must start with did:privy:");
-        }
-        // Build a String of exactly PREFIX_LEN bytes from the DID for prefix comparison.
-        // We do this by comparing against the known prefix string directly.
-        // Since Soroban String PartialEq compares full strings, build one from the same bytes.
-        // Strategy: Copy the full DID into a fixed stack buffer and inspect prefix bytes.
-        // Maximum DID length for validation: PREFIX_LEN + 256 (well within contract limits).
-        const MAX_LEN: usize = 266;
-        let did_len = did.len() as usize;
-        if did_len > MAX_LEN {
-            panic!("DID too long");
-        }
-        let mut buf = [0u8; MAX_LEN];
-        did.copy_into_slice(&mut buf[..did_len]);
-        if &buf[..PREFIX_LEN as usize] != PREFIX {
-            panic!("invalid DID format: must start with did:privy:");
-        }
-
-        // Prevent duplicate DID registrations
         let did_key = DataKey::PrivyDid(did.clone());
         if env.storage().persistent().has(&did_key) {
             panic!("DID already registered");
         }
-
         env.storage().persistent().set(&did_key, &wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(wallet.clone()), &did);
+    }
+
+    /// Update the wallet address for an existing Privy DID mapping.
+    /// Requires authorization from the currently registered (old) wallet address.
+    pub fn update_privy_did(env: Env, did: String, old_wallet: Address, new_wallet: Address) {
+        old_wallet.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        let stored_wallet: Address = env
+            .storage()
+            .persistent()
+            .get(&did_key)
+            .unwrap_or_else(|| panic!("DID not registered"));
+        if stored_wallet != old_wallet {
+            panic!("unauthorized: old wallet does not match registered wallet");
+        }
+        // Remove old reverse mapping
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WalletDid(old_wallet.clone()));
+        // Update forward and reverse mappings
+        env.storage().persistent().set(&did_key, &new_wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+    }
+
+    /// Admin recovery: reassign a DID mapping to a new wallet.
+    /// Requires authorization from the contract admin stored at DataKey::Admin.
+    pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        admin.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        // Remove old reverse mapping if present
+        if let Some(old_wallet) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Address>(&did_key)
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::WalletDid(old_wallet));
+        }
+        env.storage().persistent().set(&did_key, &new_wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
     }
 
     /// Get the wallet address registered for a Privy DID
@@ -135,6 +170,9 @@ impl UserRegistryContract {
         env.storage().persistent().remove(&DataKey::Avatar(user));
     }
 }
+
+#[cfg(test)]
+mod test;
 
 #[cfg(test)]
 mod tests {
