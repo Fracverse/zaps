@@ -142,13 +142,15 @@ fn test_yield_index_increases_after_ledger_advance() {
 
 #[test]
 fn test_exchange_rate_scales_after_ledger_advance() {
-    let (env, client, _contract_id, _owner, depositor, token) = setup();
+    let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
     client.deposit(&depositor, &amount);
     let first_shares = client.shares_of(&depositor);
 
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    // Accrue yield so total_assets grows with mock protocol rewards, moving the exchange rate.
+    client.accrue_yield(&owner);
 
     let second_depositor = Address::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
@@ -162,8 +164,10 @@ fn test_exchange_rate_scales_after_ledger_advance() {
         "later depositor should receive fewer shares at a higher exchange rate"
     );
 
-    let index = client.yield_index();
-    let assets_out = first_shares * index / PRECISION;
+    // Verify the first depositor can withdraw more assets than deposited.
+    let tot_shares = client.total_shares();
+    let tot_assets = client.total_assets();
+    let assets_out = first_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
     assert!(
         assets_out > amount,
         "original depositor should be able to withdraw more than deposited after yield accrual"
@@ -332,7 +336,10 @@ fn test_full_lifecycle_deposit_yield_withdraw() {
     );
 
     let half_shares = shares / 2;
-    let expected_out = half_shares * index / PRECISION;
+    let tot_shares = client.total_shares();
+    let tot_assets = client.total_assets();
+    // SC-051: expected_out uses virtual offset formula
+    let expected_out = half_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
     client.withdraw(&depositor, &half_shares);
 
     let token_client = token::Client::new(&env, &token);

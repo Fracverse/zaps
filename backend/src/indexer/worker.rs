@@ -58,28 +58,14 @@ pub async fn run(
                 let mut tx = pool.begin().await?;
 
                 for event in &events {
-                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings,
-                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type
-                    // or assume the topic is available in the payload somehow (e.g. decoded by a proxy or we check fields).
-                    // For now, we will use a heuristic: if it has "apy", it's YieldRateUpdated.
-                    // Otherwise we try extracting topic.
+                    // BE-043: Decode the XDR topic from the Soroban RPC event payload.
+                    // Falls back to heuristic field scanning if topics are absent.
+                    let topic = super::parser::extract_event_topic(event)
+                        .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
+                        .or_else(|| super::parser::find_nested_string(event, "event_type"))
+                        .unwrap_or_default();
 
-                    let topic_hint = super::parser::find_nested_string(event, "topic_symbol")
-                        .or_else(|| super::parser::find_nested_string(event, "event_type"));
-
-                    let guessed_topic = if let Some(t) = topic_hint {
-                        t
-                    } else if super::parser::find_nested_i64(event, "apy").is_some() {
-                        "YieldRateUpdated".to_string()
-                    } else if super::parser::find_nested_string(event, "sender").is_some() {
-                        "SocialPaymentEvent".to_string()
-                    } else if let Some(t) = super::parser::find_nested_string(event, "type") {
-                        t // maybe type="DEPOSIT" etc.
-                    } else {
-                        "".to_string()
-                    };
-
-                    match parse_zaps_event(&guessed_topic, event) {
+                    match parse_zaps_event(&topic, event) {
                         ZapsEvent::YieldDeposited(e) => {
                             let user_id = get_or_create_user_id(&e.address, &pool)
                                 .await
@@ -367,9 +353,28 @@ async fn get_or_create_user_id(
     Ok(row.get("id"))
 }
 
+const ADDRESS_SLUG_SKIP_CHARS: usize = 1;
+const ADDRESS_SLUG_TAKE_CHARS: usize = 14;
+const DEFAULT_ADDRESS_SLUG: &str = "u_unknown";
+
+/// Derive a short username slug from a chain address. Bounds are checked in
+/// terms of character counts (not byte offsets) before slicing so malformed
+/// or unexpectedly short/multibyte addresses can never panic; anything too
+/// short to slice falls back to a default placeholder slug.
 fn slugify_address(address: &str) -> String {
     let trimmed = address.trim();
-    let snippet = trimmed.get(1..15).unwrap_or(trimmed);
+    let char_count = trimmed.chars().count();
+
+    if char_count < ADDRESS_SLUG_SKIP_CHARS + ADDRESS_SLUG_TAKE_CHARS {
+        return DEFAULT_ADDRESS_SLUG.to_string();
+    }
+
+    let snippet: String = trimmed
+        .chars()
+        .skip(ADDRESS_SLUG_SKIP_CHARS)
+        .take(ADDRESS_SLUG_TAKE_CHARS)
+        .collect();
+
     format!("u_{}", snippet.to_lowercase())
 }
 
@@ -395,6 +400,34 @@ mod tests {
         assert_eq!(compute_backoff_delay(0), INITIAL_BACKOFF);
         assert_eq!(compute_backoff_delay(1), Duration::from_secs(2));
         assert_eq!(compute_backoff_delay(6), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn slugifies_a_well_formed_address() {
+        let slug = slugify_address("GABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+        assert_eq!(slug, "u_abcdefghijklmn");
+    }
+
+    #[test]
+    fn falls_back_to_default_slug_for_short_addresses() {
+        assert_eq!(slugify_address(""), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("G"), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("short"), DEFAULT_ADDRESS_SLUG);
+    }
+
+    #[test]
+    fn never_panics_on_multibyte_or_boundary_lengths() {
+        // Multibyte characters must not cause a byte-index panic when slicing.
+        let multibyte = "é".repeat(20);
+        assert_eq!(slugify_address(&multibyte), format!("u_{}", "é".repeat(14)));
+
+        // Exactly at the minimum char count boundary (1 skipped + 14 taken).
+        let exact = "G".repeat(15);
+        assert_eq!(slugify_address(&exact), format!("u_{}", "g".repeat(14)));
+
+        // One char short of the boundary falls back to the default slug.
+        let one_short = "G".repeat(14);
+        assert_eq!(slugify_address(&one_short), DEFAULT_ADDRESS_SLUG);
     }
 
     #[test]

@@ -19,17 +19,24 @@ use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
 
 // Re-exported from crate.
-use zaps_backend::api::feed::AuthUser;
-
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .expect("Set TEST_DATABASE_URL or DATABASE_URL to run integration tests");
-    PgPool::connect(&url)
+    let pool = PgPool::connect(&url)
         .await
-        .expect("Failed to connect to test database")
+        .expect("Failed to connect to test database");
+    zaps_backend::db::run_migrations(&pool)
+        .await
+        .expect("Failed to apply test database migrations");
+    pool
+}
+
+fn test_address(prefix: &str, run: &str) -> String {
+    let padding = 56 - prefix.len() - run.len();
+    format!("{prefix}{run}{}", "X".repeat(padding))
 }
 
 fn yield_router(pool: PgPool) -> Router {
@@ -133,10 +140,7 @@ async fn test_yield_balance_history_toggle() {
 
     // This address string is what the AuthUser extractor maps from JWT `sub`.
     // It may not be a real Stellar address; the extractor only uses it as an opaque key.
-    let address = format!(
-        "GTESTYIELDUSER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GTESTYIELDUSER", &run);
     let user_id = seed_user(&pool, &address).await;
 
     // Token mapping:

@@ -135,4 +135,11 @@ impl NairaTokenContract {
             .get(&DataKey::Allowance(from, spender))
             .unwrap_or(0)
     }
+
+    /// SC-050: Transfer admin authority to a new address.
+    /// Requires the current admin's signature.
+    pub fn transfer_admin(env: Env, new_admin: Address) {
+        Self::require_admin(&env);
+        env.storage().instance().set(&ADMIN_KEY, &new_admin);
+    }
 }
