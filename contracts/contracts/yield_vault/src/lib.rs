@@ -239,7 +239,6 @@ impl YieldVaultContract {
     pub fn deposit(env: Env, depositor: Address, amount: i128) {
         depositor.require_auth();
         assert!(amount > 0, "amount must be positive");
-        Self::require_not_paused(&env);
 
         Self::checkpoint_index(&env);
 
@@ -249,6 +248,10 @@ impl YieldVaultContract {
             .get(&TOKEN_KEY)
             .expect("not initialized");
         let vault_addr = env.current_contract_address();
+
+        // SC-052: Enforce pause check immediately before token transfer to ensure
+        // the vault cannot accept deposits while paused.
+        Self::require_not_paused(&env);
 
         // Pull tokens from depositor into vault
         token::Client::new(&env, &token_addr).transfer(&depositor, &vault_addr, &amount);
