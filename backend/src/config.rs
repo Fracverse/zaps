@@ -3,6 +3,8 @@ pub struct Config {
     pub stellar_rpc_url: String,
     pub allbridge_api_url: String,
     pub jwt_secret: String,
+    /// Redis connection URL for the yield cache. `None` disables caching.
+    pub redis_url: Option<String>,
 }
 
 impl Config {
@@ -17,6 +19,9 @@ impl Config {
                 .unwrap_or_else(|_| "https://core-api.allbridge.io".into()),
             jwt_secret: std::env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into()),
+            redis_url: std::env::var("REDIS_URL")
+                .ok()
+                .filter(|url| !url.trim().is_empty()),
         }
     }
 }
