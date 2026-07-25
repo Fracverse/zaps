@@ -179,6 +179,27 @@ pub async fn get_current_yield_rate(pool: &PgPool) -> Result<Option<i32>, sqlx::
     Ok(rate)
 }
 
+/// BE-547: age of the most recent APY checkpoint, in seconds.
+///
+/// `None` when no checkpoint has ever been recorded. Used by the hourly
+/// checkpoint worker to decide whether a tick is actually due: `tokio::interval`
+/// restarts its clock on process start, so without this a crash-looping or
+/// frequently-redeployed process would write a checkpoint on every boot.
+pub async fn seconds_since_last_yield_rate(pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
+    let age: Option<f64> = sqlx::query_scalar(
+        r#"
+        SELECT EXTRACT(EPOCH FROM (NOW() - created_at))
+          FROM yield_rates_history
+         ORDER BY created_at DESC
+         LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(age.map(|secs| secs as i64))
+}
+
 /// Read whether the user has auto-earn (auto-sweep) enabled.
 pub async fn get_auto_earn_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
     let enabled = sqlx::query_scalar(

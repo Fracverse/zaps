@@ -2,7 +2,10 @@ use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::db::r#yield::{list_auto_sweep_candidates, process_internal_sweep_deposit};
+use crate::db::r#yield::{
+    get_current_yield_rate, list_auto_sweep_candidates, log_yield_rate_update,
+    process_internal_sweep_deposit, seconds_since_last_yield_rate,
+};
 use crate::services::stellar::StellarClient;
 
 const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 300;
@@ -210,9 +213,201 @@ fn sign_envelope(
     Ok(signed.to_string())
 }
 
+// ─── BE-547: hourly yield compounding checkpoints ────────────────────────────
+//
+// `yield_rates_history` is the series every APY figure in the product is
+// derived from: `estimate_accrued_yield` prices a user's earning balance
+// against the prevailing rate, and the metrics endpoint reports the current
+// APY from it. Until now nothing wrote to it on a schedule — rates were only
+// recorded when something else happened to call `log_yield_rate_update`, so the
+// series had gaps and "APY over time" could not be answered at all.
+//
+// This worker closes that: it reads the vault's parameters on a fixed interval
+// and records a checkpoint, giving the series a guaranteed cadence.
+
+const DEFAULT_CHECKPOINT_INTERVAL_SECS: u64 = 3_600;
+/// Fallback APY (basis points) when the vault cannot be reached and no prior
+/// checkpoint exists. Matches `yield_calc::DEFAULT_APY_BPS`.
+const FALLBACK_APY_BPS: i32 = 500;
+/// Tolerance when deciding whether a checkpoint is due.
+///
+/// Timer ticks drift by a few milliseconds and `NOW()` is evaluated on the
+/// database, so an exact `age >= interval` comparison would skip roughly every
+/// other hour. 60s of slack keeps the cadence honest without allowing a second
+/// checkpoint inside the same window.
+const CHECKPOINT_DUE_SLACK_SECS: i64 = 60;
+
+pub struct YieldCheckpointConfig {
+    pub interval: Duration,
+    /// Soroban RPC endpoint used to read vault parameters.
+    pub stellar_rpc_url: String,
+    /// YieldVault contract to read the rate from. Without it the worker falls
+    /// back to the last recorded rate.
+    pub yield_vault_contract_id: Option<String>,
+}
+
+impl YieldCheckpointConfig {
+    pub fn from_env() -> Self {
+        let interval_secs = std::env::var("YIELD_CHECKPOINT_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL_SECS);
+        let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
+            .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into());
+        let yield_vault_contract_id = std::env::var("YIELD_VAULT_CONTRACT_ID").ok();
+
+        Self {
+            interval: Duration::from_secs(interval_secs),
+            stellar_rpc_url,
+            yield_vault_contract_id,
+        }
+    }
+}
+
+/// BE-547: records an APY checkpoint into `yield_rates_history` on a fixed
+/// interval. Runs until the process exits.
+pub async fn run_yield_checkpoints(pool: PgPool, config: YieldCheckpointConfig) {
+    tracing::info!(
+        "Starting yield checkpoint worker (interval={:?}, vault={:?})",
+        config.interval,
+        config.yield_vault_contract_id
+    );
+
+    let stellar = StellarClient::new(config.stellar_rpc_url.clone());
+    let mut interval = tokio::time::interval(config.interval);
+
+    loop {
+        interval.tick().await;
+
+        if let Err(err) = checkpoint_once(
+            &pool,
+            &stellar,
+            config.yield_vault_contract_id.as_deref(),
+            config.interval.as_secs() as i64,
+        )
+        .await
+        {
+            // Never propagate: a failed checkpoint must not kill the loop, or
+            // one bad RPC response ends the series until the next deploy.
+            tracing::error!("Yield checkpoint cycle failed: {err:?}");
+        }
+    }
+}
+
+/// One checkpoint cycle. Separated from the loop so it can be driven directly.
+async fn checkpoint_once(
+    pool: &PgPool,
+    stellar: &StellarClient,
+    contract_id: Option<&str>,
+    interval_secs: i64,
+) -> Result<(), sqlx::Error> {
+    if !is_checkpoint_due(pool, interval_secs).await? {
+        tracing::debug!("Yield checkpoint: not due yet, skipping");
+        return Ok(());
+    }
+
+    let previous = get_current_yield_rate(pool).await?;
+    let apy_bps = read_vault_apy_bps(stellar, contract_id)
+        .await
+        .unwrap_or_else(|err| {
+            // Carrying the last known rate forward is the right failure mode:
+            // it keeps the series continuous, and a gap would be read by
+            // downstream consumers as "no yield" rather than "unknown".
+            tracing::warn!(
+                error = %err,
+                "Could not read vault APY; carrying the previous checkpoint forward"
+            );
+            previous.unwrap_or(FALLBACK_APY_BPS)
+        });
+
+    log_yield_rate_update(pool, apy_bps).await?;
+
+    tracing::info!(
+        apy_bps,
+        previous_bps = ?previous,
+        "Recorded hourly yield checkpoint"
+    );
+    Ok(())
+}
+
+/// Whether enough time has passed since the last checkpoint.
+///
+/// `tokio::interval` fires immediately on its first tick and restarts its clock
+/// on process start, so without this guard a crash-looping or frequently
+/// redeployed service would write a checkpoint on every boot and corrupt the
+/// hourly cadence the series is supposed to guarantee.
+async fn is_checkpoint_due(pool: &PgPool, interval_secs: i64) -> Result<bool, sqlx::Error> {
+    match seconds_since_last_yield_rate(pool).await? {
+        // No history at all — seed the series.
+        None => Ok(true),
+        Some(age) => Ok(age >= interval_secs - CHECKPOINT_DUE_SLACK_SECS),
+    }
+}
+
+/// Reads the current APY (basis points) from the YieldVault contract.
+///
+/// Simulation rather than submission: reading a parameter must not cost a fee
+/// or consume a sequence number.
+async fn read_vault_apy_bps(
+    stellar: &StellarClient,
+    contract_id: Option<&str>,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let contract_id = contract_id.ok_or("YIELD_VAULT_CONTRACT_ID not set")?;
+
+    let envelope = serde_json::json!({
+        "contract_id": contract_id,
+        "function": "current_apy_bps",
+        "args": []
+    })
+    .to_string();
+
+    let sim = stellar.simulate_transaction(&envelope).await?;
+    if let Some(err) = sim.error {
+        return Err(format!("Vault APY simulation failed: {err}").into());
+    }
+
+    let raw = sim
+        .results
+        .as_ref()
+        .and_then(|results| results.first())
+        .map(|result| result.xdr.as_str())
+        .ok_or("Vault APY simulation returned no result")?;
+
+    let apy_bps: i32 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("Vault returned an unparseable APY value: {raw}"))?;
+
+    // A negative or absurd rate means the vault returned something unexpected;
+    // recording it would poison every yield estimate derived from the series.
+    if !(0..=100_000).contains(&apy_bps) {
+        return Err(format!("Vault returned an out-of-range APY: {apy_bps} bps").into());
+    }
+
+    Ok(apy_bps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_config_defaults_to_hourly() {
+        let config = YieldCheckpointConfig {
+            interval: Duration::from_secs(DEFAULT_CHECKPOINT_INTERVAL_SECS),
+            stellar_rpc_url: "https://soroban-testnet.stellar.org".into(),
+            yield_vault_contract_id: None,
+        };
+        assert_eq!(config.interval.as_secs(), 3_600);
+        assert!(config.yield_vault_contract_id.is_none());
+    }
+
+    #[test]
+    fn checkpoint_slack_is_smaller_than_the_interval() {
+        // If the slack ever met or exceeded the interval, every tick would be
+        // "due" and the guard against double-writing on restart would be gone.
+        assert!(CHECKPOINT_DUE_SLACK_SECS < DEFAULT_CHECKPOINT_INTERVAL_SECS as i64);
+    }
 
     #[test]
     fn config_defaults_are_sensible() {

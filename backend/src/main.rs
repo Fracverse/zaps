@@ -297,6 +297,14 @@ async fn main() {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
     });
 
+    // BE-547: Hourly APY checkpoints into yield_rates_history, so the series
+    // every yield estimate is priced against has a guaranteed cadence.
+    let checkpoint_pool = pool.clone();
+    let checkpoint_config = services::sweep_worker::YieldCheckpointConfig::from_env();
+    tokio::spawn(async move {
+        services::sweep_worker::run_yield_checkpoints(checkpoint_pool, checkpoint_config).await;
+    });
+
     // BE-032: Daily / weekly yield report push notifications.
     let notification_pool = pool.clone();
     let notification_config = services::notifications::NotificationSchedulerConfig::from_env();
