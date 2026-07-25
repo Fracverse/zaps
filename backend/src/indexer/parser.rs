@@ -17,10 +17,21 @@ pub struct YieldRateUpdatedEvent {
     pub tx_hash: String,
 }
 
+// 1. Add the new struct to hold the event data
+pub struct TokenSalvagedEvent {
+    pub salvager: String,
+    pub token: String,
+    pub recipient: String,
+    pub amount: i64,
+    pub tx_hash: String,
+}
+
 pub enum ZapsEvent {
     YieldDeposited(YieldDepositedEvent),
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
+    // 2. Add the new variant to the enum
+    TokenSalvaged(TokenSalvagedEvent),
     Unknown,
 }
 
@@ -45,6 +56,16 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
             let tx_hash = extract_tx_hash(value);
 
             ZapsEvent::YieldRateUpdated(YieldRateUpdatedEvent { apy, tx_hash })
+        }
+        // 3. Add the match arm to parse the event
+        "TokenSalvaged" => {
+            let salvager = find_nested_string(value, "salvager").unwrap_or_default();
+            let token = find_nested_string(value, "token").unwrap_or_default();
+            let recipient = find_nested_string(value, "recipient").unwrap_or_default();
+            let amount = find_nested_i64(value, "amount").unwrap_or_default();
+            let tx_hash = extract_tx_hash(value);
+
+            ZapsEvent::TokenSalvaged(TokenSalvagedEvent { salvager, token, recipient, amount, tx_hash })
         }
         _ => ZapsEvent::Unknown,
     }

@@ -4,7 +4,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent};
+use super::parser::{parse_zaps_event, ZapsEvent, TokenSalvagedEvent};
 use crate::db::r#yield::{process_yield_deposit_tx, process_yield_withdrawal_tx, log_yield_rate_update};
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
@@ -93,6 +93,12 @@ pub async fn run(
                         ZapsEvent::YieldRateUpdated(e) => {
                             if let Err(err) = log_yield_rate_update(&pool, e.apy).await {
                                 tracing::warn!("Failed to process YieldRateUpdated event: {err}");
+                            }
+                         }
+
+                        ZapsEvent::TokenSalvaged(e) => {
+                            if let Err(err) = process_token_salvaged_event(e, &mut tx).await {
+                                tracing::warn!("Failed to process TokenSalvaged event: {err}");
                             }
                         }
                         ZapsEvent::Unknown => {
@@ -199,7 +205,10 @@ fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Val
         json!({ "topics": [[{ "type": "symbol", "value": "YieldDeposited" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldWithdrawn" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
+        // Add this new line:
+        json!({ "topics": [[{ "type": "symbol", "value": "TokenSalvaged" }]] }),
     ];
+    // ... rest of the function remains exactly the same
 
     if let Some(contract_id) = contract_id.filter(|value| !value.is_empty()) {
         for filter in &mut filters {
@@ -359,6 +368,31 @@ fn slugify_address(address: &str) -> String {
     let trimmed = address.trim();
     let snippet = trimmed.get(1..15).unwrap_or(trimmed);
     format!("u_{}", snippet.to_lowercase())
+}
+
+/// Process a TokenSalvaged administrative sweep event.
+pub async fn process_token_salvaged_event(
+    event: TokenSalvagedEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (tx_hash, kind, status, from_address, to_address, token, amount)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (tx_hash) DO NOTHING
+        "#,
+    )
+    .bind(&event.tx_hash)
+    .bind("ADMIN_SWEEP")
+    .bind("SALVAGED")
+    .bind(&event.salvager)
+    .bind(&event.recipient)
+    .bind(&event.token)
+    .bind(event.amount)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
