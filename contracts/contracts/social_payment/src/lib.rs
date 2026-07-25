@@ -74,6 +74,12 @@ pub struct MassPayoutExecuted {
     pub fee_charged: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutPayload {
+    pub items: Vec<PayoutItem>,
+}
+
 #[contract]
 pub struct SocialPaymentContract;
 

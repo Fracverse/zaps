@@ -1,8 +1,8 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, xdr::ToXdr, Address, Bytes, BytesN, Env,
-    String,
+    contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes,
+    BytesN, Env, String,
 };
 
 #[contract]
@@ -18,10 +18,44 @@ pub enum DataKey {
     WalletDid(Address),  // Maps wallet Address -> Privy DID (reverse index)
     Admin,               // Stores the contract admin Address
     PrivyVerifierKey,    // Ed25519 public key trusted to attest DID <-> wallet links
+    ReservationToken,    // Stores Naira token contract Address
+    ReservationAmount,   // Stores required reservation amount (i128)
+    UserDeposit(Address), // Stores deposited reservation amount per user (i128)
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct AddressToUsernameKey {
+    pub address: Address,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct UsernameToAddressKey {
+    pub username: String,
 }
 
 #[contractimpl]
 impl UserRegistryContract {
+    fn validate_username(username: &String) {
+        let len = username.len();
+        if len < 3 || len > 15 {
+            panic!("username length must be 3-15");
+        }
+
+        let mut bytes = [0u8; 15];
+        username.copy_into_slice(&mut bytes[..len as usize]);
+
+        for i in 0..len as usize {
+            let b = bytes[i];
+            let is_lowercase = (b'a'..=b'z').contains(&b);
+            let is_numeric = (b'0'..=b'9').contains(&b);
+            if !is_lowercase && !is_numeric {
+                panic!("username must be lowercase alphanumeric");
+            }
+        }
+    }
+
     /// Initialize the contract with an admin address for recovery operations
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().persistent().has(&DataKey::Admin) {
@@ -30,26 +64,74 @@ impl UserRegistryContract {
         env.storage().persistent().set(&DataKey::Admin, &admin);
     }
 
+    /// Admin-only: configure the reservation token and required amount.
+    pub fn set_reservation_config(env: Env, token_address: Address, amount: i128) {
+        if amount < 0 {
+            panic!("reservation amount cannot be negative");
+        }
+
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReservationToken, &token_address);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ReservationAmount, &amount);
+    }
+
     /// Register a username mapping to the sender's address
     pub fn register_user(env: Env, user: Address, username: String) {
         user.require_auth();
+        Self::validate_username(&username);
 
-        let username_key = DataKey::Username(username.clone());
-        let user_key = DataKey::User(user.clone());
+        let username_key = UsernameToAddressKey {
+            username: username.clone(),
+        };
+        let user_key = AddressToUsernameKey {
+            address: user.clone(),
+        };
 
         // Check if username is already taken (uniqueness validation)
         if env.storage().persistent().has(&username_key) {
             panic!("username already taken");
         }
+        if env.storage().persistent().has(&user_key) {
+            panic!("address already registered");
+        }
+
+        let reservation_token: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReservationToken)
+            .unwrap_or_else(|| panic!("reservation token not configured"));
+        let reservation_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReservationAmount)
+            .unwrap_or_else(|| panic!("reservation amount not configured"));
+
+        if reservation_amount > 0 {
+            let token_client = token::Client::new(&env, &reservation_token);
+            token_client.transfer(&user, &env.current_contract_address(), &reservation_amount);
+        }
 
         // Store the mappings
         env.storage().persistent().set(&user_key, &username);
         env.storage().persistent().set(&username_key, &user);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserDeposit(user), &reservation_amount);
     }
 
     /// Retrieve the Address associated with a username
     pub fn get_address(env: Env, username: String) -> Address {
-        let username_key = DataKey::Username(username);
+        let username_key = UsernameToAddressKey { username };
         env.storage()
             .persistent()
             .get(&username_key)
@@ -58,7 +140,7 @@ impl UserRegistryContract {
 
     /// Retrieve the username associated with an Address
     pub fn get_username(env: Env, user: Address) -> String {
-        let user_key = DataKey::User(user);
+        let user_key = AddressToUsernameKey { address: user };
         env.storage()
             .persistent()
             .get(&user_key)
@@ -196,17 +278,39 @@ impl UserRegistryContract {
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
-        let user_key = DataKey::User(user.clone());
+        let user_key = AddressToUsernameKey {
+            address: user.clone(),
+        };
         let username: String = env
             .storage()
             .persistent()
             .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"));
-        let username_key = DataKey::Username(username);
+        let username_key = UsernameToAddressKey { username };
+        let reservation_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::UserDeposit(user.clone()))
+            .unwrap_or(0);
 
         env.storage().persistent().remove(&user_key);
         env.storage().persistent().remove(&username_key);
-        env.storage().persistent().remove(&DataKey::Avatar(user));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Avatar(user.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::UserDeposit(user.clone()));
+
+        if reservation_amount > 0 {
+            let reservation_token: Address = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ReservationToken)
+                .unwrap_or_else(|| panic!("reservation token not configured"));
+            let token_client = token::Client::new(&env, &reservation_token);
+            token_client.transfer(&env.current_contract_address(), &user, &reservation_amount);
+        }
     }
 }
 
