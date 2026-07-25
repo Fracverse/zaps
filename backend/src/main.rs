@@ -297,6 +297,14 @@ async fn main() {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
     });
 
+    // BE-554: Drain bulk disbursement batches asynchronously so an HTTP request
+    // never blocks on thousands of sequential SDP submissions.
+    let disbursement_pool = pool.clone();
+    let disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
+    tokio::spawn(async move {
+        services::disbursement_worker::run(disbursement_pool, disbursement_config).await;
+    });
+
     // BE-032: Daily / weekly yield report push notifications.
     let notification_pool = pool.clone();
     let notification_config = services::notifications::NotificationSchedulerConfig::from_env();
