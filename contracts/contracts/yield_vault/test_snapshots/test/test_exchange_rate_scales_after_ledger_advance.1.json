@@ -101,6 +101,25 @@
     [],
     [
       [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "accrue_yield",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
         {
           "function": {
@@ -173,6 +192,7 @@
         }
       ]
     ],
+    [],
     [],
     []
   ],
@@ -333,7 +353,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 999207
+                    "lo": 999989
                   }
                 }
               }
@@ -397,7 +417,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 2000000
+                            "lo": 2001030
                           }
                         }
                       },
@@ -416,8 +436,16 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 1030
+                            "lo": 0
                           }
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "paused"
+                        },
+                        "val": {
+                          "bool": false
                         }
                       },
                       {
@@ -435,7 +463,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 2000000
+                            "lo": 2001030
                           }
                         }
                       },
@@ -446,7 +474,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 1999207
+                            "lo": 1999989
                           }
                         }
                       },
@@ -469,6 +497,39 @@
             "ext": "v0"
           },
           4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "ledger_key_nonce": {
+                "nonce": 4837995959683129791
+              }
+            },
+            "durability": "temporary"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "ledger_key_nonce": {
+                    "nonce": 4837995959683129791
+                  }
+                },
+                "durability": "temporary",
+                "val": "void"
+              }
+            },
+            "ext": "v0"
+          },
+          100015
         ]
       ],
       [
@@ -510,7 +571,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 4837995959683129791
+                "nonce": 2032731177588607455
               }
             },
             "durability": "temporary"
@@ -525,7 +586,7 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 4837995959683129791
+                    "nonce": 2032731177588607455
                   }
                 },
                 "durability": "temporary",
@@ -576,7 +637,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 2032731177588607455
+                "nonce": 4270020994084947596
               }
             },
             "durability": "temporary"
@@ -591,7 +652,7 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 2032731177588607455
+                    "nonce": 4270020994084947596
                   }
                 },
                 "durability": "temporary",
@@ -1394,7 +1455,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Deposited"
+                "symbol": "YieldDeposited"
               }
             ],
             "data": {
@@ -1489,6 +1550,149 @@
                 "lo": 1000000
               }
             }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
+                "symbol": "accrue_yield"
+              }
+            ],
+            "data": {
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "MockClaim"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1030
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "MockSupply"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1030
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 1001030
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "YieldAccrued"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "u32": 100000
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 79274
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 100079274
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "accrue_yield"
+              }
+            ],
+            "data": "void"
           }
         }
       },
@@ -1734,7 +1938,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2000000
+                    "lo": 2001030
                   }
                 }
               ]
@@ -1753,7 +1957,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Deposited"
+                "symbol": "YieldDeposited"
               }
             ],
             "data": {
@@ -1770,7 +1974,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 999207
+                    "lo": 999989
                   }
                 }
               ]
@@ -1845,7 +2049,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 999207
+                "lo": 999989
               }
             }
           }
@@ -1868,7 +2072,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "yield_index"
+                "symbol": "total_shares"
               }
             ],
             "data": "void"
@@ -1889,13 +2093,63 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "yield_index"
+                "symbol": "total_shares"
               }
             ],
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 100079274
+                "lo": 1999989
+              }
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
+                "symbol": "total_assets"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "total_assets"
+              }
+            ],
+            "data": {
+              "i128": {
+                "hi": 0,
+                "lo": 2001030
               }
             }
           }

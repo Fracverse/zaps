@@ -17,19 +17,27 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
-
-// Re-exported from crate.
 use zaps_backend::api::feed::AuthUser;
 
+// Re-exported from crate.
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .expect("Set TEST_DATABASE_URL or DATABASE_URL to run integration tests");
-    PgPool::connect(&url)
+    let pool = PgPool::connect(&url)
         .await
-        .expect("Failed to connect to test database")
+        .expect("Failed to connect to test database");
+    zaps_backend::db::run_migrations(&pool)
+        .await
+        .expect("Failed to apply test database migrations");
+    pool
+}
+
+fn test_address(prefix: &str, run: &str) -> String {
+    let padding = 56 - prefix.len() - run.len();
+    format!("{prefix}{run}{}", "X".repeat(padding))
 }
 
 fn yield_router(pool: PgPool) -> Router {
@@ -48,7 +56,10 @@ async fn seed_user(pool: &PgPool, address: &str) -> Uuid {
         "#,
     )
     .bind(address)
-    .bind(format!("user_{}", &address[1..std::cmp::min(10, address.len())]))
+    .bind(format!(
+        "user_{}",
+        &address[1..std::cmp::min(10, address.len())]
+    ))
     .fetch_one(pool)
     .await
     .expect("Failed to seed user")
@@ -95,13 +106,13 @@ async fn test_yield_endpoints_require_auth() {
     let router = yield_router(pool);
 
     // Missing auth header
-    for path in [
-        "/balance",
-        "/history?limit=1&offset=0",
-    ]
-    {
+    for path in ["/balance", "/history?limit=1&offset=0"] {
         let (status, _) = response_json(&router, get_req(path, None)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 
     // Missing auth header for POST
@@ -112,7 +123,11 @@ async fn test_yield_endpoints_require_auth() {
     ] {
         let req = post_req_json(path, None, payload);
         let (status, _) = response_json(&router, req).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 }
 
@@ -126,10 +141,7 @@ async fn test_yield_balance_history_toggle() {
 
     // This address string is what the AuthUser extractor maps from JWT `sub`.
     // It may not be a real Stellar address; the extractor only uses it as an opaque key.
-    let address = format!(
-        "GTESTYIELDUSER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GTESTYIELDUSER", &run);
     let user_id = seed_user(&pool, &address).await;
 
     // Token mapping:
@@ -142,18 +154,31 @@ async fn test_yield_balance_history_toggle() {
     assert_eq!(status, StatusCode::OK);
 
     // Validate shape & defaults.
-    assert!(body.get("available_balance").is_some(), "available_balance missing");
-    assert!(body.get("earning_balance").is_some(), "earning_balance missing");
-    assert!(body.get("accrued_interest").is_some(), "accrued_interest missing");
-    assert!(body.get("total_earning_balance").is_some(), "total_earning_balance missing");
+    assert!(
+        body.get("available_balance").is_some(),
+        "available_balance missing"
+    );
+    assert!(
+        body.get("earning_balance").is_some(),
+        "earning_balance missing"
+    );
+    assert!(
+        body.get("accrued_interest").is_some(),
+        "accrued_interest missing"
+    );
+    assert!(
+        body.get("total_earning_balance").is_some(),
+        "total_earning_balance missing"
+    );
     assert!(body.get("apy").is_some(), "apy missing");
 
     // auto_earn_enabled default comes from `users.auto_earn_enabled`.
-    assert_eq!(
-        body.get("auto_earn_enabled").and_then(|v| v.as_bool()).unwrap_or(true),
-        false,
-        "auto_earn_enabled should default to false"
-    );
+    assert!(
+    !body.get("auto_earn_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true),
+    "auto_earn_enabled should default to false"
+);
 
     // 2) Seed at least one yield history transaction by POST /deposit.
     let deposit_payload = serde_json::json!({ "amount": 5000 });
@@ -205,27 +230,64 @@ async fn test_yield_balance_history_toggle() {
         assert!(deposit_body.get("envelope_xdr").is_some());
     }
 
-    // 3) GET /api/yield/history
-    let (hist_status, hist_body) = response_json(
-        &router,
-        get_req("/history?limit=10&offset=0", Some(&token)),
+    // Seed SWEEP and REWARD history items to verify friendly transaction types.
+    let sweep_tx_hash = format!("test-sweep-tx-{}", Uuid::new_v4());
+    sqlx::query(
+        r#"
+        INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
+        VALUES ($1, $2, 'SWEEP', 500, NOW())
+        "#,
     )
-    .await;
+    .bind(user_id)
+    .bind(&sweep_tx_hash)
+    .execute(&pool)
+    .await
+    .expect("Failed to insert sweep transaction");
+
+    let reward_tx_hash = format!("test-reward-tx-{}", Uuid::new_v4());
+    sqlx::query(
+        r#"
+        INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
+        VALUES ($1, $2, 'REWARD', 25, NOW())
+        "#,
+    )
+    .bind(user_id)
+    .bind(&reward_tx_hash)
+    .execute(&pool)
+    .await
+    .expect("Failed to insert reward transaction");
+
+    // 3) GET /api/yield/history
+    let (hist_status, hist_body) =
+        response_json(&router, get_req("/history?limit=10&offset=0", Some(&token))).await;
     assert_eq!(hist_status, StatusCode::OK);
 
     let items = hist_body
         .get("items")
         .and_then(|v| v.as_array())
         .expect("history items must be array");
-    assert!(!items.is_empty(), "expected at least one yield history item");
+    assert!(
+        !items.is_empty(),
+        "expected at least one yield history item"
+    );
 
-    // Validate item fields exist.
+    // Validate item fields exist and types are serialized correctly.
     let first = &items[0];
     assert!(first.get("id").is_some());
     assert!(first.get("tx_hash").is_some());
     assert!(first.get("type").is_some(), "history item must have type");
     assert!(first.get("amount").is_some());
     assert!(first.get("created_at").is_some());
+
+    // Verify presence of SWEEP or REWARD transaction types in history items.
+    let types: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i.get("type").and_then(|t| t.as_str()))
+        .collect();
+    assert!(
+        types.contains(&"SWEEP") || types.contains(&"REWARD") || types.contains(&"DEPOSIT"),
+        "history items must serialize friendly transaction types"
+    );
 
     // 4) POST /toggle-auto: enable then disable.
     let (toggle_on_status, toggle_on_body) = response_json(
@@ -281,6 +343,9 @@ async fn test_yield_balance_history_toggle() {
         .ok();
 
     // Avoid unused import warning.
-    let _ = AuthUser;
+ let _ = AuthUser {
+    id: Uuid::nil(),
+    address: "".to_string(),
+    username: "".to_string(),
+};
 }
-

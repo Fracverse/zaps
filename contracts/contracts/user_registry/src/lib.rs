@@ -1,6 +1,9 @@
 #![no_std]
-#![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map, String};
+#![allow(unexpected_cfgs)]
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, xdr::ToXdr, Address, Bytes, BytesN, Env,
+    String,
+};
 
 #[contract]
 pub struct UserRegistryContract;
@@ -8,13 +11,25 @@ pub struct UserRegistryContract;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    User(Address),    // Maps Address -> Username (String)
-    Username(String), // Maps Username (String) -> Address
-    Avatar(Address),  // Maps Address -> Avatar URI (String)
+    User(Address),       // Maps Address -> Username (String)
+    Username(String),    // Maps Username (String) -> Address
+    Avatar(Address),     // Maps Address -> Avatar URI (String)
+    PrivyDid(String),    // Maps Privy DID -> wallet Address
+    WalletDid(Address),  // Maps wallet Address -> Privy DID (reverse index)
+    Admin,               // Stores the contract admin Address
+    PrivyVerifierKey,    // Ed25519 public key trusted to attest DID <-> wallet links
 }
 
 #[contractimpl]
 impl UserRegistryContract {
+    /// Initialize the contract with an admin address for recovery operations
+    pub fn initialize(env: Env, admin: Address) {
+        if env.storage().persistent().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+        env.storage().persistent().set(&DataKey::Admin, &admin);
+    }
+
     /// Register a username mapping to the sender's address
     pub fn register_user(env: Env, user: Address, username: String) {
         user.require_auth();
@@ -71,42 +86,132 @@ impl UserRegistryContract {
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
+    /// Set (or rotate) the trusted Ed25519 public key used to verify Privy DID
+    /// link attestations. Only the contract admin may call this.
+    pub fn set_privy_verifier(env: Env, caller: Address, pubkey: BytesN<32>) {
+        caller.require_auth();
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        assert!(caller == admin, "only admin");
+        env.storage()
+            .persistent()
+            .set(&DataKey::PrivyVerifierKey, &pubkey);
+    }
+
+    /// Register a Privy DID -> wallet address mapping.
+    ///
+    /// The caller must supply an Ed25519 `signature` over the `(did, wallet)`
+    /// payload, produced by the trusted Privy verifier key configured via
+    /// `set_privy_verifier`. This proves Privy attested that `did` belongs to
+    /// `wallet` before the on-chain mapping is created, in addition to the
+    /// wallet itself authorizing the transaction.
+    pub fn register_privy_did(env: Env, did: String, wallet: Address, signature: BytesN<64>) {
+        wallet.require_auth();
+
+        let verifier_key: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PrivyVerifierKey)
+            .unwrap_or_else(|| panic!("privy verifier not configured"));
+
+        let message: Bytes = (did.clone(), wallet.clone()).to_xdr(&env);
+        env.crypto()
+            .ed25519_verify(&verifier_key, &message, &signature);
+
+        let did_key = DataKey::PrivyDid(did.clone());
+        if env.storage().persistent().has(&did_key) {
+            panic!("DID already registered");
+        }
+        env.storage().persistent().set(&did_key, &wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(wallet.clone()), &did);
+
+        env.events()
+            .publish((symbol_short!("did_reg"),), (wallet, did));
+    }
+
+    /// Update the wallet address for an existing Privy DID mapping.
+    /// Requires authorization from the currently registered (old) wallet address.
+    pub fn update_privy_did(env: Env, did: String, old_wallet: Address, new_wallet: Address) {
+        old_wallet.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        let stored_wallet: Address = env
+            .storage()
+            .persistent()
+            .get(&did_key)
+            .unwrap_or_else(|| panic!("DID not registered"));
+        if stored_wallet != old_wallet {
+            panic!("unauthorized: old wallet does not match registered wallet");
+        }
+        // Remove old reverse mapping
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WalletDid(old_wallet.clone()));
+        // Update forward and reverse mappings
+        env.storage().persistent().set(&did_key, &new_wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+    }
+
+    /// Admin recovery: reassign a DID mapping to a new wallet.
+    /// Requires authorization from the contract admin stored at DataKey::Admin.
+    pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        admin.require_auth();
+        let did_key = DataKey::PrivyDid(did.clone());
+        // Remove old reverse mapping if present
+        if let Some(old_wallet) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Address>(&did_key)
+        {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::WalletDid(old_wallet));
+        }
+        env.storage().persistent().set(&did_key, &new_wallet);
+        env.storage()
+            .persistent()
+            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+    }
+
+    /// Get the wallet address registered for a Privy DID
+    pub fn get_wallet_for_did(env: Env, did: String) -> Address {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PrivyDid(did))
+            .unwrap_or_else(|| panic!("DID not registered"))
+    }
+
     /// Unregister a user's profile and mapping
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
-        let address_key = String::from_str(&env, ADDRESS_TO_USERNAME);
-        let username_key = String::from_str(&env, USERNAME_TO_ADDRESS);
-
-        let mut address_to_username: Map<Address, String> = env
+        let user_key = DataKey::User(user.clone());
+        let username: String = env
             .storage()
             .persistent()
-            .get(&address_key)
-            .unwrap_or(Map::new(&env));
-
-        let username = address_to_username
-            .get(user.clone())
+            .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"));
+        let username_key = DataKey::Username(username);
 
-        let mut username_to_address: Map<String, Address> = env
-            .storage()
-            .persistent()
-            .get(&username_key)
-            .unwrap_or(Map::new(&env));
-
-        address_to_username.remove(user.clone());
-        username_to_address.remove(username);
-
-        env.storage()
-            .persistent()
-            .set(&address_key, &address_to_username);
-        env.storage()
-            .persistent()
-            .set(&username_key, &username_to_address);
-
+        env.storage().persistent().remove(&user_key);
+        env.storage().persistent().remove(&username_key);
         env.storage().persistent().remove(&DataKey::Avatar(user));
     }
 }
+
+#[cfg(test)]
+mod test;
 
 #[cfg(test)]
 mod tests {
@@ -134,6 +239,33 @@ mod tests {
         client.update_profile(&user, &avatar_uri);
 
         assert_eq!(client.get_avatar(&user), avatar_uri);
+    }
+
+    #[test]
+    fn test_unregister_user_removes_profile_and_mappings() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let user = Address::generate(&env);
+        let username = String::from_str(&env, "ebube");
+
+        client.register_user(&user, &username);
+        client.update_profile(
+            &user,
+            &String::from_str(&env, "https://example.com/avatar.png"),
+        );
+        client.unregister_user(&user);
+
+        env.as_contract(&contract_id, || {
+            assert!(!env.storage().persistent().has(&DataKey::User(user.clone())));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::Username(username.clone())));
+        });
+        assert_eq!(client.get_avatar(&user), String::from_str(&env, ""));
     }
 
     #[test]

@@ -1,4 +1,9 @@
-export type TransactionType = "sent" | "received" | "swap" | "payment" | "yield";
+export type TransactionType =
+  | "sent"
+  | "received"
+  | "swap"
+  | "payment"
+  | "yield";
 export type TransactionStatus = "completed" | "pending" | "failed";
 export type YieldType = "interest" | "reward" | "apy";
 
