@@ -4,7 +4,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent, TokenSalvagedEvent};
+use super::parser::{parse_zaps_event, ZapsEvent, TokenSalvagedEvent, UserRegisteredEvent};
+use crate::api::r#yield::{invalidate_platform_yield_cache, YieldCache};
 use crate::db::r#yield::{process_yield_deposit_tx, process_yield_withdrawal_tx, log_yield_rate_update};
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
@@ -60,65 +61,23 @@ pub async fn run(
                     next_cursor = cursor + 1;
                 }
 
-                // AC1 + AC2: Open one transaction; write all events AND the new
-                // checkpoint inside it so they commit or roll back atomically.
-                let mut tx = pool.begin().await?;
-
-                for event in &events {
-                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings, 
-                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type 
-                    // or assume the topic is available in the payload somehow (e.g. decoded by a proxy or we check fields).
-                    // For now, we will use a heuristic: if it has "apy", it's YieldRateUpdated.
-                    // Otherwise we try extracting topic.
-                    
-                    let topic_hint = super::parser::find_nested_string(event, "topic_symbol")
-                        .or_else(|| super::parser::find_nested_string(event, "event_type"));
-                    
-                    let guessed_topic = if let Some(t) = topic_hint {
-                        t
-                    } else if super::parser::find_nested_i64(event, "apy").is_some() {
-                        "YieldRateUpdated".to_string()
-                    } else if super::parser::find_nested_string(event, "sender").is_some() {
-                        "SocialPaymentEvent".to_string()
-                    } else if let Some(t) = super::parser::find_nested_string(event, "type") {
-                        t // maybe type="DEPOSIT" etc.
-                    } else {
-                        "".to_string()
-                    };
-
-                    match parse_zaps_event(&guessed_topic, event) {
-                        ZapsEvent::YieldDeposited(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) = process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
-                                tracing::warn!("Failed to process YieldDeposited event: {err}");
-                            }
+                // AC1 + AC2: process_event_batch_with_guard writes every event
+                // AND the new checkpoint inside one transaction, committing or
+                // rolling back atomically. (Previously this loop opened its own
+                // transaction, processed events through it, and then never
+                // called `.commit()` or persisted the cursor — every batch was
+                // silently discarded on the next poll's implicit rollback.
+                // Delegating to the already-tested guarded processor fixes
+                // that and gives UserRegistered/YieldAccrued handling for free.)
+                match process_event_batch_with_guard(&pool, &events, next_cursor).await {
+                    Ok(outcome) => {
+                        cursor = next_cursor;
+                        if outcome.platform_yield_dirty {
+                            invalidate_platform_yield_cache(cache.as_ref()).await;
                         }
-                        ZapsEvent::YieldWithdrawn(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) = process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
-                                tracing::warn!("Failed to process YieldWithdrawn event: {err}");
-                            }
-                        }
-                        ZapsEvent::YieldRateUpdated(e) => {
-                            if let Err(err) = log_yield_rate_update(&pool, e.apy).await {
-                                tracing::warn!("Failed to process YieldRateUpdated event: {err}");
-                            }
-                         }
-
-                        ZapsEvent::TokenSalvaged(e) => {
-                            if let Err(err) = process_token_salvaged_event(e, &mut tx).await {
-                                tracing::warn!("Failed to process TokenSalvaged event: {err}");
-                            }
-                        }
-                        ZapsEvent::Unknown => {
-                            if let Some(payment_event) = extract_social_payment_event(event) {
-                                if let Err(err) =
-                                    process_social_payment_event(payment_event, &pool, &mut tx).await
-                                {
-                                    tracing::warn!("Failed to process Stellar payment event: {err}");
-                                }
-                            }
-                        }
+                    }
+                    Err(err) => {
+                        tracing::error!("Failed to process indexer event batch: {err}");
                     }
                 }
 
@@ -180,6 +139,10 @@ pub async fn process_event_batch_with_guard(
                         e.tx_hash
                     );
                     outcome.platform_yield_dirty = true;
+                }
+                // #542: sync a real on-chain username to the users table.
+                ZapsEvent::UserRegistered(e) => {
+                    process_user_registered_event(e, &mut tx).await?;
                 }
                 ZapsEvent::Unknown => {
                     if let Some(payment_event) = extract_social_payment_event(event) {
@@ -282,6 +245,9 @@ fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Val
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
         // Add this new line:
         json!({ "topics": [[{ "type": "symbol", "value": "TokenSalvaged" }]] }),
+        json!({ "topics": [[{ "type": "symbol", "value": "YieldAccrued" }]] }),
+        // #542
+        json!({ "topics": [[{ "type": "symbol", "value": "UserRegistered" }]] }),
     ];
     // ... rest of the function remains exactly the same
 
@@ -413,29 +379,6 @@ fn find_nested_i64(value: &Value, key: &str) -> Option<i64> {
     }
 }
 
-async fn get_or_create_user_id(
-    address: &str,
-    pool: &PgPool,
-) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
-    let username = slugify_address(address);
-    let row = sqlx::query(
-        r#"
-        INSERT INTO users (address, username, display_name)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (address)
-        DO UPDATE SET username = COALESCE(users.username, EXCLUDED.username)
-        RETURNING id
-        "#,
-    )
-    .bind(address)
-    .bind(&username)
-    .bind(Some(&username))
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.get("id"))
-}
-
 async fn get_or_create_user_id_tx(
     tx: &mut Transaction<'_, Postgres>,
     address: &str,
@@ -509,6 +452,32 @@ pub async fn process_token_salvaged_event(
     Ok(())
 }
 
+/// #542: sync a real on-chain username registration to the `users` table.
+///
+/// Unlike `get_or_create_user_id_tx`'s slugified placeholder (used when an
+/// address is only known from a payment/yield event), this always overwrites
+/// `username` with the on-chain value — a `UserRegistered` event is the
+/// authoritative source, so it must supersede any placeholder.
+pub async fn process_user_registered_event(
+    event: UserRegisteredEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        INSERT INTO users (address, username, display_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (address) DO UPDATE SET username = EXCLUDED.username
+        "#,
+    )
+    .bind(&event.address)
+    .bind(&event.username)
+    .bind(Some(&event.username))
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,6 +504,36 @@ mod tests {
         assert!(filters
             .iter()
             .any(|filter| filter["topics"][0][0]["value"] == "YieldAccrued"));
+    }
+
+    #[test]
+    fn payload_subscribes_to_user_registered_events() {
+        // #542: without this filter the indexer never receives registrations
+        // from the user_registry contract's `register_user`.
+        let payload = build_get_events_payload(1, None);
+        let filters = payload["params"][0]["filters"].as_array().unwrap();
+
+        assert!(filters
+            .iter()
+            .any(|filter| filter["topics"][0][0]["value"] == "UserRegistered"));
+    }
+
+    #[test]
+    fn parses_user_registered_event_payload() {
+        let payload = json!({
+            "address": "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567",
+            "username": "ebube",
+            "tx_hash": "deadbeef"
+        });
+
+        match parse_zaps_event("UserRegistered", &payload) {
+            ZapsEvent::UserRegistered(e) => {
+                assert_eq!(e.address, "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+                assert_eq!(e.username, "ebube");
+                assert_eq!(e.tx_hash, "deadbeef");
+            }
+            _ => panic!("expected ZapsEvent::UserRegistered"),
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, String,
+    BytesN, Env, String, Symbol,
 };
 
 #[contract]
@@ -126,7 +126,13 @@ impl UserRegistryContract {
         env.storage().persistent().set(&username_key, &user);
         env.storage()
             .persistent()
-            .set(&DataKey::UserDeposit(user), &reservation_amount);
+            .set(&DataKey::UserDeposit(user.clone()), &reservation_amount);
+
+        // #542: publish so the off-chain indexer can sync this registration
+        // to the `users` table. Without this, on-chain registration and the
+        // off-chain database silently diverge.
+        env.events()
+            .publish((Symbol::new(&env, "UserRegistered"),), (user, username));
     }
 
     /// Retrieve the Address associated with a username
