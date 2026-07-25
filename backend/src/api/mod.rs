@@ -39,6 +39,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
+/// #543
+pub fn payout_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/username", post(feed::payout_by_username))
+        .with_state(pool)
+}
+
 pub fn social_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/like", post(social::like_payment))
