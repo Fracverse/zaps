@@ -27,6 +27,15 @@ pub struct YieldAccruedEvent {
     pub tx_hash: String,
 }
 
+/// BE-049: emitted when an admin salvages stranded tokens from a contract.
+pub struct TokenSalvagedEvent {
+    pub salvager: String,
+    pub token: String,
+    pub recipient: String,
+    pub amount: i64,
+    pub tx_hash: String,
+}
+
 /// BE-047: emitted when a mutual friendship is established on-chain via
 /// `accept_friend`. Contains the requester and friend addresses.
 pub struct FriendAddedEvent {
@@ -48,6 +57,7 @@ pub enum ZapsEvent {
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
     YieldAccrued(YieldAccruedEvent),
+    TokenSalvaged(TokenSalvagedEvent),
     FriendAdded(FriendAddedEvent),
     FriendRemoved(FriendRemovedEvent),
     Unknown,
@@ -137,6 +147,21 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
                 tx_hash,
             })
         }
+        "TokenSalvaged" => {
+            let salvager = find_nested_string(value, "salvager").unwrap_or_default();
+            let token = find_nested_string(value, "token").unwrap_or_default();
+            let recipient = find_nested_string(value, "recipient").unwrap_or_default();
+            let amount = find_nested_i64(value, "amount").unwrap_or_default();
+            let tx_hash = extract_tx_hash(value);
+
+            ZapsEvent::TokenSalvaged(TokenSalvagedEvent {
+                salvager,
+                token,
+                recipient,
+                amount,
+                tx_hash,
+            })
+        }
         // BE-047: Friendship events carry two addresses in a `data.vec` array.
         "FriendAdded" => {
             let (a1, a2) = extract_vec_address_pair(value);
@@ -204,12 +229,15 @@ pub fn extract_tx_hash(value: &Value) -> String {
 /// array where each element is `{ "address": "C..." }`. Returns `(None, None)`
 /// when the structure does not match.
 pub fn extract_vec_address_pair(value: &Value) -> (Option<String>, Option<String>) {
-    let vec = value
+    let Some(vec) = value
         .get("body")
         .and_then(|body| body.get("v0"))
         .and_then(|v0| v0.get("data"))
         .and_then(|data| data.get("vec"))
-        .and_then(Value::as_array)?;
+        .and_then(Value::as_array)
+    else {
+        return (None, None);
+    };
 
     let a1 = vec
         .first()

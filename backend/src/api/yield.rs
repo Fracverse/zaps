@@ -11,7 +11,8 @@ use redis::{
     RedisError,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
+use std::time::Duration;
 use stellar_base::{
     account::DataValue,
     memo::Memo,

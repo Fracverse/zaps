@@ -4,7 +4,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent};
+use super::parser::{parse_zaps_event, TokenSalvagedEvent, ZapsEvent};
 use crate::api::r#yield::{invalidate_platform_yield_cache, YieldCache};
 use crate::db::r#yield::{
     log_yield_rate_update_tx, process_yield_deposit_tx, process_yield_withdrawal_tx,
@@ -136,6 +136,9 @@ pub async fn process_event_batch_with_guard(
                         e.tx_hash
                     );
                     outcome.platform_yield_dirty = true;
+                }
+                ZapsEvent::TokenSalvaged(e) => {
+                    process_token_salvaged_event(e, &mut tx).await?;
                 }
                 // BE-047: Synchronize on-chain friendships to the off-chain database.
                 ZapsEvent::FriendAdded(e) => {
@@ -306,6 +309,7 @@ fn build_get_events_payload(start_ledger: i64, contract_ids: &[String]) -> Value
         json!({ "topics": [[{ "type": "symbol", "value": "YieldWithdrawn" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldAccrued" }]] }),
+        json!({ "topics": [[{ "type": "symbol", "value": "TokenSalvaged" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "FriendAdded" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "FriendRemoved" }]] }),
     ];
@@ -509,6 +513,31 @@ fn slugify_address(address: &str) -> String {
     format!("u_{}", snippet.to_lowercase())
 }
 
+/// Process a TokenSalvaged administrative sweep event.
+pub async fn process_token_salvaged_event(
+    event: TokenSalvagedEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (tx_hash, kind, status, from_address, to_address, token, amount)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (tx_hash) DO NOTHING
+        "#,
+    )
+    .bind(&event.tx_hash)
+    .bind("ADMIN_SWEEP")
+    .bind("SALVAGED")
+    .bind(&event.salvager)
+    .bind(&event.recipient)
+    .bind(&event.token)
+    .bind(event.amount)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,6 +577,16 @@ mod tests {
         assert!(filters
             .iter()
             .any(|filter| filter["topics"][0][0]["value"] == "FriendRemoved"));
+    }
+
+    #[test]
+    fn payload_subscribes_to_token_salvaged_events() {
+        let payload = build_get_events_payload(1, &[]);
+        let filters = payload["params"][0]["filters"].as_array().unwrap();
+
+        assert!(filters
+            .iter()
+            .any(|filter| filter["topics"][0][0]["value"] == "TokenSalvaged"));
     }
 
     #[test]
