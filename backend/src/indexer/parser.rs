@@ -27,11 +27,29 @@ pub struct YieldAccruedEvent {
     pub tx_hash: String,
 }
 
+/// BE-047: emitted when a mutual friendship is established on-chain via
+/// `accept_friend`. Contains the requester and friend addresses.
+pub struct FriendAddedEvent {
+    pub requester: String,
+    pub friend: String,
+    pub tx_hash: String,
+}
+
+/// BE-047: emitted when a mutual friendship is dissolved on-chain via
+/// `remove_friend`. Contains both participant addresses.
+pub struct FriendRemovedEvent {
+    pub user: String,
+    pub friend: String,
+    pub tx_hash: String,
+}
+
 pub enum ZapsEvent {
     YieldDeposited(YieldDepositedEvent),
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
     YieldAccrued(YieldAccruedEvent),
+    FriendAdded(FriendAddedEvent),
+    FriendRemoved(FriendRemovedEvent),
     Unknown,
 }
 
@@ -119,6 +137,25 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
                 tx_hash,
             })
         }
+        // BE-047: Friendship events carry two addresses in a `data.vec` array.
+        "FriendAdded" => {
+            let (a1, a2) = extract_vec_address_pair(value);
+            let tx_hash = extract_tx_hash(value);
+            ZapsEvent::FriendAdded(FriendAddedEvent {
+                requester: a1.unwrap_or_default(),
+                friend: a2.unwrap_or_default(),
+                tx_hash,
+            })
+        }
+        "FriendRemoved" => {
+            let (a1, a2) = extract_vec_address_pair(value);
+            let tx_hash = extract_tx_hash(value);
+            ZapsEvent::FriendRemoved(FriendRemovedEvent {
+                user: a1.unwrap_or_default(),
+                friend: a2.unwrap_or_default(),
+                tx_hash,
+            })
+        }
         _ => ZapsEvent::Unknown,
     }
 }
@@ -161,6 +198,32 @@ pub fn extract_tx_hash(value: &Value) -> String {
         .or_else(|| find_nested_string(value, "txHash"))
         .or_else(|| find_nested_string(value, "transactionHash"))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// BE-047: Extract two addresses from a Soroban event's `body.v0.data.vec`
+/// array where each element is `{ "address": "C..." }`. Returns `(None, None)`
+/// when the structure does not match.
+pub fn extract_vec_address_pair(value: &Value) -> (Option<String>, Option<String>) {
+    let vec = value
+        .get("body")
+        .and_then(|body| body.get("v0"))
+        .and_then(|v0| v0.get("data"))
+        .and_then(|data| data.get("vec"))
+        .and_then(Value::as_array)?;
+
+    let a1 = vec
+        .first()
+        .and_then(|v| v.get("address"))
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    let a2 = vec
+        .get(1)
+        .and_then(|v| v.get("address"))
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    (a1, a2)
 }
 
 #[cfg(test)]
@@ -241,5 +304,65 @@ mod tests {
     fn extract_event_topic_returns_none_for_missing_topic() {
         let event = serde_json::json!({ "other_field": "value" });
         assert_eq!(extract_event_topic(&event), None);
+    }
+
+    #[test]
+    fn parses_friend_added_event() {
+        let payload = serde_json::json!({
+            "body": {
+                "v0": {
+                    "data": {
+                        "vec": [
+                            { "address": "CAFCT4" },
+                            { "address": "CAHK3M" }
+                        ]
+                    }
+                }
+            },
+            "txHash": "friend_tx_123"
+        });
+
+        match parse_zaps_event("FriendAdded", &payload) {
+            ZapsEvent::FriendAdded(event) => {
+                assert_eq!(event.requester, "CAFCT4");
+                assert_eq!(event.friend, "CAHK3M");
+                assert_eq!(event.tx_hash, "friend_tx_123");
+            }
+            _ => panic!("expected a FriendAdded event"),
+        }
+    }
+
+    #[test]
+    fn parses_friend_removed_event() {
+        let payload = serde_json::json!({
+            "body": {
+                "v0": {
+                    "data": {
+                        "vec": [
+                            { "address": "GUSER" },
+                            { "address": "GFRIEND" }
+                        ]
+                    }
+                }
+            },
+            "txHash": "remove_tx_456"
+        });
+
+        match parse_zaps_event("FriendRemoved", &payload) {
+            ZapsEvent::FriendRemoved(event) => {
+                assert_eq!(event.user, "GUSER");
+                assert_eq!(event.friend, "GFRIEND");
+                assert_eq!(event.tx_hash, "remove_tx_456");
+            }
+            _ => panic!("expected a FriendRemoved event"),
+        }
+    }
+
+    #[test]
+    fn extract_vec_address_pair_returns_none_for_missing_data() {
+        let payload = serde_json::json!({ "no_body": true });
+        let (a1, a2) = extract_vec_address_pair(&payload);
+        assert!(a1.is_none());
+        assert!(a2.is_none());
     }
 }
