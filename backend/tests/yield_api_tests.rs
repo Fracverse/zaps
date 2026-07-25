@@ -18,18 +18,28 @@ use sqlx::PgPool;
 use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
 
-// Re-exported from crate.
-use zaps_backend::api::feed::AuthUser;
-
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .expect("Set TEST_DATABASE_URL or DATABASE_URL to run integration tests");
-    PgPool::connect(&url)
+    let pool = PgPool::connect(&url)
         .await
-        .expect("Failed to connect to test database")
+        .expect("Failed to connect to test database");
+    zaps_backend::db::run_migrations(&pool)
+        .await
+        .expect("Failed to apply test database migrations");
+    pool
+}
+
+/// Builds a syntactically valid, unique Stellar-shaped address for a test
+/// user: `users.address` is `VARCHAR(56)` (see backend/migrations/0001_schema.sql),
+/// so the total length here must be exactly 56 or `seed_user` fails with a
+/// "value too long for type character varying(56)" database error.
+fn test_address(prefix: &str, run: &str) -> String {
+    let padding = 56 - prefix.len() - run.len();
+    format!("{prefix}{run}{}", "X".repeat(padding))
 }
 
 fn yield_router(pool: PgPool) -> Router {
@@ -48,7 +58,10 @@ async fn seed_user(pool: &PgPool, address: &str) -> Uuid {
         "#,
     )
     .bind(address)
-    .bind(format!("user_{}", &address[1..std::cmp::min(10, address.len())]))
+    .bind(format!(
+        "user_{}",
+        &address[1..std::cmp::min(10, address.len())]
+    ))
     .fetch_one(pool)
     .await
     .expect("Failed to seed user")
@@ -109,13 +122,13 @@ async fn test_yield_endpoints_require_auth() {
     let router = yield_router(pool);
 
     // Missing auth header
-    for path in [
-        "/balance",
-        "/history?limit=1&offset=0",
-    ]
-    {
+    for path in ["/balance", "/history?limit=1&offset=0"] {
         let (status, _) = response_json(&router, get_req(path, None)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 
     // Missing auth header for POST
@@ -126,7 +139,11 @@ async fn test_yield_endpoints_require_auth() {
     ] {
         let req = post_req_json(path, None, payload);
         let (status, _) = response_json(&router, req).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path} must be 401 without auth");
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{path} must be 401 without auth"
+        );
     }
 }
 
@@ -140,10 +157,7 @@ async fn test_yield_balance_history_toggle() {
 
     // This address string is what the AuthUser extractor maps from JWT `sub`.
     // It may not be a real Stellar address; the extractor only uses it as an opaque key.
-    let address = format!(
-        "GTESTYIELDUSER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GTESTYIELDUSER", &run);
     let user_id = seed_user(&pool, &address).await;
 
     // Token mapping:
@@ -156,15 +170,29 @@ async fn test_yield_balance_history_toggle() {
     assert_eq!(status, StatusCode::OK);
 
     // Validate shape & defaults.
-    assert!(body.get("available_balance").is_some(), "available_balance missing");
-    assert!(body.get("earning_balance").is_some(), "earning_balance missing");
-    assert!(body.get("accrued_interest").is_some(), "accrued_interest missing");
-    assert!(body.get("total_earning_balance").is_some(), "total_earning_balance missing");
+    assert!(
+        body.get("available_balance").is_some(),
+        "available_balance missing"
+    );
+    assert!(
+        body.get("earning_balance").is_some(),
+        "earning_balance missing"
+    );
+    assert!(
+        body.get("accrued_interest").is_some(),
+        "accrued_interest missing"
+    );
+    assert!(
+        body.get("total_earning_balance").is_some(),
+        "total_earning_balance missing"
+    );
     assert!(body.get("apy").is_some(), "apy missing");
 
     // auto_earn_enabled default comes from `users.auto_earn_enabled`.
     assert_eq!(
-        body.get("auto_earn_enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+        body.get("auto_earn_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         false,
         "auto_earn_enabled should default to false"
     );
@@ -220,18 +248,18 @@ async fn test_yield_balance_history_toggle() {
     }
 
     // 3) GET /api/yield/history
-    let (hist_status, hist_body) = response_json(
-        &router,
-        get_req("/history?limit=10&offset=0", Some(&token)),
-    )
-    .await;
+    let (hist_status, hist_body) =
+        response_json(&router, get_req("/history?limit=10&offset=0", Some(&token))).await;
     assert_eq!(hist_status, StatusCode::OK);
 
     let items = hist_body
         .get("items")
         .and_then(|v| v.as_array())
         .expect("history items must be array");
-    assert!(!items.is_empty(), "expected at least one yield history item");
+    assert!(
+        !items.is_empty(),
+        "expected at least one yield history item"
+    );
 
     // Validate item fields exist.
     let first = &items[0];
@@ -293,9 +321,6 @@ async fn test_yield_balance_history_toggle() {
         .execute(&pool)
         .await
         .ok();
-
-    // Avoid unused import warning.
-    let _ = AuthUser;
 }
 
 // ── #480 [BE-062] — validation & input-format tests ─────────────────────────
@@ -307,10 +332,7 @@ async fn test_deposit_and_withdraw_reject_non_positive_amount() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDNONPOS{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDNONPOS", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -351,10 +373,7 @@ async fn test_deposit_rejects_insufficient_available_balance() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDDEPINSUF{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDDEPINSUF", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -362,7 +381,11 @@ async fn test_deposit_rejects_insufficient_available_balance() {
     // deposit amount must be rejected as insufficient.
     let (status, body) = response_json(
         &router,
-        post_req_json("/deposit", Some(&token), serde_json::json!({ "amount": 100 })),
+        post_req_json(
+            "/deposit",
+            Some(&token),
+            serde_json::json!({ "amount": 100 }),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -391,10 +414,7 @@ async fn test_withdraw_rejects_insufficient_earning_balance() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDWDINSUF{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDWDINSUF", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -435,10 +455,7 @@ async fn test_post_endpoints_reject_malformed_json_syntax() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDSYNTAX{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDSYNTAX", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -475,10 +492,7 @@ async fn test_post_endpoints_reject_invalid_input_shapes() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDSHAPE{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDSHAPE", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -519,10 +533,7 @@ async fn test_history_clamps_out_of_range_pagination_params() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDCLAMP{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDCLAMP", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -536,11 +547,8 @@ async fn test_history_clamps_out_of_range_pagination_params() {
     assert_eq!(body.get("limit").and_then(|v| v.as_i64()), Some(100));
 
     // limit of 0 (or negative) is clamped up to the minimum of 1.
-    let (status, body) = response_json(
-        &router,
-        get_req("/history?limit=0&offset=0", Some(&token)),
-    )
-    .await;
+    let (status, body) =
+        response_json(&router, get_req("/history?limit=0&offset=0", Some(&token))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.get("limit").and_then(|v| v.as_i64()), Some(1));
 
@@ -568,10 +576,7 @@ async fn test_history_rejects_non_numeric_pagination_params() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDBADQ{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDBADQ", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -601,10 +606,7 @@ async fn test_toggle_auto_requires_boolean_enabled_field() {
     let router = yield_router(pool.clone());
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let address = format!(
-        "GVALIDTOGGLE{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let address = test_address("GVALIDTOGGLE", &run);
     let user_id = seed_user(&pool, &address).await;
     let token = address.clone();
 
@@ -632,4 +634,3 @@ async fn test_toggle_auto_requires_boolean_enabled_field() {
         .await
         .ok();
 }
-
