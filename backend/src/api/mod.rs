@@ -17,7 +17,13 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
+/// User routes without a Redis cache; username resolution falls through to Postgres.
 pub fn user_routes(pool: sqlx::PgPool) -> Router {
+    user_routes_with_state(user::UserState::new(pool, None))
+}
+
+/// #544: User routes wired to the Redis username->address cache.
+pub fn user_routes_with_state(state: user::UserState) -> Router {
     Router::new()
         .route(
             "/profile",
@@ -28,7 +34,8 @@ pub fn user_routes(pool: sqlx::PgPool) -> Router {
         .route("/friends/request", post(user::send_friend_request))
         .route("/friends/:id/accept", post(user::accept_friend_request))
         .route("/friends/:id/reject", post(user::reject_friend_request))
-        .with_state(pool)
+        .route("/resolve/:username", get(user::resolve_address))
+        .with_state(state)
 }
 
 pub fn feed_routes(pool: sqlx::PgPool) -> Router {
