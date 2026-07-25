@@ -119,6 +119,8 @@
       ]
     ],
     [],
+    [],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
@@ -321,7 +323,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 2503171
+                            "lo": 2505030
                           }
                         }
                       },
@@ -346,6 +348,14 @@
                       },
                       {
                         "key": {
+                          "symbol": "paused"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "token"
                         },
                         "val": {
@@ -359,7 +369,7 @@
                         "val": {
                           "i128": {
                             "hi": 0,
-                            "lo": 2503171
+                            "lo": 2505030
                           }
                         }
                       },
@@ -571,7 +581,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 2498019
+                          "lo": 2499878
                         }
                       }
                     },
@@ -644,7 +654,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 7501981
+                          "lo": 7500122
                         }
                       }
                     },
@@ -1245,7 +1255,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Deposited"
+                "symbol": "YieldDeposited"
               }
             ],
             "data": {
@@ -1553,6 +1563,106 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
+                "symbol": "total_shares"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "total_shares"
+              }
+            ],
+            "data": {
+              "i128": {
+                "hi": 0,
+                "lo": 5000000
+              }
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
+                "symbol": "total_assets"
+              }
+            ],
+            "data": "void"
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "total_assets"
+              }
+            ],
+            "data": {
+              "i128": {
+                "hi": 0,
+                "lo": 5005152
+              }
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
                 "symbol": "withdraw"
               }
             ],
@@ -1591,19 +1701,19 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2501981
+                    "lo": 2500122
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2501981
+                    "lo": 2500122
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2503171
+                    "lo": 2505030
                   }
                 }
               ]
@@ -1642,7 +1752,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2501981
+                    "lo": 2500122
                   }
                 }
               ]
@@ -1676,7 +1786,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 2501981
+                "lo": 2500122
               }
             }
           }
@@ -1714,7 +1824,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Withdrawn"
+                "symbol": "YieldWithdrawn"
               }
             ],
             "data": {
@@ -1725,13 +1835,19 @@
                 {
                   "i128": {
                     "hi": 0,
+                    "lo": 2500122
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
                     "lo": 2500000
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 2501981
+                    "lo": 0
                   }
                 }
               ]
@@ -1806,7 +1922,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 7501981
+                "lo": 7500122
               }
             }
           }
@@ -1908,7 +2024,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 2503171
+                "lo": 2505030
               }
             }
           }
