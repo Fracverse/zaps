@@ -17,6 +17,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
+use zaps_backend::api::feed::AuthUser;
 
 // Re-exported from crate.
 // ── helpers ─────────────────────────────────────────────────────────────────

@@ -56,12 +56,18 @@ pub fn bridge_routes(state: bridge::BridgeState) -> Router {
         .with_state(state)
 }
 
+/// Yield routes without a Redis cache; reads fall through to Postgres.
 pub fn yield_routes(pool: sqlx::PgPool) -> Router {
+    yield_routes_with_state(r#yield::YieldState::new(pool, None))
+}
+
+/// BE-061: Yield routes wired to the Redis cache the indexer evicts from.
+pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
     Router::new()
         .route("/balance", get(r#yield::get_balance))
         .route("/history", get(r#yield::get_history))
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))
         .route("/toggle-auto", post(r#yield::toggle_auto_earn))
-        .with_state(pool)
+        .with_state(state)
 }

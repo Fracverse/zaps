@@ -23,9 +23,18 @@ pub struct SocialPaymentEvent {
     pub tx_hash: String,
 }
 
+/// BE-061: What a committed batch of events means for downstream caches.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct BatchOutcome {
+    /// A `YieldAccrued` / `YieldRateUpdated` event moved platform-wide yield
+    /// state, so the cached platform keys are stale and must be evicted.
+    pub platform_yield_dirty: bool,
+}
+
 pub async fn run(
     pool: PgPool,
     rpc_url: String,
+    cache: Option<YieldCache>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Starting Stellar event indexer background worker...");
 
@@ -128,12 +137,17 @@ pub async fn run(
 /// BE-045: Process a batch of events within a guarded PostgreSQL transaction block.
 /// If any parser error or database query fails during processing, `tx.rollback().await`
 /// is explicitly called to release the connection back to the pool immediately without leaking.
+///
+/// BE-061: Returns a [`BatchOutcome`] describing which caches the committed
+/// batch invalidated. Cache eviction itself is the caller's job — it must not
+/// happen until the transaction is durable.
 pub async fn process_event_batch_with_guard(
     pool: &PgPool,
     events: &[Value],
     next_cursor: i64,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<BatchOutcome, Box<dyn Error + Send + Sync>> {
     let mut tx = pool.begin().await?;
+    let mut outcome = BatchOutcome::default();
 
     let process_res: Result<(), Box<dyn Error + Send + Sync>> = async {
         for event in events {
@@ -153,6 +167,19 @@ pub async fn process_event_batch_with_guard(
                 }
                 ZapsEvent::YieldRateUpdated(e) => {
                     log_yield_rate_update_tx(&mut tx, e.apy).await?;
+                    outcome.platform_yield_dirty = true;
+                }
+                // BE-061: The vault compounded interest and published a new
+                // yield index; every cached platform yield figure is now stale.
+                ZapsEvent::YieldAccrued(e) => {
+                    tracing::info!(
+                        "YieldAccrued: +{} over {} ledgers, new index {} (tx {})",
+                        e.added_yield,
+                        e.elapsed_ledgers,
+                        e.new_index,
+                        e.tx_hash
+                    );
+                    outcome.platform_yield_dirty = true;
                 }
                 ZapsEvent::Unknown => {
                     if let Some(payment_event) = extract_social_payment_event(event) {
@@ -170,7 +197,7 @@ pub async fn process_event_batch_with_guard(
     match process_res {
         Ok(()) => {
             tx.commit().await?;
-            Ok(())
+            Ok(outcome)
         }
         Err(err) => {
             tracing::error!("Transaction failed during indexer event processing, rolling back: {err}");
@@ -497,6 +524,17 @@ mod tests {
             filter["topics"][0][0]["value"].as_str(),
             Some("SocialPaymentEvent")
         );
+    }
+
+    #[test]
+    fn payload_subscribes_to_yield_accrued_events() {
+        // BE-061: without this filter the cache would never be evicted.
+        let payload = build_get_events_payload(1, None);
+        let filters = payload["params"][0]["filters"].as_array().unwrap();
+
+        assert!(filters
+            .iter()
+            .any(|filter| filter["topics"][0][0]["value"] == "YieldAccrued"));
     }
 
     #[test]

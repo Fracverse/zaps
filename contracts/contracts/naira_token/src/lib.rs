@@ -5,6 +5,9 @@ use soroban_sdk::{
 };
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
+const NAME_KEY: Symbol = symbol_short!("name");
+const SYMBOL_KEY: Symbol = symbol_short!("symbol");
+const DECIMALS_KEY: Symbol = symbol_short!("decimals");
 
 #[contracttype]
 enum DataKey {
@@ -27,11 +30,14 @@ impl NairaTokenContract {
         admin
     }
 
-    pub fn initialize(env: Env, admin: Address, _name: String, _symbol: String) {
+    pub fn initialize(env: Env, admin: Address, name: String, symbol: String, decimals: u32) {
         if env.storage().instance().has(&ADMIN_KEY) {
             panic!("already initialized");
         }
         env.storage().instance().set(&ADMIN_KEY, &admin);
+        env.storage().instance().set(&NAME_KEY, &name);
+        env.storage().instance().set(&SYMBOL_KEY, &symbol);
+        env.storage().instance().set(&DECIMALS_KEY, &decimals);
     }
 
     pub fn mint(env: Env, to: Address, amount: i128) {
@@ -136,10 +142,54 @@ impl NairaTokenContract {
             .unwrap_or(0)
     }
 
+    pub fn name(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&NAME_KEY)
+            .expect("not initialized")
+    }
+
+    pub fn symbol(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&SYMBOL_KEY)
+            .expect("not initialized")
+    }
+
+    pub fn decimals(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DECIMALS_KEY)
+            .expect("not initialized")
+    }
+
     /// SC-050: Transfer admin authority to a new address.
     /// Requires the current admin's signature.
     pub fn transfer_admin(env: Env, new_admin: Address) {
         Self::require_admin(&env);
         env.storage().instance().set(&ADMIN_KEY, &new_admin);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env};
+
+    #[test]
+    fn metadata_returns_initialized_values() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, NairaTokenContract);
+        let client = NairaTokenContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let name = String::from_str(&env, "Naira Token");
+        let symbol = String::from_str(&env, "NGN");
+        let decimals = 7u32;
+
+        client.initialize(&admin, &name, &symbol, &decimals);
+
+        assert_eq!(client.name(), name);
+        assert_eq!(client.symbol(), symbol);
+        assert_eq!(client.decimals(), decimals);
     }
 }
