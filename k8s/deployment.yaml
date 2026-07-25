@@ -1,0 +1,95 @@
+# Kubernetes manifests for the Zaps Rust backend API
+# Applies: Deployment, ClusterIP Service, ConfigMap
+# Target: docker images built by CI (see .github/workflows)
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zaps-backend-config
+  namespace: default
+  labels:
+    app: zaps-backend
+data:
+  RUST_LOG: "info"
+  PORT: "8080"
+  # Set DATABASE_URL and other secrets via a separate Secret resource or
+  # an external secrets operator (e.g. AWS Secrets Manager CSI driver).
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zaps-backend
+  namespace: default
+  labels:
+    app: zaps-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zaps-backend
+  template:
+    metadata:
+      labels:
+        app: zaps-backend
+    spec:
+      containers:
+        - name: zaps-backend
+          image: ghcr.io/fracverse/zaps-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: zaps-backend-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: zaps-backend-secrets
+                  key: DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: zaps-backend-secrets
+                  key: JWT_SECRET
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zaps-backend
+  namespace: default
+  labels:
+    app: zaps-backend
+spec:
+  type: ClusterIP
+  selector:
+    app: zaps-backend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080

@@ -10,6 +10,7 @@ pub struct User {
     pub display_name: Option<String>,
     pub bio: Option<String>,
     pub avatar_url: Option<String>,
+    pub auto_earn_enabled: bool,
     pub created_at: NaiveDateTime,
 }
 
@@ -71,6 +72,7 @@ pub struct UserYieldBalance {
     pub user_id: Uuid,
     pub available_balance: i64,
     pub earning_balance: i64,
+    pub last_yield_sync_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
 

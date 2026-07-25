@@ -158,6 +158,51 @@ const MOCK_TRANSACTIONS: Transaction[] = [
     feeAsset: "XLM",
     network: "Stellar",
   },
+  {
+    id: "tx_009",
+    type: "yield",
+    yieldType: "interest",
+    status: "completed",
+    amount: "2.45",
+    asset: "USDC",
+    fiatValue: "2.45",
+    fiatCurrency: "USD",
+    address: "yield.zaps",
+    addressLabel: "Daily yield",
+    timestamp: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+    memo: "Daily yield interest",
+    network: "Stellar",
+  },
+  {
+    id: "tx_010",
+    type: "yield",
+    yieldType: "reward",
+    status: "completed",
+    amount: "15.20",
+    asset: "USDC",
+    fiatValue: "15.20",
+    fiatCurrency: "USD",
+    address: "yield.zaps",
+    addressLabel: "Yield reward",
+    timestamp: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    memo: "Weekly yield reward",
+    network: "Stellar",
+  },
+  {
+    id: "tx_011",
+    type: "yield",
+    yieldType: "apy",
+    status: "completed",
+    amount: "8.75",
+    asset: "USDC",
+    fiatValue: "8.75",
+    fiatCurrency: "USD",
+    address: "yield.zaps",
+    addressLabel: "APY payout",
+    timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+    memo: "APY accrual",
+    network: "Stellar",
+  },
 ];
 
 interface CacheEntry {
@@ -214,6 +259,7 @@ export async function fetchTransactions(
 
   // Apply filters
   let filtered = all.filter((tx) => {
+    if (filters.yieldOnly && tx.type !== "yield") return false;
     if (filters.type !== "all" && tx.type !== filters.type) return false;
     if (filters.status !== "all" && tx.status !== filters.status) return false;
     if (filters.search) {

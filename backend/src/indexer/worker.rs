@@ -113,14 +113,6 @@ pub async fn run(
                     }
                 }
 
-                // AC1: Persist the new ledger checkpoint inside the same transaction.
-                persist_cursor(&mut tx, next_cursor).await?;
-
-                tx.commit().await?;
-
-                cursor = next_cursor;
-                tracing::debug!("Indexer cursor advanced to ledger {cursor}");
-
                 tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
             }
             Err(err) => {
@@ -133,15 +125,71 @@ pub async fn run(
     }
 }
 
+/// BE-045: Process a batch of events within a guarded PostgreSQL transaction block.
+/// If any parser error or database query fails during processing, `tx.rollback().await`
+/// is explicitly called to release the connection back to the pool immediately without leaking.
+pub async fn process_event_batch_with_guard(
+    pool: &PgPool,
+    events: &[Value],
+    next_cursor: i64,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut tx = pool.begin().await?;
+
+    let process_res: Result<(), Box<dyn Error + Send + Sync>> = async {
+        for event in events {
+            let topic = super::parser::extract_event_topic(event)
+                .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
+                .or_else(|| super::parser::find_nested_string(event, "event_type"))
+                .unwrap_or_default();
+
+            match parse_zaps_event(&topic, event) {
+                ZapsEvent::YieldDeposited(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldWithdrawn(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldRateUpdated(e) => {
+                    log_yield_rate_update_tx(&mut tx, e.apy).await?;
+                }
+                ZapsEvent::Unknown => {
+                    if let Some(payment_event) = extract_social_payment_event(event) {
+                        process_social_payment_event(payment_event, &mut tx).await?;
+                    }
+                }
+            }
+        }
+
+        persist_cursor(&mut tx, next_cursor).await?;
+        Ok(())
+    }
+    .await;
+
+    match process_res {
+        Ok(()) => {
+            tx.commit().await?;
+            Ok(())
+        }
+        Err(err) => {
+            tracing::error!("Transaction failed during indexer event processing, rolling back: {err}");
+            if let Err(rb_err) = tx.rollback().await {
+                tracing::warn!("Failed to roll back database transaction: {rb_err}");
+            }
+            Err(err)
+        }
+    }
+}
+
 /// Process a single payment event within the provided transaction.
 /// Taking `&mut Transaction` ensures this write is part of the caller's atomic scope.
 pub async fn process_social_payment_event(
     event: SocialPaymentEvent,
-    pool: &PgPool,
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let sender_id = get_or_create_user_id(&event.sender, pool).await?;
-    let receiver_id = get_or_create_user_id(&event.receiver, pool).await?;
+    let sender_id = get_or_create_user_id_tx(tx, &event.sender).await?;
+    let receiver_id = get_or_create_user_id_tx(tx, &event.receiver).await?;
 
     sqlx::query(
         r#"
@@ -332,10 +380,7 @@ fn find_nested_i64(value: &Value, key: &str) -> Option<i64> {
                 Value::String(text) => text.parse::<i64>().ok(),
                 _ => None,
             })
-            .or_else(|| {
-                map.values()
-                    .find_map(|nested| find_nested_i64(nested, key))
-            }),
+            .or_else(|| map.values().find_map(|nested| find_nested_i64(nested, key))),
         Value::Array(items) => items.iter().find_map(|item| find_nested_i64(item, key)),
         _ => None,
     }
@@ -364,9 +409,51 @@ async fn get_or_create_user_id(
     Ok(row.get("id"))
 }
 
+async fn get_or_create_user_id_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    address: &str,
+) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+    let username = slugify_address(address);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO users (address, username, display_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (address)
+        DO UPDATE SET username = COALESCE(users.username, EXCLUDED.username)
+        RETURNING id
+        "#,
+    )
+    .bind(address)
+    .bind(&username)
+    .bind(Some(&username))
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(row.get("id"))
+}
+
+const ADDRESS_SLUG_SKIP_CHARS: usize = 1;
+const ADDRESS_SLUG_TAKE_CHARS: usize = 14;
+const DEFAULT_ADDRESS_SLUG: &str = "u_unknown";
+
+/// Derive a short username slug from a chain address. Bounds are checked in
+/// terms of character counts (not byte offsets) before slicing so malformed
+/// or unexpectedly short/multibyte addresses can never panic; anything too
+/// short to slice falls back to a default placeholder slug.
 fn slugify_address(address: &str) -> String {
     let trimmed = address.trim();
-    let snippet = trimmed.get(1..15).unwrap_or(trimmed);
+    let char_count = trimmed.chars().count();
+
+    if char_count < ADDRESS_SLUG_SKIP_CHARS + ADDRESS_SLUG_TAKE_CHARS {
+        return DEFAULT_ADDRESS_SLUG.to_string();
+    }
+
+    let snippet: String = trimmed
+        .chars()
+        .skip(ADDRESS_SLUG_SKIP_CHARS)
+        .take(ADDRESS_SLUG_TAKE_CHARS)
+        .collect();
+
     format!("u_{}", snippet.to_lowercase())
 }
 
@@ -417,6 +504,34 @@ mod tests {
         assert_eq!(compute_backoff_delay(0), INITIAL_BACKOFF);
         assert_eq!(compute_backoff_delay(1), Duration::from_secs(2));
         assert_eq!(compute_backoff_delay(6), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn slugifies_a_well_formed_address() {
+        let slug = slugify_address("GABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+        assert_eq!(slug, "u_abcdefghijklmn");
+    }
+
+    #[test]
+    fn falls_back_to_default_slug_for_short_addresses() {
+        assert_eq!(slugify_address(""), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("G"), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("short"), DEFAULT_ADDRESS_SLUG);
+    }
+
+    #[test]
+    fn never_panics_on_multibyte_or_boundary_lengths() {
+        // Multibyte characters must not cause a byte-index panic when slicing.
+        let multibyte = "é".repeat(20);
+        assert_eq!(slugify_address(&multibyte), format!("u_{}", "é".repeat(14)));
+
+        // Exactly at the minimum char count boundary (1 skipped + 14 taken).
+        let exact = "G".repeat(15);
+        assert_eq!(slugify_address(&exact), format!("u_{}", "g".repeat(14)));
+
+        // One char short of the boundary falls back to the default slug.
+        let one_short = "G".repeat(14);
+        assert_eq!(slugify_address(&one_short), DEFAULT_ADDRESS_SLUG);
     }
 
     #[test]

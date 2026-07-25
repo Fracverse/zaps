@@ -6,9 +6,12 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
+
+use crate::services::yield_calc;
 
 // ── #373 — GET /api/yield/balance ─────────────────────────────────────────
 
@@ -16,14 +19,16 @@ use uuid::Uuid;
 pub struct YieldBalanceResponse {
     pub available_balance: i64,
     pub earning_balance: i64,
+    /// Interest accrued since the last on-chain sync (micro-units).
+    pub accrued_interest: i64,
+    /// Earning balance including live accrued interest.
+    pub total_earning_balance: i64,
     /// Current APY as a percentage (e.g., 5.0 for 5%).
     pub apy: f64,
+    pub auto_earn_enabled: bool,
 }
 
-pub async fn get_balance(
-    State(pool): State<sqlx::PgPool>,
-    auth: AuthUser,
-) -> impl IntoResponse {
+pub async fn get_balance(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
     let balance = match crate::db::r#yield::get_or_create_yield_balance(&pool, auth.id).await {
         Ok(b) => b,
         Err(e) => {
@@ -49,15 +54,82 @@ pub async fn get_balance(
         }
     };
 
+    let estimate = yield_calc::estimate_for_balance(&balance, Some(apy_bps), Utc::now());
+
+    let auto_earn_enabled = match crate::db::r#yield::get_auto_earn_enabled(&pool, auth.id).await {
+        Ok(enabled) => enabled,
+        Err(e) => {
+            tracing::error!("auto-earn preference fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve auto-earn preference" })),
+            )
+                .into_response();
+        }
+    };
+
     Json(YieldBalanceResponse {
         available_balance: balance.available_balance,
         earning_balance: balance.earning_balance,
+        accrued_interest: estimate.accrued_interest,
+        total_earning_balance: estimate.total_earning_balance,
         apy: apy_bps as f64 / 100.0,
+        auto_earn_enabled,
     })
     .into_response()
 }
 
 // ── #374 — GET /api/yield/history ─────────────────────────────────────────
+
+/// Friendly categories for yield transactions logged in history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum YieldTransactionType {
+    Deposit,
+    Withdraw,
+    Earned,
+    Sweep,
+    Reward,
+}
+
+impl YieldTransactionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deposit => "DEPOSIT",
+            Self::Withdraw => "WITHDRAW",
+            Self::Earned => "EARNED",
+            Self::Sweep => "SWEEP",
+            Self::Reward => "REWARD",
+        }
+    }
+}
+
+impl std::fmt::Display for YieldTransactionType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for YieldTransactionType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_uppercase().as_str() {
+            "DEPOSIT" => Self::Deposit,
+            "WITHDRAW" => Self::Withdraw,
+            "EARNED" => Self::Earned,
+            "SWEEP" | "AUTO_SWEEP" => Self::Sweep,
+            "REWARD" | "YIELD_REWARD" => Self::Reward,
+            _ => Self::Deposit,
+        })
+    }
+}
+
+impl From<&str> for YieldTransactionType {
+    fn from(s: &str) -> Self {
+        s.parse().unwrap_or(Self::Deposit)
+    }
+}
 
 #[derive(Deserialize)]
 pub struct HistoryQuery {
@@ -70,7 +142,7 @@ pub struct YieldHistoryItem {
     pub id: String,
     pub tx_hash: String,
     #[serde(rename = "type")]
-    pub tx_type: String,
+    pub tx_type: YieldTransactionType,
     pub amount: i64,
     pub created_at: String,
 }
@@ -91,23 +163,22 @@ pub async fn get_history(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let total: i64 = match sqlx::query_scalar(
-        "SELECT COUNT(*) FROM yield_transactions WHERE user_id = $1",
-    )
-    .bind(auth.id)
-    .fetch_one(&pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => {
-            tracing::error!("yield history count error: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
-            )
-                .into_response();
-        }
-    };
+    let total: i64 =
+        match sqlx::query_scalar("SELECT COUNT(*) FROM yield_transactions WHERE user_id = $1")
+            .bind(auth.id)
+            .fetch_one(&pool)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!("yield history count error: {:?}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
+                )
+                    .into_response();
+            }
+        };
 
     let rows = match sqlx::query(
         r#"
@@ -140,10 +211,11 @@ pub async fn get_history(
         .map(|r| {
             let id: Uuid = r.get("id");
             let created_at: chrono::NaiveDateTime = r.get("created_at");
+            let raw_type: String = r.get("type");
             YieldHistoryItem {
                 id: id.to_string(),
                 tx_hash: r.get("tx_hash"),
-                tx_type: r.get("type"),
+                tx_type: raw_type.as_str().into(),
                 amount: r.get("amount"),
                 created_at: created_at.to_string(),
             }
@@ -157,6 +229,46 @@ pub async fn get_history(
         total,
     })
     .into_response()
+}
+
+// ── #378 — POST /api/yield/toggle-auto ────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ToggleAutoEarnRequest {
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct ToggleAutoEarnResponse {
+    pub auto_earn_enabled: bool,
+    pub message: String,
+}
+
+pub async fn toggle_auto_earn(
+    State(pool): State<sqlx::PgPool>,
+    auth: AuthUser,
+    Json(payload): Json<ToggleAutoEarnRequest>,
+) -> impl IntoResponse {
+    match crate::db::r#yield::set_auto_earn_enabled(&pool, auth.id, payload.enabled).await {
+        Ok(enabled) => Json(ToggleAutoEarnResponse {
+            auto_earn_enabled: enabled,
+            message: if enabled {
+                "Auto-earn enabled. Idle stablecoins will be swept into the yield vault."
+                    .to_string()
+            } else {
+                "Auto-earn disabled.".to_string()
+            },
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("toggle auto-earn error: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to update auto-earn preference" })),
+            )
+                .into_response()
+        }
+    }
 }
 
 // ── #375 — POST /api/yield/deposit ────────────────────────────────────────
@@ -247,6 +359,7 @@ pub async fn deposit(
             ON CONFLICT (user_id) DO UPDATE
             SET available_balance = user_yield_balances.available_balance - $2,
                 earning_balance   = user_yield_balances.earning_balance   + $2,
+                last_yield_sync_at  = NOW(),
                 updated_at        = NOW()
             "#,
         )
@@ -291,7 +404,8 @@ pub async fn deposit(
     };
 
     // Build Stellar transaction envelope XDR for the user's wallet to sign.
-    let envelope_xdr = build_stellar_envelope_xdr(&auth.address, "yield_deposit", payload.amount, &tx_hash);
+    let envelope_xdr =
+        build_stellar_envelope_xdr(&auth.address, "yield_deposit", payload.amount, &tx_hash);
 
     Json(DepositResponse {
         available_balance: updated.available_balance,
@@ -356,8 +470,7 @@ pub async fn withdraw(
     let tx_hash = format!("zaps-yield-withdraw-{}", Uuid::new_v4());
 
     if let Err(e) =
-        crate::db::r#yield::process_yield_withdrawal(&pool, auth.id, payload.amount, &tx_hash)
-            .await
+        crate::db::r#yield::process_yield_withdrawal(&pool, auth.id, payload.amount, &tx_hash).await
     {
         tracing::error!("yield withdrawal DB error: {:?}", e);
         return (
@@ -379,7 +492,8 @@ pub async fn withdraw(
         }
     };
 
-    let envelope_xdr = build_stellar_envelope_xdr(&auth.address, "yield_withdraw", payload.amount, &tx_hash);
+    let envelope_xdr =
+        build_stellar_envelope_xdr(&auth.address, "yield_withdraw", payload.amount, &tx_hash);
 
     Json(WithdrawResponse {
         available_balance: updated.available_balance,

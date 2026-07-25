@@ -8,6 +8,9 @@ CREATE TABLE IF NOT EXISTS users (
     display_name VARCHAR(100),
     bio VARCHAR(255),
     avatar_url TEXT,
+    auto_earn_enabled BOOLEAN NOT NULL DEFAULT false,
+    last_daily_yield_report_at TIMESTAMP,
+    last_weekly_yield_report_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -75,7 +78,18 @@ CREATE TABLE IF NOT EXISTS user_yield_balances (
     user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     available_balance BIGINT NOT NULL DEFAULT 0 CHECK (available_balance >= 0),
     earning_balance BIGINT NOT NULL DEFAULT 0 CHECK (earning_balance >= 0),
+    last_yield_sync_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS user_push_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expo_push_token TEXT NOT NULL,
+    platform VARCHAR(20),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, expo_push_token)
 );
 
 CREATE TABLE IF NOT EXISTS yield_transactions (

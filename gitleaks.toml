@@ -1,0 +1,12 @@
+[allowlist]
+description = "Allowlist mock keys in tests and mock screens"
+paths = [
+    '''mobileapp/app/backup-key\.tsx''',
+    '''backend/tests/payment_xdr_test\.rs''',
+    '''mobileapp/src/services/walletSecurity\.ts''',
+    '''mobileapp/app/returning-user/index\.tsx'''
+]
+regexes = [
+    '''SCZANGBA5YHTNYVVV33H6MNWUQY7CZJM2ZCQMFRPY2DXNYBM6BKMB5M7'''
+]
+

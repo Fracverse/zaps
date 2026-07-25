@@ -10,6 +10,7 @@ const nav = [
   { href: "/dashboard/qr", label: "QR Codes", icon: "⬜" },
   { href: "/dashboard/analytics", label: "Analytics", icon: "📈" },
   { href: "/dashboard/contracts", label: "Contracts", icon: "🔗" },
+  { href: "/dashboard/yield", label: "Yield Vault", icon: "🏦" },
 ];
 
 export default function Sidebar() {

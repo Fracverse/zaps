@@ -62,5 +62,6 @@ pub fn yield_routes(pool: sqlx::PgPool) -> Router {
         .route("/history", get(r#yield::get_history))
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))
+        .route("/toggle-auto", post(r#yield::toggle_auto_earn))
         .with_state(pool)
 }
