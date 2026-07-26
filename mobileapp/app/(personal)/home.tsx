@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
@@ -125,13 +131,11 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [availableBalance] = useState("₦32,450.00");
-  const [currentApy] = useState("8.75%");
   const [totalYieldEarned] = useState("₦3,280.45");
-  const [balance] = useState("₦32,450.00");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
-  const [yieldStatus, setYieldStatus] = useState<"loading" | "success" | "error">(
-    "loading"
-  );
+  const [yieldStatus, setYieldStatus] = useState<
+    "loading" | "success" | "error"
+  >("loading");
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [chartWidth, setChartWidth] = useState(0);
@@ -502,11 +506,15 @@ export default function HomeScreen() {
     })}`;
 
   const monthlyEarnings = useMemo(() => {
-    const baseTotal = MONTHLY_EARNINGS.reduce((sum, item) => sum + item.amount, 0);
+    const baseTotal = MONTHLY_EARNINGS.reduce(
+      (sum, item) => sum + item.amount,
+      0
+    );
     const targetTotal = parseCurrencyAmount(
       yieldData?.totalYieldEarned ?? "₦3,280.45"
     );
-    const scale = targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
+    const scale =
+      targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
     return MONTHLY_EARNINGS.map((item) => ({
       ...item,
       amount: Number((item.amount * scale).toFixed(2)),
@@ -560,7 +568,15 @@ export default function HomeScreen() {
     const areaPath = `${linePath} L ${last.x} ${areaBaseY} L ${first.x} ${areaBaseY} Z`;
 
     return { points, linePath, areaPath };
-  }, [chartHeight, chartPadding.bottom, chartPadding.left, chartPadding.right, chartPadding.top, chartWidth, monthlyEarnings]);
+  }, [
+    chartHeight,
+    chartPadding.bottom,
+    chartPadding.left,
+    chartPadding.right,
+    chartPadding.top,
+    chartWidth,
+    monthlyEarnings,
+  ]);
 
   const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
     <View style={[styles.skeletonBase, style]}>
@@ -695,54 +711,58 @@ export default function HomeScreen() {
             activeOpacity={0.9}
             onPress={openEarningsModal}
           >
-          <View>
-            <Text style={styles.earningLabel}>Earning Balance</Text>
-            <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
-            <View style={styles.earningStatusRow}>
-              <Animated.View
-                style={[
-                  styles.earningStatusDot,
-                  { transform: [{ scale: earningPulseAnim }] },
-                ]}
-              />
-              <Text style={styles.earningStatusText}>
-                {autoYieldEnabled
-                  ? "Your money is working"
-                  : "Auto-earn is off"}
-              </Text>
-            </View>
-          </View>
-          {yieldStatus === "loading" ? (
-            <View style={styles.earningContent}>
-              <SkeletonBlock style={styles.earningLabelSkeleton} />
-              <SkeletonBlock style={styles.earningAmountSkeleton} />
-              <SkeletonBlock style={styles.earningHintSkeleton} />
-            </View>
-          ) : yieldStatus === "error" ? (
-            <View style={styles.earningContent}>
+            <View>
               <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningErrorText}>Unable to load yield</Text>
-              <TouchableOpacity
-                style={styles.retryChip}
-                onPress={handleYieldRetry}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="refresh" size={12} color={COLORS.primary} />
-                <Text style={styles.retryChipText}>Retry</Text>
-              </TouchableOpacity>
+              <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
+              <View style={styles.earningStatusRow}>
+                <Animated.View
+                  style={[
+                    styles.earningStatusDot,
+                    { transform: [{ scale: earningPulseAnim }] },
+                  ]}
+                />
+                <Text style={styles.earningStatusText}>
+                  {autoYieldEnabled
+                    ? "Your money is working"
+                    : "Auto-earn is off"}
+                </Text>
+              </View>
             </View>
-          ) : (
-            <View style={styles.earningContent}>
-              <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>
-                {yieldData?.totalYieldEarned ?? "₦0.00"}
-              </Text>
-              <Text style={styles.earningHint}>Tap to view yield breakdown</Text>
+            {yieldStatus === "loading" ? (
+              <View style={styles.earningContent}>
+                <SkeletonBlock style={styles.earningLabelSkeleton} />
+                <SkeletonBlock style={styles.earningAmountSkeleton} />
+                <SkeletonBlock style={styles.earningHintSkeleton} />
+              </View>
+            ) : yieldStatus === "error" ? (
+              <View style={styles.earningContent}>
+                <Text style={styles.earningLabel}>Earning Balance</Text>
+                <Text style={styles.earningErrorText}>
+                  Unable to load yield
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryChip}
+                  onPress={handleYieldRetry}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="refresh" size={12} color={COLORS.primary} />
+                  <Text style={styles.retryChipText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.earningContent}>
+                <Text style={styles.earningLabel}>Earning Balance</Text>
+                <Text style={styles.earningAmount}>
+                  {yieldData?.totalYieldEarned ?? "₦0.00"}
+                </Text>
+                <Text style={styles.earningHint}>
+                  Tap to view yield breakdown
+                </Text>
+              </View>
+            )}
+            <View style={styles.earningIconWrap}>
+              <Ionicons name="trending-up" size={20} color="#A7F3C0" />
             </View>
-          )}
-          <View style={styles.earningIconWrap}>
-            <Ionicons name="trending-up" size={20} color="#A7F3C0" />
-          </View>
           </TouchableOpacity>
         </View>
 
@@ -971,7 +991,9 @@ export default function HomeScreen() {
               </>
             ) : yieldStatus === "error" ? (
               <View style={styles.yieldErrorCard}>
-                <Text style={styles.yieldErrorTitle}>Could not load details</Text>
+                <Text style={styles.yieldErrorTitle}>
+                  Could not load details
+                </Text>
                 <Text style={styles.yieldErrorCopy}>
                   {yieldError}. Check your connection and try again.
                 </Text>
@@ -1013,7 +1035,9 @@ export default function HomeScreen() {
                   }
                 >
                   <View style={styles.earningsChartHeader}>
-                    <Text style={styles.earningsChartTitle}>Monthly earnings</Text>
+                    <Text style={styles.earningsChartTitle}>
+                      Monthly earnings
+                    </Text>
                     <Text style={styles.earningsChartMeta}>
                       {monthlyEarnings[selectedMonthIndex]?.month}:{" "}
                       {formatCurrency(
@@ -1109,7 +1133,9 @@ export default function HomeScreen() {
 
                 <View style={styles.autoYieldRow}>
                   <View style={styles.autoYieldTextWrap}>
-                    <Text style={styles.autoYieldTitle}>Auto-yield deposits</Text>
+                    <Text style={styles.autoYieldTitle}>
+                      Auto-yield deposits
+                    </Text>
                     <Text style={styles.autoYieldSubtitle}>
                       Automatically put idle balance to work
                     </Text>

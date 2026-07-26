@@ -174,6 +174,28 @@ async fn main() {
     // Initialize rate limiter: 5 requests per second, max 10 tokens
     let rate_limiter = RateLimiter::new(5, 10);
 
+    // BE-061: Redis pool backing the yield cache. Shared by the API (read-through)
+    // and the indexer (eviction on yield events). Absent REDIS_URL — or an
+    // unusable one — yield reads simply fall through to Postgres.
+    let yield_cache = match config.redis_url.as_deref() {
+        Some(url) => match api::r#yield::YieldCache::connect(url) {
+            Ok(cache) => {
+                tracing::info!("Yield cache enabled against Redis");
+                Some(cache)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to initialize Redis yield cache, continuing without it: {e}"
+                );
+                None
+            }
+        },
+        None => {
+            tracing::warn!("REDIS_URL not set; yield cache disabled");
+            None
+        }
+    };
+
     // Bridge state: shares the DB pool and the Allbridge API client.
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
@@ -197,7 +219,13 @@ async fn main() {
         .nest("/api/feed", api::feed_routes(pool.clone()))
         .nest("/api/social", api::social_routes(pool.clone()))
         .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
-        .nest("/api/yield", api::yield_routes(pool.clone()));
+        .nest(
+            "/api/yield",
+            api::yield_routes_with_state(api::r#yield::YieldState::new(
+                pool.clone(),
+                yield_cache.clone(),
+            )),
+        );
 
     let app = Router::new()
         .merge(public_routes)
@@ -250,8 +278,9 @@ async fn main() {
     // Spawn indexer in the background
     let indexer_pool = pool.clone();
     let indexer_rpc_url = config.stellar_rpc_url.clone();
+    let indexer_cache = yield_cache.clone();
     tokio::spawn(async move {
-        if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url).await {
+        if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url, indexer_cache).await {
             tracing::error!("Stellar Indexer background worker failed: {:?}", e);
         }
     });
