@@ -14,6 +14,7 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
+        .route("/privy", post(auth::privy_auth))
         .with_state(pool)
 }
 
