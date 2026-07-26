@@ -130,8 +130,8 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [availableBalance] = useState("₦32,450.00");
-  const [totalYieldEarned] = useState("₦3,280.45");
+  const [availableBalance, setAvailableBalance] = useState("₦0.00");
+  const [totalYieldEarned, setTotalYieldEarned] = useState("₦0.00");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
   const [yieldStatus, setYieldStatus] = useState<
     "loading" | "success" | "error"
@@ -176,9 +176,31 @@ export default function HomeScreen() {
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
     setAutoYieldEnabled(data.autoEarnEnabled);
+    
+    const formatCurr = (val: number) =>
+      `₦${val.toLocaleString("en-NG", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+
+    // Parse numbers formatting correctly
+    const parseAPIValue = (val: string | number) => {
+      if (typeof val === "number") return formatCurr(val);
+      const strVal = String(val);
+      if (strVal.includes("₦")) return strVal;
+      const parsed = Number(strVal);
+      return isNaN(parsed) ? strVal : formatCurr(parsed);
+    };
+
+    const formattedYield = parseAPIValue(data.totalYieldEarned);
+    const formattedAvailable = parseAPIValue(data.availableBalance);
+    
+    setAvailableBalance(formattedAvailable);
+    setTotalYieldEarned(formattedYield);
+    
     return {
-      apy: data.apy,
-      totalYieldEarned: data.totalYieldEarned,
+      apy: typeof data.apy === "number" ? `${data.apy}%` : String(data.apy).includes("%") ? String(data.apy) : `${data.apy}%`,
+      totalYieldEarned: formattedYield,
       explanation: data.explanation,
     };
   };
