@@ -11,7 +11,8 @@ use redis::{
     RedisError,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
+use std::time::Duration;
 use stellar_base::{
     account::DataValue,
     memo::Memo,
@@ -250,6 +251,192 @@ pub async fn get_balance(State(state): State<YieldState>, auth: AuthUser) -> imp
         total_earning_balance: estimate.total_earning_balance,
         apy: apy_bps as f64 / 100.0,
         auto_earn_enabled,
+    })
+    .into_response()
+}
+
+// ── BE-548 — GET /api/yield/metrics ───────────────────────────────────────
+
+/// Micro-units per whole currency unit. Balances are stored scaled by this.
+const MICRO_UNITS_PER_UNIT: f64 = 1_000_000.0;
+
+/// Fallback USD→NGN rate when `USD_NGN_RATE` is unset.
+///
+/// Deliberately a config value rather than a hard-coded constant used blindly:
+/// NGN moves too much for a compiled-in number to stay honest, and the response
+/// echoes back the rate it used so a client can tell a stale figure from a
+/// fresh one. A live FX feed is the proper long-term answer — see the note on
+/// `fx_rate_source` below.
+const DEFAULT_USD_NGN_RATE: f64 = 1600.0;
+
+fn usd_ngn_rate() -> f64 {
+    std::env::var("USD_NGN_RATE")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        // A zero or negative rate would silently zero out every NGN figure, so
+        // treat it as unset rather than trusting it.
+        .filter(|rate| *rate > 0.0)
+        .unwrap_or(DEFAULT_USD_NGN_RATE)
+}
+
+/// Converts a micro-unit balance to whole units.
+fn to_units(micro: i64) -> f64 {
+    micro as f64 / MICRO_UNITS_PER_UNIT
+}
+
+#[derive(Serialize)]
+pub struct UserYieldMetrics {
+    pub available_balance: i64,
+    pub earning_balance: i64,
+    /// Live off-chain estimate since the last sync (micro-units).
+    pub accrued_interest: i64,
+    pub total_earning_balance: i64,
+    /// Lifetime totals from `yield_transactions` (micro-units).
+    pub total_deposited: i64,
+    pub total_withdrawn: i64,
+    /// Interest already credited on-chain, as distinct from `accrued_interest`,
+    /// which is the live estimate for the current period.
+    pub total_earned: i64,
+    pub transaction_count: i64,
+    pub auto_earn_enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct PlatformYieldMetrics {
+    /// Total value locked, in micro-units.
+    pub tvl: i64,
+    pub tvl_usd: f64,
+    pub tvl_ngn: f64,
+    /// Idle balances not yet earning, in micro-units.
+    pub total_available: i64,
+    pub active_accounts: i64,
+    pub auto_earn_accounts: i64,
+}
+
+#[derive(Serialize)]
+pub struct YieldMetricsResponse {
+    /// Current APY as a percentage (e.g. 5.0 for 5%).
+    pub apy: f64,
+    /// Same rate in basis points, for clients that would rather not round-trip
+    /// through a float.
+    pub apy_bps: i32,
+    pub user: UserYieldMetrics,
+    pub platform: PlatformYieldMetrics,
+    /// The USD→NGN rate applied to `tvl_ngn`, echoed so a client can tell which
+    /// rate produced the figure.
+    pub usd_ngn_rate: f64,
+    /// Where that rate came from: `"config"` or `"default"`. A client showing
+    /// Naira to a user needs to know when it is displaying a compiled-in guess.
+    pub fx_rate_source: &'static str,
+    pub generated_at: String,
+}
+
+/// BE-548: `GET /api/yield/metrics`
+///
+/// One call returning both the caller's yield position and platform-wide
+/// totals. Built as a single endpoint rather than leaving clients to fan out
+/// across `/balance` plus separate aggregate calls: the dashboard renders these
+/// numbers side by side, and separate requests would let the user's balance and
+/// the TVL it is a share of come from different moments.
+pub async fn get_metrics(State(state): State<YieldState>, auth: AuthUser) -> impl IntoResponse {
+    let pool = &state.pool;
+
+    let balance = match crate::db::r#yield::get_or_create_yield_balance(pool, auth.id).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("yield metrics balance fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve yield balance" })),
+            )
+                .into_response();
+        }
+    };
+
+    let apy_bps = match state.load_yield_rate().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("yield metrics rate fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve yield rate" })),
+            )
+                .into_response();
+        }
+    };
+
+    let user_totals = match crate::db::r#yield::get_user_yield_totals(pool, auth.id).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("yield metrics user totals error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve user yield totals" })),
+            )
+                .into_response();
+        }
+    };
+
+    let platform_totals = match crate::db::r#yield::get_platform_yield_totals(pool).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("yield metrics platform totals error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve platform yield totals" })),
+            )
+                .into_response();
+        }
+    };
+
+    let auto_earn_enabled = match crate::db::r#yield::get_auto_earn_enabled(pool, auth.id).await {
+        Ok(enabled) => enabled,
+        Err(e) => {
+            tracing::error!("yield metrics auto-earn fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve auto-earn preference" })),
+            )
+                .into_response();
+        }
+    };
+
+    let estimate = yield_calc::estimate_for_balance(&balance, Some(apy_bps), Utc::now());
+
+    let fx_rate_source = if std::env::var("USD_NGN_RATE").is_ok() {
+        "config"
+    } else {
+        "default"
+    };
+    let rate = usd_ngn_rate();
+    // Balances are held in a USD stablecoin, so units are already USD.
+    let tvl_usd = to_units(platform_totals.tvl);
+
+    Json(YieldMetricsResponse {
+        apy: apy_bps as f64 / 100.0,
+        apy_bps,
+        user: UserYieldMetrics {
+            available_balance: balance.available_balance,
+            earning_balance: balance.earning_balance,
+            accrued_interest: estimate.accrued_interest,
+            total_earning_balance: estimate.total_earning_balance,
+            total_deposited: user_totals.total_deposited,
+            total_withdrawn: user_totals.total_withdrawn,
+            total_earned: user_totals.total_earned,
+            transaction_count: user_totals.transaction_count,
+            auto_earn_enabled,
+        },
+        platform: PlatformYieldMetrics {
+            tvl: platform_totals.tvl,
+            tvl_usd,
+            tvl_ngn: tvl_usd * rate,
+            total_available: platform_totals.total_available,
+            active_accounts: platform_totals.active_accounts,
+            auto_earn_accounts: platform_totals.auto_earn_accounts,
+        },
+        usd_ngn_rate: rate,
+        fx_rate_source,
+        generated_at: Utc::now().to_rfc3339(),
     })
     .into_response()
 }

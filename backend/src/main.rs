@@ -213,7 +213,11 @@ async fn main() {
 
     let sensitive_routes = Router::new()
         .nest("/api/auth", api::auth_routes(pool.clone()))
-        .nest("/api/users", api::user_routes(pool.clone()));
+        .nest("/api/users", api::user_routes(pool.clone()))
+        // #543: payout constructs a real payment transaction envelope, so it
+        // gets the same rate-limiting as auth/users rather than sitting in
+        // other_routes.
+        .nest("/api/payout", api::payout_routes(pool.clone()));
 
     let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
