@@ -46,6 +46,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
+/// #543
+pub fn payout_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/username", post(feed::payout_by_username))
+        .with_state(pool)
+}
+
 pub fn social_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/like", post(social::like_payment))
@@ -72,6 +79,7 @@ pub fn yield_routes(pool: sqlx::PgPool) -> Router {
 pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
     Router::new()
         .route("/balance", get(r#yield::get_balance))
+        .route("/metrics", get(r#yield::get_metrics))
         .route("/history", get(r#yield::get_history))
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))

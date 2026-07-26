@@ -147,6 +147,18 @@ impl UserRegistryContract {
             .unwrap_or_else(|| panic!("address not registered"))
     }
 
+    /// Best-effort username lookup for callers (e.g. other contracts resolving
+    /// a display name for events) that must not panic on an unregistered
+    /// address. Returns an empty string instead of panicking, mirroring
+    /// `get_avatar`'s fallback behavior below.
+    pub fn username_or_empty(env: Env, user: Address) -> String {
+        let user_key = AddressToUsernameKey { address: user };
+        env.storage()
+            .persistent()
+            .get(&user_key)
+            .unwrap_or_else(|| String::from_str(&env, ""))
+    }
+
     /// Update user profile metadata (e.g. avatar URI)
     pub fn update_profile(env: Env, user: Address, avatar_uri: String) {
         user.require_auth();

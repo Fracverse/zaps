@@ -2,7 +2,11 @@ use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::db::r#yield::{list_auto_sweep_candidates, process_internal_sweep_deposit};
+use crate::db::r#yield::{
+    clear_sweep_failure, list_auto_sweep_candidates, list_sweep_backoff_excluded_users,
+    process_internal_sweep_deposit, record_sweep_failure,
+};
+use std::collections::HashSet;
 use crate::services::stellar::StellarClient;
 
 const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 300;
@@ -75,10 +79,26 @@ async fn sweep_once(
     stellar: &StellarClient,
     contract_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    let candidates = list_auto_sweep_candidates(pool, min_idle_amount, BATCH_SIZE).await?;
+   let candidates = list_auto_sweep_candidates(pool, min_idle_amount, BATCH_SIZE).await?;
 
     if candidates.is_empty() {
         tracing::debug!("Auto-sweep: no eligible users this cycle");
+        return Ok(());
+    }
+
+    // BE-053: skip users currently in sweep-failure backoff, without a warn
+    // log every cycle for the same known-bad user.
+    let excluded: HashSet<Uuid> = list_sweep_backoff_excluded_users(pool)
+        .await?
+        .into_iter()
+        .collect();
+    let candidates: Vec<_> = candidates
+        .into_iter()
+        .filter(|c| !excluded.contains(&c.user_id))
+        .collect();
+
+    if candidates.is_empty() {
+        tracing::debug!("Auto-sweep: all eligible users are in backoff this cycle");
         return Ok(());
     }
 
@@ -93,12 +113,16 @@ async fn sweep_once(
         let tx_hash = if let Some(cid) = contract_id {
             match submit_sweep_transaction(stellar, balance.user_id, amount, cid).await {
                 Ok(hash) => hash,
-                Err(err) => {
-                    tracing::warn!(
+               
+                 Err(err) => {
+                    tracing::debug!(
                         user_id = %balance.user_id,
                         error = ?err,
-                        "On-chain sweep transaction failed, skipping"
+                        "On-chain sweep transaction failed, registering backoff"
                     );
+                    if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
+                        tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
+                    }
                     continue;
                 }
             }
@@ -107,7 +131,7 @@ async fn sweep_once(
             format!("zaps-auto-sweep-{}", Uuid::new_v4())
         };
 
-        match process_internal_sweep_deposit(pool, balance.user_id, amount, &tx_hash).await {
+       match process_internal_sweep_deposit(pool, balance.user_id, amount, &tx_hash).await {
             Ok(()) => {
                 swept += 1;
                 tracing::info!(
@@ -116,6 +140,9 @@ async fn sweep_once(
                     tx_hash = %tx_hash,
                     "Auto-swept idle balance into yield vault"
                 );
+                if let Err(db_err) = clear_sweep_failure(pool, balance.user_id).await {
+                    tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to clear sweep failure history");
+                }
             }
             Err(sqlx::Error::RowNotFound) => {
                 tracing::debug!(
@@ -124,11 +151,14 @@ async fn sweep_once(
                 );
             }
             Err(err) => {
-                tracing::warn!(
+                tracing::debug!(
                     user_id = %balance.user_id,
                     error = ?err,
-                    "Auto-sweep deposit failed"
+                    "Auto-sweep deposit failed, registering backoff"
                 );
+                if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
+                    tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
+                }
             }
         }
     }

@@ -21,6 +21,8 @@ jsonwebtoken = "9.2.0"
 base64 = "0.22.1"
 hex = "0.4.3"
 stellar-base = "0.7.0"
+tokio-cron-scheduler = "0.15"
+redis = { version = "1.4.1", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 tower = { version = "0.4", features = ["util"] }
