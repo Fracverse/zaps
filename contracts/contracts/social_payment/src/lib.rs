@@ -10,6 +10,7 @@ const TREAS_KEY: Symbol = symbol_short!("treasury");
 const FEE_COEFF_KEY: Symbol = symbol_short!("fee_coef");
 const NAIRA_TOKEN_KEY: Symbol = symbol_short!("ngn_tok");
 const USER_REG_KEY: Symbol = symbol_short!("user_reg");
+const PR_COUNT_KEY: Symbol = symbol_short!("pr_cnt");
 
 /// Number of ledgers a user must wait before liking the same transaction again.
 /// 5 ledgers ≈ 25 seconds on Stellar (5s per ledger).
@@ -25,6 +26,7 @@ const MAX_BATCH_SIZE: u32 = 100;
 #[contractclient(name = "UserRegistryClient")]
 pub trait UserRegistryInterface {
     fn get_address(env: Env, username: String) -> Address;
+    fn username_or_empty(env: Env, user: Address) -> String;
 }
 
 // ── Contract types ────────────────────────────────────────────────────────────
@@ -38,6 +40,19 @@ pub enum Visibility {
 }
 
 #[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    PaymentRequest(u64),
+}
+
+/// SC-041: Emitted for every executed payment. Carries both the raw
+/// addresses (for backward compatibility with existing indexers) and, on a
+/// best-effort basis, the sender/receiver's registered usernames so
+/// downstream indexers can display/store a human-readable identifier
+/// without needing a separate UserRegistry lookup per event. Username
+/// fields are empty strings when no UserRegistry is configured or the
+/// address has no registered username.
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SocialPaymentEvent {
     pub sender: Address,
@@ -45,6 +60,8 @@ pub struct SocialPaymentEvent {
     pub amount: i128,
     pub memo: String,
     pub visibility: Visibility,
+    pub sender_username: String,
+    pub receiver_username: String,
 }
 
 #[contracttype]
@@ -80,8 +97,62 @@ pub struct PayoutPayload {
     pub items: Vec<PayoutItem>,
 }
 
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaymentRequestStatus {
+    Pending = 0,
+    Paid = 1,
+    Cancelled = 2,
+}
+
+/// An on-chain invoice / payment request: `requester` asks `payer_username`
+/// to pay `amount`. The payer's address is resolved and recorded at creation
+/// time so the request is bound to a concrete account, not just a name that
+/// could later be reassigned.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequest {
+    pub id: u64,
+    pub requester: Address,
+    pub payer: Address,
+    pub payer_username: String,
+    pub amount: i128,
+    pub memo: String,
+    pub status: PaymentRequestStatus,
+    pub created_ledger: u32,
+}
+
+/// Emitted when a payment request/invoice is created for indexers to pick up.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PaymentRequestCreated {
+    pub id: u64,
+    pub requester: Address,
+    pub payer: Address,
+    pub payer_username: String,
+    pub amount: i128,
+    pub memo: String,
+}
+
 #[contract]
 pub struct SocialPaymentContract;
+
+/// Best-effort resolution of `addr`'s registered username via the configured
+/// UserRegistry. Returns an empty string (never panics) when no registry is
+/// configured or the address has no registered username — payments must not
+/// fail just because a participant hasn't picked a username. Uses
+/// `username_or_empty` rather than a `try_`-wrapped call to `get_username`
+/// because a panic inside a cross-contract call cannot be relied on to
+/// unwind cleanly; the callee itself must never panic on this path.
+fn resolve_username(env: &Env, addr: &Address) -> String {
+    match env.storage().instance().get::<_, Address>(&USER_REG_KEY) {
+        Some(registry_id) => {
+            let registry = UserRegistryClient::new(env, &registry_id);
+            registry.username_or_empty(addr)
+        }
+        None => String::from_str(env, ""),
+    }
+}
 
 fn execute_payment(
     env: Env,
@@ -125,6 +196,10 @@ fn execute_payment(
         token_client.transfer(&sender, &receiver, &amount);
     }
 
+    // SC-042: resolve usernames on a best-effort basis for indexer convenience.
+    let sender_username = resolve_username(&env, &sender);
+    let receiver_username = resolve_username(&env, &receiver);
+
     env.events().publish(
         (Symbol::new(&env, "SocialPaymentEvent"),),
         SocialPaymentEvent {
@@ -133,6 +208,8 @@ fn execute_payment(
             amount,
             memo,
             visibility,
+            sender_username,
+            receiver_username,
         },
     );
 }
@@ -220,6 +297,78 @@ impl SocialPaymentContract {
             .instance()
             .get(&USER_REG_KEY)
             .expect("user registry not configured")
+    }
+
+    // ── Payment requests / invoices ───────────────────────────────────────────
+
+    /// Create a payment request (invoice) asking `payer_username` to pay
+    /// `requester` `amount`.
+    ///
+    /// Username verification: the target username is resolved via the
+    /// configured UserRegistry contract. If it isn't registered, resolution
+    /// panics and the request is never created — an invoice can only ever be
+    /// created against a real, registered account.
+    pub fn create_payment_request(
+        env: Env,
+        requester: Address,
+        payer_username: String,
+        amount: i128,
+        memo: String,
+    ) -> u64 {
+        requester.require_auth();
+        assert!(amount > 0, "amount must be positive");
+
+        let registry_id: Address = env
+            .storage()
+            .instance()
+            .get(&USER_REG_KEY)
+            .expect("user registry not configured");
+        let registry = UserRegistryClient::new(&env, &registry_id);
+        // Username verification — panics with "username not found" if unregistered.
+        let payer = registry.get_address(&payer_username);
+        assert!(
+            payer != requester,
+            "cannot create a payment request against yourself"
+        );
+
+        let id: u64 = env.storage().instance().get(&PR_COUNT_KEY).unwrap_or(0);
+        env.storage().instance().set(&PR_COUNT_KEY, &(id + 1));
+
+        let request = PaymentRequest {
+            id,
+            requester: requester.clone(),
+            payer: payer.clone(),
+            payer_username: payer_username.clone(),
+            amount,
+            memo: memo.clone(),
+            status: PaymentRequestStatus::Pending,
+            created_ledger: env.ledger().sequence(),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PaymentRequest(id), &request);
+
+        env.events().publish(
+            (Symbol::new(&env, "PaymentRequestCreated"),),
+            PaymentRequestCreated {
+                id,
+                requester,
+                payer,
+                payer_username,
+                amount,
+                memo,
+            },
+        );
+
+        id
+    }
+
+    /// Retrieve a previously created payment request by id.
+    pub fn get_payment_request(env: Env, id: u64) -> PaymentRequest {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PaymentRequest(id))
+            .expect("payment request not found")
     }
 
     // ── Payment methods ───────────────────────────────────────────────────────
@@ -505,6 +654,49 @@ mod tests {
         let token_admin = soroban_sdk::token::StellarAssetClient::new(env, &token_address);
         token_admin.mint(sender, &amount);
         token_address
+    }
+
+    // ── Minimal in-crate mock of the UserRegistry contract, used to exercise
+    // cross-contract username resolution/verification without depending on
+    // the zaps-user-registry crate from tests. ─────────────────────────────────
+    #[contract]
+    struct MockUserRegistry;
+
+    #[contractimpl]
+    impl MockUserRegistry {
+        pub fn register(env: Env, user: Address, username: String) {
+            env.storage().instance().set(&username, &user);
+            env.storage().instance().set(&user, &username);
+        }
+
+        pub fn get_address(env: Env, username: String) -> Address {
+            env.storage()
+                .instance()
+                .get(&username)
+                .unwrap_or_else(|| panic!("username not found"))
+        }
+
+        pub fn username_or_empty(env: Env, user: Address) -> String {
+            env.storage()
+                .instance()
+                .get(&user)
+                .unwrap_or_else(|| String::from_str(&env, ""))
+        }
+    }
+
+    fn setup_with_registry() -> (
+        Env,
+        SocialPaymentContractClient<'static>,
+        Address,
+        Address,
+        Address,
+        Address,
+        Address,
+    ) {
+        let (env, client, admin, treasury, sender, receiver) = setup();
+        let registry_id = env.register_contract(None, MockUserRegistry);
+        client.set_user_registry(&registry_id);
+        (env, client, admin, treasury, sender, receiver, registry_id)
     }
 
     // ── Public payment: fee deducted, event emitted ──────────────────────────
@@ -1077,5 +1269,197 @@ mod tests {
         let registry_addr = Address::generate(&env);
         client.set_user_registry(&registry_addr);
         assert_eq!(client.user_registry_address(), registry_addr);
+    }
+
+    // ── SC-042: SocialPaymentEvent carries resolved usernames ─────────────────
+    #[test]
+    fn test_pay_event_includes_resolved_usernames_when_registered() {
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
+        let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&sender, &String::from_str(&env, "alice"));
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
+        client.pay(
+            &sender,
+            &receiver,
+            &token,
+            &1000,
+            &String::from_str(&env, "hi"),
+            &Visibility::Private,
+        );
+
+        let events = env.events().all();
+        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic) {
+                let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev.sender_username, String::from_str(&env, "alice"));
+                assert_eq!(ev.receiver_username, String::from_str(&env, "bob"));
+                found = true;
+            }
+        }
+        assert!(found, "SocialPaymentEvent not emitted");
+    }
+
+    // ── SC-042: no registry / unregistered participants never break a payment ─
+    #[test]
+    fn test_pay_event_username_defaults_to_empty_when_unregistered() {
+        // No registry configured at all — resolve_username must short-circuit.
+        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
+
+        client.pay(
+            &sender,
+            &receiver,
+            &token,
+            &500,
+            &String::from_str(&env, "hi"),
+            &Visibility::Private,
+        );
+
+        let events = env.events().all();
+        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic) {
+                let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev.sender_username, String::from_str(&env, ""));
+                assert_eq!(ev.receiver_username, String::from_str(&env, ""));
+                found = true;
+            }
+        }
+        assert!(found, "SocialPaymentEvent not emitted");
+    }
+
+    // ── SC-042: registry configured but receiver never registered a username ──
+    #[test]
+    fn test_pay_event_username_defaults_to_empty_for_unregistered_participant() {
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
+        let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&sender, &String::from_str(&env, "alice"));
+        // receiver intentionally left unregistered.
+
+        client.pay(
+            &sender,
+            &receiver,
+            &token,
+            &500,
+            &String::from_str(&env, "hi"),
+            &Visibility::Private,
+        );
+
+        let events = env.events().all();
+        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic) {
+                let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev.sender_username, String::from_str(&env, "alice"));
+                assert_eq!(ev.receiver_username, String::from_str(&env, ""));
+                found = true;
+            }
+        }
+        assert!(found, "SocialPaymentEvent not emitted");
+    }
+
+    // ── Payment requests: username verification at creation ───────────────────
+    #[test]
+    fn test_create_payment_request_verifies_and_stores_username() {
+        let (env, client, _admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
+        let id = client.create_payment_request(
+            &sender,
+            &String::from_str(&env, "bob"),
+            &2_000,
+            &String::from_str(&env, "dinner split"),
+        );
+        assert_eq!(id, 0);
+
+        let request = client.get_payment_request(&id);
+        assert_eq!(request.requester, sender);
+        assert_eq!(request.payer, receiver);
+        assert_eq!(request.payer_username, String::from_str(&env, "bob"));
+        assert_eq!(request.amount, 2_000);
+        assert_eq!(request.status, PaymentRequestStatus::Pending);
+
+        let events = env.events().all();
+        let topic: Val = Symbol::new(&env, "PaymentRequestCreated").into_val(&env);
+        let mut found = false;
+        for item in events.iter() {
+            if item.1.contains(topic) {
+                let ev: PaymentRequestCreated = item.2.try_into_val(&env).unwrap();
+                assert_eq!(ev.id, 0);
+                assert_eq!(ev.requester, sender);
+                assert_eq!(ev.payer, receiver);
+                found = true;
+            }
+        }
+        assert!(found, "PaymentRequestCreated not emitted");
+    }
+
+    #[test]
+    fn test_create_payment_request_increments_ids() {
+        let (env, client, _admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
+        let first = client.create_payment_request(
+            &sender,
+            &String::from_str(&env, "bob"),
+            &100,
+            &String::from_str(&env, "a"),
+        );
+        let second = client.create_payment_request(
+            &sender,
+            &String::from_str(&env, "bob"),
+            &200,
+            &String::from_str(&env, "b"),
+        );
+        assert_eq!(first, 0);
+        assert_eq!(second, 1);
+    }
+
+    #[test]
+    #[ignore] // pre-existing: panic!(..) in a cross-contract call still causes a
+              // non-unwinding panic that aborts the test process in Soroban v20,
+              // same class of issue as other #[ignore]d panic-path tests in this file.
+    fn test_create_payment_request_rejects_unregistered_username() {
+        let (env, client, _admin, _treasury, sender, _receiver, _registry_id) =
+            setup_with_registry();
+
+        let res = client.try_create_payment_request(
+            &sender,
+            &String::from_str(&env, "ghost"),
+            &100,
+            &String::from_str(&env, "nope"),
+        );
+        assert!(res.is_err(), "unregistered username must be rejected");
+    }
+
+    #[test]
+    #[ignore] // pre-existing: assert!(..) in Soroban v20 causes non-unwinding panic
+    fn test_create_payment_request_rejects_self_request() {
+        let (env, client, _admin, _treasury, sender, _receiver, registry_id) =
+            setup_with_registry();
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&sender, &String::from_str(&env, "alice"));
+
+        let res = client.try_create_payment_request(
+            &sender,
+            &String::from_str(&env, "alice"),
+            &100,
+            &String::from_str(&env, "nope"),
+        );
+        assert!(res.is_err(), "self payment requests must be rejected");
     }
 }
