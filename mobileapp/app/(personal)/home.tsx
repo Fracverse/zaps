@@ -634,13 +634,19 @@ export default function HomeScreen() {
       >
         {/* Balance Card */}
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
-          <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          {/* Available Balance Section */}
+          <View style={styles.balanceSection}>
+            <Text style={styles.balanceLabel}>Available Balance</Text>
+            <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          </View>
 
-          <View style={styles.earningRow}>
-            <View style={styles.earningDot} />
-            <Text style={styles.earningRowLabel}>Earning Balance</Text>
-            <Text style={styles.earningRowValue}>{totalYieldEarned}</Text>
+          {/* Earning Balance Section */}
+          <View style={styles.earningBalanceSection}>
+            <View style={styles.earningBalanceHeader}>
+              <View style={styles.earningDot} />
+              <Text style={styles.earningRowLabel}>Earning Balance</Text>
+            </View>
+            <Text style={styles.earningBalanceAmount}>{totalYieldEarned}</Text>
           </View>
 
           <TouchableOpacity
@@ -1258,6 +1264,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 2,
   },
+  balanceSection: {
+    marginBottom: 16,
+  },
   balanceLabel: {
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
@@ -1268,17 +1277,19 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
-    marginBottom: 14,
   },
-  earningRow: {
+  earningBalanceSection: {
+    backgroundColor: "#F2F9F0",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E8F5E9",
+  },
+  earningBalanceHeader: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#F2F9F0",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   earningDot: {
     width: 8,
@@ -1291,10 +1302,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
     color: "#456047",
-    marginRight: 8,
   },
-  earningRowValue: {
-    fontSize: 13,
+  earningBalanceAmount: {
+    fontSize: 28,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
