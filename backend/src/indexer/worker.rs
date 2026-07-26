@@ -4,10 +4,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent};
-use crate::db::r#yield::{
-    log_yield_rate_update, process_yield_deposit_tx, process_yield_withdrawal_tx,
-};
+use super::parser::{parse_zaps_event, ZapsEvent, TokenSalvagedEvent};
+use crate::db::r#yield::{process_yield_deposit_tx, process_yield_withdrawal_tx, log_yield_rate_update};
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -25,9 +23,18 @@ pub struct SocialPaymentEvent {
     pub tx_hash: String,
 }
 
+/// BE-061: What a committed batch of events means for downstream caches.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct BatchOutcome {
+    /// A `YieldAccrued` / `YieldRateUpdated` event moved platform-wide yield
+    /// state, so the cached platform keys are stale and must be evicted.
+    pub platform_yield_dirty: bool,
+}
+
 pub async fn run(
     pool: PgPool,
     rpc_url: String,
+    cache: Option<YieldCache>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Starting Stellar event indexer background worker...");
 
@@ -58,15 +65,15 @@ pub async fn run(
                 let mut tx = pool.begin().await?;
 
                 for event in &events {
-                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings,
-                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type
+                    // Try to extract topic from event. Soroban RPC typically returns topics as an array of XDR strings, 
+                    // but since the existing code uses `find_nested_string`, we'll try to guess the event type 
                     // or assume the topic is available in the payload somehow (e.g. decoded by a proxy or we check fields).
                     // For now, we will use a heuristic: if it has "apy", it's YieldRateUpdated.
                     // Otherwise we try extracting topic.
-
+                    
                     let topic_hint = super::parser::find_nested_string(event, "topic_symbol")
                         .or_else(|| super::parser::find_nested_string(event, "event_type"));
-
+                    
                     let guessed_topic = if let Some(t) = topic_hint {
                         t
                     } else if super::parser::find_nested_i64(event, "apy").is_some() {
@@ -81,24 +88,14 @@ pub async fn run(
 
                     match parse_zaps_event(&guessed_topic, event) {
                         ZapsEvent::YieldDeposited(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool)
-                                .await
-                                .unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) =
-                                process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash)
-                                    .await
-                            {
+                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
+                            if let Err(err) = process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
                                 tracing::warn!("Failed to process YieldDeposited event: {err}");
                             }
                         }
                         ZapsEvent::YieldWithdrawn(e) => {
-                            let user_id = get_or_create_user_id(&e.address, &pool)
-                                .await
-                                .unwrap_or_else(|_| Uuid::new_v4());
-                            if let Err(err) =
-                                process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash)
-                                    .await
-                            {
+                            let user_id = get_or_create_user_id(&e.address, &pool).await.unwrap_or_else(|_| Uuid::new_v4());
+                            if let Err(err) = process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await {
                                 tracing::warn!("Failed to process YieldWithdrawn event: {err}");
                             }
                         }
@@ -106,29 +103,24 @@ pub async fn run(
                             if let Err(err) = log_yield_rate_update(&pool, e.apy).await {
                                 tracing::warn!("Failed to process YieldRateUpdated event: {err}");
                             }
+                         }
+
+                        ZapsEvent::TokenSalvaged(e) => {
+                            if let Err(err) = process_token_salvaged_event(e, &mut tx).await {
+                                tracing::warn!("Failed to process TokenSalvaged event: {err}");
+                            }
                         }
                         ZapsEvent::Unknown => {
                             if let Some(payment_event) = extract_social_payment_event(event) {
                                 if let Err(err) =
-                                    process_social_payment_event(payment_event, &pool, &mut tx)
-                                        .await
+                                    process_social_payment_event(payment_event, &pool, &mut tx).await
                                 {
-                                    tracing::warn!(
-                                        "Failed to process Stellar payment event: {err}"
-                                    );
+                                    tracing::warn!("Failed to process Stellar payment event: {err}");
                                 }
                             }
                         }
                     }
                 }
-
-                // AC1: Persist the new ledger checkpoint inside the same transaction.
-                persist_cursor(&mut tx, next_cursor).await?;
-
-                tx.commit().await?;
-
-                cursor = next_cursor;
-                tracing::debug!("Indexer cursor advanced to ledger {cursor}");
 
                 tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
             }
@@ -142,15 +134,89 @@ pub async fn run(
     }
 }
 
+/// BE-045: Process a batch of events within a guarded PostgreSQL transaction block.
+/// If any parser error or database query fails during processing, `tx.rollback().await`
+/// is explicitly called to release the connection back to the pool immediately without leaking.
+///
+/// BE-061: Returns a [`BatchOutcome`] describing which caches the committed
+/// batch invalidated. Cache eviction itself is the caller's job — it must not
+/// happen until the transaction is durable.
+pub async fn process_event_batch_with_guard(
+    pool: &PgPool,
+    events: &[Value],
+    next_cursor: i64,
+) -> Result<BatchOutcome, Box<dyn Error + Send + Sync>> {
+    let mut tx = pool.begin().await?;
+    let mut outcome = BatchOutcome::default();
+
+    let process_res: Result<(), Box<dyn Error + Send + Sync>> = async {
+        for event in events {
+            let topic = super::parser::extract_event_topic(event)
+                .or_else(|| super::parser::find_nested_string(event, "topic_symbol"))
+                .or_else(|| super::parser::find_nested_string(event, "event_type"))
+                .unwrap_or_default();
+
+            match parse_zaps_event(&topic, event) {
+                ZapsEvent::YieldDeposited(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_deposit_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldWithdrawn(e) => {
+                    let user_id = get_or_create_user_id_tx(&mut tx, &e.address).await?;
+                    process_yield_withdrawal_tx(&mut tx, user_id, e.amount, &e.tx_hash).await?;
+                }
+                ZapsEvent::YieldRateUpdated(e) => {
+                    log_yield_rate_update_tx(&mut tx, e.apy).await?;
+                    outcome.platform_yield_dirty = true;
+                }
+                // BE-061: The vault compounded interest and published a new
+                // yield index; every cached platform yield figure is now stale.
+                ZapsEvent::YieldAccrued(e) => {
+                    tracing::info!(
+                        "YieldAccrued: +{} over {} ledgers, new index {} (tx {})",
+                        e.added_yield,
+                        e.elapsed_ledgers,
+                        e.new_index,
+                        e.tx_hash
+                    );
+                    outcome.platform_yield_dirty = true;
+                }
+                ZapsEvent::Unknown => {
+                    if let Some(payment_event) = extract_social_payment_event(event) {
+                        process_social_payment_event(payment_event, &mut tx).await?;
+                    }
+                }
+            }
+        }
+
+        persist_cursor(&mut tx, next_cursor).await?;
+        Ok(())
+    }
+    .await;
+
+    match process_res {
+        Ok(()) => {
+            tx.commit().await?;
+            Ok(outcome)
+        }
+        Err(err) => {
+            tracing::error!("Transaction failed during indexer event processing, rolling back: {err}");
+            if let Err(rb_err) = tx.rollback().await {
+                tracing::warn!("Failed to roll back database transaction: {rb_err}");
+            }
+            Err(err)
+        }
+    }
+}
+
 /// Process a single payment event within the provided transaction.
 /// Taking `&mut Transaction` ensures this write is part of the caller's atomic scope.
 pub async fn process_social_payment_event(
     event: SocialPaymentEvent,
-    pool: &PgPool,
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let sender_id = get_or_create_user_id(&event.sender, pool).await?;
-    let receiver_id = get_or_create_user_id(&event.receiver, pool).await?;
+    let sender_id = get_or_create_user_id_tx(tx, &event.sender).await?;
+    let receiver_id = get_or_create_user_id_tx(tx, &event.receiver).await?;
 
     sqlx::query(
         r#"
@@ -214,7 +280,10 @@ fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Val
         json!({ "topics": [[{ "type": "symbol", "value": "YieldDeposited" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldWithdrawn" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
+        // Add this new line:
+        json!({ "topics": [[{ "type": "symbol", "value": "TokenSalvaged" }]] }),
     ];
+    // ... rest of the function remains exactly the same
 
     if let Some(contract_id) = contract_id.filter(|value| !value.is_empty()) {
         for filter in &mut filters {
@@ -367,10 +436,77 @@ async fn get_or_create_user_id(
     Ok(row.get("id"))
 }
 
+async fn get_or_create_user_id_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    address: &str,
+) -> Result<Uuid, Box<dyn std::error::Error + Send + Sync>> {
+    let username = slugify_address(address);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO users (address, username, display_name)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (address)
+        DO UPDATE SET username = COALESCE(users.username, EXCLUDED.username)
+        RETURNING id
+        "#,
+    )
+    .bind(address)
+    .bind(&username)
+    .bind(Some(&username))
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(row.get("id"))
+}
+
+const ADDRESS_SLUG_SKIP_CHARS: usize = 1;
+const ADDRESS_SLUG_TAKE_CHARS: usize = 14;
+const DEFAULT_ADDRESS_SLUG: &str = "u_unknown";
+
+/// Derive a short username slug from a chain address. Bounds are checked in
+/// terms of character counts (not byte offsets) before slicing so malformed
+/// or unexpectedly short/multibyte addresses can never panic; anything too
+/// short to slice falls back to a default placeholder slug.
 fn slugify_address(address: &str) -> String {
     let trimmed = address.trim();
-    let snippet = trimmed.get(1..15).unwrap_or(trimmed);
+    let char_count = trimmed.chars().count();
+
+    if char_count < ADDRESS_SLUG_SKIP_CHARS + ADDRESS_SLUG_TAKE_CHARS {
+        return DEFAULT_ADDRESS_SLUG.to_string();
+    }
+
+    let snippet: String = trimmed
+        .chars()
+        .skip(ADDRESS_SLUG_SKIP_CHARS)
+        .take(ADDRESS_SLUG_TAKE_CHARS)
+        .collect();
+
     format!("u_{}", snippet.to_lowercase())
+}
+
+/// Process a TokenSalvaged administrative sweep event.
+pub async fn process_token_salvaged_event(
+    event: TokenSalvagedEvent,
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        INSERT INTO transactions (tx_hash, kind, status, from_address, to_address, token, amount)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (tx_hash) DO NOTHING
+        "#,
+    )
+    .bind(&event.tx_hash)
+    .bind("ADMIN_SWEEP")
+    .bind("SALVAGED")
+    .bind(&event.salvager)
+    .bind(&event.recipient)
+    .bind(&event.token)
+    .bind(event.amount)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -391,10 +527,49 @@ mod tests {
     }
 
     #[test]
+    fn payload_subscribes_to_yield_accrued_events() {
+        // BE-061: without this filter the cache would never be evicted.
+        let payload = build_get_events_payload(1, None);
+        let filters = payload["params"][0]["filters"].as_array().unwrap();
+
+        assert!(filters
+            .iter()
+            .any(|filter| filter["topics"][0][0]["value"] == "YieldAccrued"));
+    }
+
+    #[test]
     fn backoff_delay_grows_and_caps() {
         assert_eq!(compute_backoff_delay(0), INITIAL_BACKOFF);
         assert_eq!(compute_backoff_delay(1), Duration::from_secs(2));
         assert_eq!(compute_backoff_delay(6), MAX_BACKOFF);
+    }
+
+    #[test]
+    fn slugifies_a_well_formed_address() {
+        let slug = slugify_address("GABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+        assert_eq!(slug, "u_abcdefghijklmn");
+    }
+
+    #[test]
+    fn falls_back_to_default_slug_for_short_addresses() {
+        assert_eq!(slugify_address(""), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("G"), DEFAULT_ADDRESS_SLUG);
+        assert_eq!(slugify_address("short"), DEFAULT_ADDRESS_SLUG);
+    }
+
+    #[test]
+    fn never_panics_on_multibyte_or_boundary_lengths() {
+        // Multibyte characters must not cause a byte-index panic when slicing.
+        let multibyte = "é".repeat(20);
+        assert_eq!(slugify_address(&multibyte), format!("u_{}", "é".repeat(14)));
+
+        // Exactly at the minimum char count boundary (1 skipped + 14 taken).
+        let exact = "G".repeat(15);
+        assert_eq!(slugify_address(&exact), format!("u_{}", "g".repeat(14)));
+
+        // One char short of the boundary falls back to the default slug.
+        let one_short = "G".repeat(14);
+        assert_eq!(slugify_address(&one_short), DEFAULT_ADDRESS_SLUG);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 #![no_std]
 #![allow(dead_code, unused_variables, unused_imports, unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol,
+};
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const RELAYER_KEY: Symbol = symbol_short!("relayer");

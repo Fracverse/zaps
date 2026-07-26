@@ -142,13 +142,15 @@ fn test_yield_index_increases_after_ledger_advance() {
 
 #[test]
 fn test_exchange_rate_scales_after_ledger_advance() {
-    let (env, client, _contract_id, _owner, depositor, token) = setup();
+    let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
     client.deposit(&depositor, &amount);
     let first_shares = client.shares_of(&depositor);
 
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    // Accrue yield so total_assets grows with mock protocol rewards, moving the exchange rate.
+    client.accrue_yield(&owner);
 
     let second_depositor = Address::generate(&env);
     let token_client = token::StellarAssetClient::new(&env, &token);
@@ -162,8 +164,10 @@ fn test_exchange_rate_scales_after_ledger_advance() {
         "later depositor should receive fewer shares at a higher exchange rate"
     );
 
-    let index = client.yield_index();
-    let assets_out = first_shares * index / PRECISION;
+    // Verify the first depositor can withdraw more assets than deposited.
+    let tot_shares = client.total_shares();
+    let tot_assets = client.total_assets();
+    let assets_out = first_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
     assert!(
         assets_out > amount,
         "original depositor should be able to withdraw more than deposited after yield accrual"
@@ -332,7 +336,10 @@ fn test_full_lifecycle_deposit_yield_withdraw() {
     );
 
     let half_shares = shares / 2;
-    let expected_out = half_shares * index / PRECISION;
+    let tot_shares = client.total_shares();
+    let tot_assets = client.total_assets();
+    // SC-051: expected_out uses virtual offset formula
+    let expected_out = half_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
     client.withdraw(&depositor, &half_shares);
 
     let token_client = token::Client::new(&env, &token);
@@ -340,4 +347,35 @@ fn test_full_lifecycle_deposit_yield_withdraw() {
     assert_eq!(withdrawn, expected_out);
     assert_eq!(client.shares_of(&depositor), shares - half_shares);
     assert!(client.total_assets() > 0);
+}
+
+#[test]
+fn test_pause_unpause_and_deposit_rejection() {
+    let (_env, client, _contract_id, owner, depositor, _token) = setup();
+
+    client.pause(&owner);
+
+    let res = client.try_deposit(&depositor, &1_000_000);
+    assert!(res.is_err(), "deposit must fail when vault is paused");
+
+    client.unpause(&owner);
+    client.deposit(&depositor, &1_000_000);
+    assert_eq!(client.shares_of(&depositor), 1_000_000);
+}
+
+#[test]
+fn test_emergency_exit_rescues_assets() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 2_000_000i128;
+
+    client.deposit(&depositor, &amount);
+    let _shares = client.shares_of(&depositor);
+
+    client.pause(&owner);
+
+    client.emergency_exit(&depositor);
+
+    assert_eq!(client.shares_of(&depositor), 0);
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT);
 }

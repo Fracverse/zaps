@@ -27,9 +27,18 @@ async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .expect("Set TEST_DATABASE_URL or DATABASE_URL to run integration tests");
-    PgPool::connect(&url)
+    let pool = PgPool::connect(&url)
         .await
-        .expect("Failed to connect to test database")
+        .expect("Failed to connect to test database");
+    zaps_backend::db::run_migrations(&pool)
+        .await
+        .expect("Failed to apply test database migrations");
+    pool
+}
+
+fn test_address(prefix: &str, run: &str) -> String {
+    let padding = 56 - prefix.len() - run.len();
+    format!("{prefix}{run}{}", "X".repeat(padding))
 }
 
 /// Build the Axum router that serves only the feed endpoints.
@@ -139,14 +148,8 @@ async fn test_public_feed_pagination() {
 
     // Use stable, collision-resistant address suffixes based on a random run id
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let sender_addr = format!(
-        "GSENDER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
-    let receiver_addr = format!(
-        "GRECEIVER{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let sender_addr = test_address("GSENDER", &run);
+    let receiver_addr = test_address("GRECEIVER", &run);
 
     let sender_id = seed_user(&pool, &format!("sender_{run}"), &sender_addr).await;
     let receiver_id = seed_user(&pool, &format!("receiver_{run}"), &receiver_addr).await;
@@ -217,14 +220,8 @@ async fn test_friends_feed_privacy() {
     let pool = test_pool().await;
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let addr_a = format!(
-        "GUSERA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
-    let addr_b = format!(
-        "GUSERB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let addr_a = test_address("GUSERA", &run);
+    let addr_b = test_address("GUSERB", &run);
 
     let user_a = seed_user(&pool, &format!("user_a_{run}"), &addr_a).await;
     let user_b = seed_user(&pool, &format!("user_b_{run}"), &addr_b).await;
@@ -304,18 +301,9 @@ async fn test_private_feed_isolation() {
     let pool = test_pool().await;
 
     let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
-    let addr_a = format!(
-        "GISOA{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
-    let addr_b = format!(
-        "GISOB{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
-    let addr_c = format!(
-        "GISOC{}XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-        run
-    );
+    let addr_a = test_address("GISOA", &run);
+    let addr_b = test_address("GISOB", &run);
+    let addr_c = test_address("GISOC", &run);
 
     let user_a = seed_user(&pool, &format!("iso_a_{run}"), &addr_a).await;
     let user_b = seed_user(&pool, &format!("iso_b_{run}"), &addr_b).await;

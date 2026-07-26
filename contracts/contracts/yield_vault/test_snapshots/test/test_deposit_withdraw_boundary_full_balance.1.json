@@ -325,6 +325,14 @@
                       },
                       {
                         "key": {
+                          "symbol": "paused"
+                        },
+                        "val": {
+                          "bool": false
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "token"
                         },
                         "val": {
@@ -1191,7 +1199,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Deposited"
+                "symbol": "YieldDeposited"
               }
             ],
             "data": {
@@ -1467,7 +1475,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "Withdrawn"
+                "symbol": "YieldWithdrawn"
               }
             ],
             "data": {
@@ -1485,6 +1493,12 @@
                   "i128": {
                     "hi": 0,
                     "lo": 10000000
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 0
                   }
                 }
               ]
