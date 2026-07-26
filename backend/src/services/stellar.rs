@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+use stellar_base::{
+    amount::Stroops,
+    network::Network,
+    operations::Operation,
+    transaction::{Transaction, MIN_BASE_FEE},
+    xdr::XDRSerialize,
+    Asset, PublicKey,
+};
 
 // Stellar/Soroban Horizon & RPC operations client stub
 // This client interacts with Stellar RPC nodes and Horizon endpoints.
@@ -113,6 +121,61 @@ impl StellarClient {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         Ok("tx_hash_placeholder".to_string())
     }
+}
+
+/// #543: build a base64-encoded, unsigned Stellar XDR `TransactionEnvelope`
+/// (v1) paying `amount_stroops` of native XLM from `source_account` to
+/// `destination_account`, for the payout-by-username route.
+///
+/// Sequence is a `0` sentinel — same convention as
+/// `api::yield::build_stellar_envelope_xdr` — the signing wallet (or a
+/// pre-submission `getAccount` call) must substitute the real sequence + 1
+/// before signing. Network is selected from `STELLAR_NETWORK` the same way.
+pub fn build_payout_envelope_xdr(
+    source_account: &str,
+    destination_account: &str,
+    amount_stroops: i64,
+) -> Result<String, String> {
+    if amount_stroops <= 0 {
+        return Err("amount must be positive".to_string());
+    }
+
+    let source_pk = PublicKey::from_account_id(source_account)
+        .map_err(|e| format!("invalid source account: {e}"))?;
+    let destination_pk = PublicKey::from_account_id(destination_account)
+        .map_err(|e| format!("invalid destination account: {e}"))?;
+
+    let payment_op = Operation::new_payment()
+        .with_destination(destination_pk)
+        .with_asset(Asset::new_native())
+        .with_amount(Stroops::new(amount_stroops))
+        .map_err(|e| format!("payment op amount error: {e}"))?
+        .build()
+        .map_err(|e| format!("payment op error: {e}"))?;
+
+    // Sequence 0 is a sentinel; wallets must substitute the real value.
+    let sequence: i64 = 0;
+    let tx = Transaction::builder(source_pk, sequence, MIN_BASE_FEE)
+        .add_operation(payment_op)
+        .into_transaction()
+        .map_err(|e| format!("transaction build error: {e}"))?;
+
+    // Select network from environment (default: testnet) — kept for parity
+    // with build_stellar_envelope_xdr even though it isn't consumed further
+    // here; XDR serialization itself isn't network-dependent.
+    let _network = match std::env::var("STELLAR_NETWORK")
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "mainnet" | "public" => Network::new_public(),
+        _ => Network::new_test(),
+    };
+
+    let envelope = tx.into_envelope();
+    envelope
+        .xdr_base64()
+        .map_err(|e| format!("XDR serialization error: {e}"))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

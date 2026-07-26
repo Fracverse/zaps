@@ -213,7 +213,11 @@ async fn main() {
 
     let sensitive_routes = Router::new()
         .nest("/api/auth", api::auth_routes(pool.clone()))
-        .nest("/api/users", api::user_routes(pool.clone()));
+        .nest("/api/users", api::user_routes(pool.clone()))
+        // #543: payout constructs a real payment transaction envelope, so it
+        // gets the same rate-limiting as auth/users rather than sitting in
+        // other_routes.
+        .nest("/api/payout", api::payout_routes(pool.clone()));
 
     let other_routes = Router::new()
         .nest("/api/feed", api::feed_routes(pool.clone()))
@@ -295,6 +299,14 @@ async fn main() {
     let sweep_config = services::sweep_worker::SweepWorkerConfig::from_env();
     tokio::spawn(async move {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
+    });
+
+    // BE-554: Drain bulk disbursement batches asynchronously so an HTTP request
+    // never blocks on thousands of sequential SDP submissions.
+    let disbursement_pool = pool.clone();
+    let disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
+    tokio::spawn(async move {
+        services::disbursement_worker::run(disbursement_pool, disbursement_config).await;
     });
 
     // BE-032: Daily / weekly yield report push notifications.

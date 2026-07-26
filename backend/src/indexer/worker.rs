@@ -163,7 +163,9 @@ pub async fn process_event_batch_with_guard(
             Ok(outcome)
         }
         Err(err) => {
-            tracing::error!("Transaction failed during indexer event processing, rolling back: {err}");
+            tracing::error!(
+                "Transaction failed during indexer event processing, rolling back: {err}"
+            );
             if let Err(rb_err) = tx.rollback().await {
                 tracing::warn!("Failed to roll back database transaction: {rb_err}");
             }
@@ -201,12 +203,68 @@ pub async fn process_social_payment_event(
     Ok(())
 }
 
+/// BE-047: Insert an ACCEPTED friendship row when a FriendAdded event is
+/// processed. Uses ON CONFLICT to gracefully handle replayed events.
+async fn process_friend_added_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    requester_id: Uuid,
+    friend_id: Uuid,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        INSERT INTO friendships (user_id, friend_id, status)
+        VALUES ($1, $2, 'ACCEPTED')
+        ON CONFLICT (user_id, friend_id)
+        DO UPDATE SET status = 'ACCEPTED'
+        "#,
+    )
+    .bind(requester_id)
+    .bind(friend_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+/// BE-047: Remove a friendship row when a FriendRemoved event is processed.
+/// The directional row (user -> friend) is deleted; the list-friends query
+/// already uses OR so a single row covers both directions.
+async fn process_friend_removed_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    friend_id: Uuid,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    sqlx::query(
+        r#"
+        DELETE FROM friendships
+        WHERE (user_id = $1 AND friend_id = $2)
+           OR (user_id = $2 AND friend_id = $1)
+        "#,
+    )
+    .bind(user_id)
+    .bind(friend_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 async fn poll_soroban_events(
     rpc_url: &str,
     start_ledger: i64,
 ) -> Result<(Vec<Value>, u64), Box<dyn Error + Send + Sync>> {
-    let contract_id = env::var("SOCIAL_PAYMENT_CONTRACT_ID").ok();
-    let payload = build_get_events_payload(start_ledger, contract_id.as_deref());
+    let mut contract_ids = Vec::new();
+    if let Ok(cid) = env::var("SOCIAL_PAYMENT_CONTRACT_ID") {
+        if !cid.is_empty() {
+            contract_ids.push(cid);
+        }
+    }
+    if let Ok(cid) = env::var("SOCIAL_GRAPH_CONTRACT_ID") {
+        if !cid.is_empty() {
+            contract_ids.push(cid);
+        }
+    }
+    let payload = build_get_events_payload(start_ledger, &contract_ids);
 
     let response = reqwest::Client::new()
         .post(rpc_url)
@@ -237,24 +295,23 @@ async fn poll_soroban_events(
     Ok((events, latest_ledger))
 }
 
-fn build_get_events_payload(start_ledger: i64, contract_id: Option<&str>) -> Value {
+fn build_get_events_payload(start_ledger: i64, contract_ids: &[String]) -> Value {
     let mut filters = vec![
         json!({ "topics": [[{ "type": "symbol", "value": "SocialPaymentEvent" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldDeposited" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldWithdrawn" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldRateUpdated" }]] }),
-        // Add this new line:
+        json!({ "topics": [[{ "type": "symbol", "value": "YieldAccrued" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "TokenSalvaged" }]] }),
         json!({ "topics": [[{ "type": "symbol", "value": "YieldAccrued" }]] }),
         // #542
         json!({ "topics": [[{ "type": "symbol", "value": "UserRegistered" }]] }),
     ];
-    // ... rest of the function remains exactly the same
 
-    if let Some(contract_id) = contract_id.filter(|value| !value.is_empty()) {
+    if !contract_ids.is_empty() {
         for filter in &mut filters {
             if let Some(obj) = filter.as_object_mut() {
-                obj.insert("contractIds".to_string(), json!([contract_id]));
+                obj.insert("contractIds".to_string(), json!(contract_ids));
             }
         }
     }
@@ -484,7 +541,7 @@ mod tests {
 
     #[test]
     fn builds_payload_with_contract_and_topic_filters() {
-        let payload = build_get_events_payload(12, Some("CAKE"));
+        let payload = build_get_events_payload(12, &["CAKE".to_string()]);
         let params = payload["params"].as_array().unwrap();
         let filter = &params[0]["filters"][0];
 
@@ -498,7 +555,7 @@ mod tests {
     #[test]
     fn payload_subscribes_to_yield_accrued_events() {
         // BE-061: without this filter the cache would never be evicted.
-        let payload = build_get_events_payload(1, None);
+        let payload = build_get_events_payload(1, &[]);
         let filters = payload["params"][0]["filters"].as_array().unwrap();
 
         assert!(filters

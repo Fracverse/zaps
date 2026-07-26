@@ -179,6 +179,86 @@ pub async fn get_current_yield_rate(pool: &PgPool) -> Result<Option<i32>, sqlx::
     Ok(rate)
 }
 
+/// BE-548: platform-wide yield aggregates for the metrics endpoint.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlatformYieldTotals {
+    /// Sum of every user's earning balance — total value locked, in micro-units.
+    pub tvl: i64,
+    /// Sum of every user's idle available balance, in micro-units.
+    pub total_available: i64,
+    /// Users with a non-zero earning balance.
+    pub active_accounts: i64,
+    /// Users with auto-earn switched on.
+    pub auto_earn_accounts: i64,
+}
+
+/// BE-548: one pass over `user_yield_balances` for the platform totals.
+///
+/// Deliberately a single query rather than four: separate statements would each
+/// see a different snapshot, so a deposit landing mid-read could produce a TVL
+/// that does not match the account count reported beside it.
+pub async fn get_platform_yield_totals(pool: &PgPool) -> Result<PlatformYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(b.earning_balance), 0)::BIGINT   AS tvl,
+            COALESCE(SUM(b.available_balance), 0)::BIGINT AS total_available,
+            COUNT(*) FILTER (WHERE b.earning_balance > 0) AS active_accounts,
+            COUNT(*) FILTER (WHERE u.auto_earn_enabled)   AS auto_earn_accounts
+          FROM user_yield_balances b
+          JOIN users u ON u.id = b.user_id
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PlatformYieldTotals {
+        tvl: row.get("tvl"),
+        total_available: row.get("total_available"),
+        active_accounts: row.get("active_accounts"),
+        auto_earn_accounts: row.get("auto_earn_accounts"),
+    })
+}
+
+/// BE-548: a single user's lifetime yield totals, in micro-units.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UserYieldTotals {
+    pub total_deposited: i64,
+    pub total_withdrawn: i64,
+    /// Interest already credited on-chain, as distinct from the live off-chain
+    /// estimate the balance endpoint reports.
+    pub total_earned: i64,
+    pub transaction_count: i64,
+}
+
+/// BE-548: aggregates a user's `yield_transactions` by type in one pass.
+pub async fn get_user_yield_totals(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<UserYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(amount) FILTER (WHERE type = 'DEPOSIT'), 0)::BIGINT  AS total_deposited,
+            COALESCE(SUM(amount) FILTER (WHERE type = 'WITHDRAW'), 0)::BIGINT AS total_withdrawn,
+            COALESCE(SUM(amount) FILTER (WHERE type = 'EARNED'), 0)::BIGINT   AS total_earned,
+            COUNT(*)                                                          AS transaction_count
+          FROM yield_transactions
+         WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(UserYieldTotals {
+        total_deposited: row.get("total_deposited"),
+        total_withdrawn: row.get("total_withdrawn"),
+        total_earned: row.get("total_earned"),
+        transaction_count: row.get("transaction_count"),
+    })
+}
+
 /// Read whether the user has auto-earn (auto-sweep) enabled.
 pub async fn get_auto_earn_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
     let enabled = sqlx::query_scalar(
@@ -306,6 +386,61 @@ pub async fn touch_yield_sync_at(pool: &PgPool, user_id: Uuid) -> Result<(), sql
     .bind(user_id)
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+/// BE-053: Users currently in sweep-failure backoff (excluded from this cycle).
+pub async fn list_sweep_backoff_excluded_users(
+    pool: &PgPool,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT user_id FROM sweep_failure_history
+        WHERE next_retry_at > NOW()
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
+}
+
+/// BE-053: Record a sweep failure and push the user's next retry back with
+/// exponential backoff (60s * 2^failures, capped at 1 hour) so repeated
+/// failures don't flood the logs every cycle.
+pub async fn record_sweep_failure(
+    pool: &PgPool,
+    user_id: Uuid,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO sweep_failure_history (user_id, failure_count, last_error, last_failed_at, next_retry_at)
+        VALUES ($1, 1, $2, NOW(), NOW() + INTERVAL '60 seconds')
+        ON CONFLICT (user_id) DO UPDATE
+        SET failure_count = sweep_failure_history.failure_count + 1,
+            last_error = EXCLUDED.last_error,
+            last_failed_at = NOW(),
+            next_retry_at = NOW() + (
+                INTERVAL '60 seconds' * POWER(2, LEAST(sweep_failure_history.failure_count + 1, 6))
+            )
+        "#,
+    )
+    .bind(user_id)
+    .bind(error)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// BE-053: Clear a user's failure history after a successful sweep.
+pub async fn clear_sweep_failure(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM sweep_failure_history WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

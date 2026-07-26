@@ -348,7 +348,39 @@ async fn send_expo_push_batch(
         return Err(format!("Expo push API returned {status}: {text}").into());
     }
 
+    let body: serde_json::Value = response.json().await?;
+    if has_device_not_registered(&body) {
+        sqlx::query(
+            "DELETE FROM user_push_tokens WHERE user_id = $1 AND expo_push_token = $2",
+        )
+        .bind(user_id)
+        .bind(token)
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            user_id = %user_id,
+            %token,
+            "Deleted invalid Expo push token (DeviceNotRegistered)"
+        );
+    }
+
     Ok(())
+}
+
+fn has_device_not_registered(body: &serde_json::Value) -> bool {
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter().any(|ticket| {
+                ticket.get("status").and_then(|s| s.as_str()) == Some("error")
+                    && ticket
+                        .get("details")
+                        .and_then(|d| d.get("error"))
+                        .and_then(|e| e.as_str())
+                        == Some("DeviceNotRegistered")
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// Upsert an Expo push token for a user (used by mobile registration endpoint).
