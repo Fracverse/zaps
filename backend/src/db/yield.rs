@@ -297,3 +297,58 @@ pub async fn touch_yield_sync_at(pool: &PgPool, user_id: Uuid) -> Result<(), sql
 
     Ok(())
 }
+
+/// BE-053: Users currently in sweep-failure backoff (excluded from this cycle).
+pub async fn list_sweep_backoff_excluded_users(
+    pool: &PgPool,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT user_id FROM sweep_failure_history
+        WHERE next_retry_at > NOW()
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
+}
+
+/// BE-053: Record a sweep failure and push the user's next retry back with
+/// exponential backoff (60s * 2^failures, capped at 1 hour) so repeated
+/// failures don't flood the logs every cycle.
+pub async fn record_sweep_failure(
+    pool: &PgPool,
+    user_id: Uuid,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO sweep_failure_history (user_id, failure_count, last_error, last_failed_at, next_retry_at)
+        VALUES ($1, 1, $2, NOW(), NOW() + INTERVAL '60 seconds')
+        ON CONFLICT (user_id) DO UPDATE
+        SET failure_count = sweep_failure_history.failure_count + 1,
+            last_error = EXCLUDED.last_error,
+            last_failed_at = NOW(),
+            next_retry_at = NOW() + (
+                INTERVAL '60 seconds' * POWER(2, LEAST(sweep_failure_history.failure_count + 1, 6))
+            )
+        "#,
+    )
+    .bind(user_id)
+    .bind(error)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// BE-053: Clear a user's failure history after a successful sweep.
+pub async fn clear_sweep_failure(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM sweep_failure_history WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
