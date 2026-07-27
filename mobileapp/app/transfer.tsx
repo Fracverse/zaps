@@ -19,6 +19,8 @@ import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { AccountTypeCard } from "../src/components/AccountTypeCard";
+import { TransferConfirmationCard } from "../src/components/TransferConfirmationCard";
+import type { ZapsUser } from "../src/types/user";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   checkFreighter,
@@ -105,11 +107,7 @@ const API_BASE =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
-interface ZapsUser {
-  username: string;
-  address: string;
-  avatar_url: string | null;
-}
+
 
 function TransferScreen() {
   const router = useRouter();
@@ -134,6 +132,7 @@ function TransferScreen() {
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const searchUsers = useCallback(async (query: string) => {
@@ -173,6 +172,7 @@ function TransferScreen() {
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
     setRecipient(user.username);
+    setSelectedUser(user);
     setSearchResults([]);
     setShowDropdown(false);
   }, []);
@@ -237,9 +237,15 @@ function TransferScreen() {
   const handleNext = async () => {
     if (step === 2) {
       if (!walletState?.isConnected) {
-        setStep(4);
+        setStep(5);
         return;
       }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(3);
+      return;
+    }
+
+    if (step === 3) {
       setSubmitting(true);
       try {
         const assetIssuer =
@@ -249,8 +255,8 @@ function TransferScreen() {
         const result = await submitPayment(
           recipient,
           amount,
-          walletState.source!,
-          walletState.publicKey,
+          walletState!.source!,
+          walletState!.publicKey,
           token.symbol,
           assetIssuer,
           description || undefined
@@ -272,9 +278,12 @@ function TransferScreen() {
         return;
       }
       setSubmitting(false);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(4);
+      return;
     }
 
-    if (step === 3) {
+    if (step === 4) {
       router.replace("/(personal)/home");
       return;
     }
@@ -286,11 +295,11 @@ function TransferScreen() {
   const handleBack = () => {
     if (step === 0) {
       router.back();
-    } else if (step === 3) {
-      router.replace("/(personal)/home");
     } else if (step === 4) {
+      router.replace("/(personal)/home");
+    } else if (step === 5) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setStep(2);
+      setStep(3);
     } else {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(step - 1);
@@ -299,7 +308,7 @@ function TransferScreen() {
 
   const handleDisconnect = async () => {
     setWalletState(null);
-    setStep(2);
+    setStep(3);
   };
 
   const renderStep0 = () => (
@@ -338,6 +347,7 @@ function TransferScreen() {
             value={recipient}
             onChangeText={(text: string) => {
               setRecipient(text);
+              setSelectedUser(null);
               if (transferType !== "ZAPS") return;
               if (text.length < 2) {
                 setShowDropdown(false);
@@ -605,7 +615,40 @@ function TransferScreen() {
     </View>
   );
 
-  const renderStep3 = () => (
+  const renderStep3 = () => {
+    const displayUser = selectedUser || {
+      username: recipient,
+      address: "",
+      avatar_url: null as string | null,
+      isVerified: undefined as boolean | undefined,
+    };
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={styles.subtitle}>
+          Review the details below before sending.
+        </Text>
+
+        <TransferConfirmationCard
+          recipient={displayUser}
+          amount={amount}
+          tokenSymbol={token.symbol}
+          description={description}
+        />
+
+        <View style={styles.confirmationActions}>
+          <Button
+            title="Go Back"
+            onPress={handleBack}
+            variant="outline"
+            style={styles.goBackButton}
+          />
+        </View>
+      </View>
+    );
+  };
+
+  const renderStep4 = () => (
     <View style={[styles.stepContainer, styles.centerContent]}>
       <View style={styles.successOuter}>
         <View
@@ -633,7 +676,7 @@ function TransferScreen() {
     </View>
   );
 
-  const renderStep4 = () => (
+  const renderStep5 = () => (
     <View style={styles.stepContainer}>
       <Text style={styles.subtitle}>
         Connect a Stellar wallet to authorize this transfer.
@@ -658,8 +701,7 @@ function TransferScreen() {
             <Button
               title="Continue with this wallet"
               onPress={() => {
-                setStep(2);
-                handleNext();
+                setStep(3);
               }}
               loading={submitting}
               style={{ backgroundColor: "#1A4B4A", marginTop: 16 }}
@@ -733,19 +775,23 @@ function TransferScreen() {
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {step < 3 && step !== 4 && (
+      {step !== 5 && step !== 4 && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {step === 2 ? "Summary & confirmation" : "Social Transfer"}
+            {step === 2
+              ? "Summary"
+              : step === 3
+                ? "Confirm Transfer"
+                : "Social Transfer"}
           </Text>
           <View style={{ width: 40 }} />
         </View>
       )}
 
-      {step === 4 && (
+      {step === 5 && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
@@ -758,7 +804,7 @@ function TransferScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
-          (step === 3 || step === 4) && { justifyContent: "center" },
+          (step === 4 || step === 5) && { justifyContent: "center" },
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -767,29 +813,31 @@ function TransferScreen() {
         {step === 2 && renderStep2()}
         {step === 3 && renderStep3()}
         {step === 4 && renderStep4()}
+        {step === 5 && renderStep5()}
       </ScrollView>
 
-      {step !== 4 && (
+      {step !== 5 && step !== 4 && (
         <View style={styles.footer}>
           <Button
             title={
               step === 1
                 ? "Review"
                 : step === 2
-                  ? submitting
-                    ? "Submitting..."
-                    : "Confirm & Pay"
+                  ? "Continue"
                   : step === 3
-                    ? "Done"
-                    : "Continue"
+                    ? submitting
+                      ? "Sending..."
+                      : "Send"
+                    : step === 4
+                      ? "Done"
+                      : "Continue"
             }
             onPress={handleNext}
-            loading={submitting}
+            loading={step !== 3 && submitting}
             disabled={
               (step === 0 && !transferType) ||
               (step === 1 && (!recipient || !amount)) ||
-              (step === 2 && false) ||
-              (step === 3 && false) ||
+              (step === 3 && submitting) ||
               submitting
             }
             style={{ backgroundColor: "#1A4B4A" }}
@@ -1247,6 +1295,14 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_400Regular",
     color: "#999",
     marginTop: 2,
+  },
+
+  // ── Confirmation step ─────────────────────────────────────────────────────
+  confirmationActions: {
+    marginTop: 24,
+  },
+  goBackButton: {
+    borderColor: "#E0E0E0",
   },
 });
 
