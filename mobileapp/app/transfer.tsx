@@ -11,6 +11,7 @@ import {
   UIManager,
   Alert,
   ActivityIndicator,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -34,6 +35,8 @@ import {
   StellarWalletState,
 } from "../src/services/stellarWallet";
 import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+
+import * as Haptics from "expo-haptics";
 
 import ZapsIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
@@ -108,7 +111,98 @@ const API_BASE =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
+const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any) => {
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideRecipient = useRef(new Animated.Value(60)).current;
+  const slideDetails = useRef(new Animated.Value(60)).current;
 
+  useEffect(() => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    Animated.sequence([
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 100,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }),
+      Animated.parallel([
+        Animated.timing(slideRecipient, {
+          toValue: 0,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideDetails, {
+          toValue: 0,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, []);
+
+  const displayUser = selectedUser || {
+    username: recipient,
+    address: "",
+    avatar_url: null as string | null,
+    isVerified: undefined as boolean | undefined,
+  };
+
+  return (
+    <View style={[styles.stepContainer, styles.centerContent]}>
+      <Animated.View style={[styles.successOuter, { transform: [{ scale: scaleAnim }] }]}>
+        <View style={[styles.successRing, { width: 220, height: 220, opacity: 0.4 }]} />
+        <View style={[styles.successRing, { width: 180, height: 180, opacity: 0.4 }]} />
+        <View style={styles.successCheck}>
+          <Ionicons name="checkmark" size={60} color="#1A4B4A" />
+        </View>
+      </Animated.View>
+
+      <Animated.View style={{ opacity: fadeAnim, alignItems: "center" }}>
+        <Text style={styles.successTitle}>Transfer Successful</Text>
+        <View style={styles.amountCapsule}>
+          <Text style={styles.amountCapsuleText}>₦{amount}</Text>
+        </View>
+      </Animated.View>
+
+      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideRecipient }], opacity: fadeAnim }]}>
+        <View style={styles.detailsRow}>
+          <View style={styles.detailsAvatar}>
+            <Text style={styles.detailsAvatarText}>
+              {displayUser.username.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View style={styles.detailsInfo}>
+            <Text style={styles.detailsLabel}>Recipient</Text>
+            <Text style={styles.detailsValue}>{displayUser.username}</Text>
+          </View>
+          {displayUser.isVerified && (
+            <Ionicons name="checkmark-circle" size={20} color="#1A4B4A" />
+          )}
+        </View>
+      </Animated.View>
+
+      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideDetails }], opacity: fadeAnim }]}>
+        <View style={styles.detailsRow}>
+          <Ionicons name="information-circle-outline" size={20} color="#777" />
+          <View style={styles.detailsInfo}>
+            <Text style={styles.detailsLabel}>Note</Text>
+            <Text style={styles.detailsValue}>{description || "Sent money"}</Text>
+          </View>
+          <View style={styles.statusBadge}>
+            <Text style={styles.statusBadgeText}>Completed</Text>
+          </View>
+        </View>
+      </Animated.View>
+    </View>
+  );
+};
 
 function TransferScreen() {
   const router = useRouter();
@@ -692,31 +786,12 @@ function TransferScreen() {
   };
 
   const renderStep4 = () => (
-    <View style={[styles.stepContainer, styles.centerContent]}>
-      <View style={styles.successOuter}>
-        <View
-          style={[
-            styles.successRing,
-            { width: 220, height: 220, opacity: 0.4 },
-          ]}
-        />
-        <View
-          style={[
-            styles.successRing,
-            { width: 180, height: 180, opacity: 0.4 },
-          ]}
-        />
-        <View style={styles.successCheck}>
-          <Ionicons name="checkmark" size={60} color="#1A4B4A" />
-        </View>
-      </View>
-
-      <Text style={styles.successTitle}>Transfer Successful</Text>
-
-      <View style={styles.amountCapsule}>
-        <Text style={styles.amountCapsuleText}>₦{amount}</Text>
-      </View>
-    </View>
+    <SuccessAnimation
+      amount={amount}
+      recipient={recipient}
+      selectedUser={selectedUser}
+      description={description}
+    />
   );
 
   const renderStep5 = () => (
@@ -1354,6 +1429,60 @@ const styles = StyleSheet.create({
   },
   goBackButton: {
     borderColor: "#E0E0E0",
+  },
+
+  // ── Success animation details ──────────────────────────────────────────────
+  detailsCard: {
+    width: "100%",
+    backgroundColor: COLORS.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+    padding: 16,
+    marginTop: 12,
+  },
+  detailsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  detailsAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  detailsAvatarText: {
+    fontSize: 17,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
+  },
+  detailsInfo: {
+    flex: 1,
+  },
+  detailsLabel: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
+  },
+  detailsValue: {
+    fontSize: 15,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.black,
+    marginTop: 2,
+  },
+  statusBadge: {
+    backgroundColor: "#E8F5E9",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#2E7D32",
   },
 });
 
