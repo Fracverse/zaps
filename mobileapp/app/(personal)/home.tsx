@@ -300,26 +300,44 @@ export default function HomeScreen() {
       Animated.sequence([
         Animated.timing(earningGlowAnim, {
           toValue: 1,
-          duration: 1400,
+          duration: 1200,
           useNativeDriver: true,
         }),
+
+        Animated.timing(earningGlowAnim, {
+          toValue: 0.4,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+
         Animated.timing(earningGlowAnim, {
           toValue: 0,
-          duration: 1400,
+          duration: 800,
           useNativeDriver: true,
         }),
       ])
     );
     const pulseLoop = Animated.loop(
       Animated.sequence([
+        // Slight delay so the status dot follows the card glow.
+
+        Animated.delay(250),
+
         Animated.timing(earningPulseAnim, {
-          toValue: 1.08,
-          duration: 900,
+          toValue: 1.03,
+          duration: 500,
           useNativeDriver: true,
         }),
+
+        Animated.timing(earningPulseAnim, {
+          toValue: 1.06,
+          duration: 450,
+          useNativeDriver: true,
+        }),
+
         Animated.timing(earningPulseAnim, {
           toValue: 1,
-          duration: 900,
+          duration: 700,
           useNativeDriver: true,
         }),
       ])
