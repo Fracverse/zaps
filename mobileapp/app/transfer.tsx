@@ -165,7 +165,7 @@ function TransferScreen() {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
       searchUsers(recipient);
-    }, 350);
+    }, 300);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
