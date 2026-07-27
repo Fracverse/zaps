@@ -24,6 +24,7 @@ const TYPE_OPTIONS: { label: string; value: TransactionFilters["type"] }[] = [
   { label: "All", value: "all" },
   { label: "Sent", value: "sent" },
   { label: "Received", value: "received" },
+  { label: "Mass Payout", value: "mass_payout" },
   { label: "Yield", value: "yield" },
 ];
 

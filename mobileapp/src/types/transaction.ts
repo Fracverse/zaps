@@ -3,7 +3,8 @@ export type TransactionType =
   | "received"
   | "swap"
   | "payment"
-  | "yield";
+  | "yield"
+  | "mass_payout";
 export type TransactionStatus = "completed" | "pending" | "failed";
 export type YieldType = "interest" | "reward" | "apy";
 
@@ -24,6 +25,10 @@ export interface Transaction {
   feeAsset?: string;
   network?: string;
   yieldType?: YieldType;
+  /** Populated for mass_payout (SDP disbursement) transactions */
+  senderName?: string;
+  /** Anchor/organisation that issued the SDP disbursement */
+  senderAnchor?: string;
 }
 
 export interface TransactionPage {
