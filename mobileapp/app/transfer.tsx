@@ -31,6 +31,7 @@ import {
   getLocalKeypair,
   StellarWalletState,
 } from "../src/services/stellarWallet";
+import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
 
 import ZapsIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
@@ -132,6 +133,7 @@ function TransferScreen() {
 
   // Recipient search state
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -175,6 +177,13 @@ function TransferScreen() {
     setRecipient(user.username);
     setSearchResults([]);
     setShowDropdown(false);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const cached = await getRecentRecipients();
+      setRecentRecipients(cached);
+    })();
   }, []);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
@@ -266,6 +275,7 @@ function TransferScreen() {
           hash: result.hash,
         });
         await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
+        await saveRecentRecipient(recipient);
       } catch (e) {
         Alert.alert("Transfer Failed", (e as Error).message);
         setSubmitting(false);
@@ -379,6 +389,39 @@ function TransferScreen() {
                       <Text style={styles.dropdownAddress} numberOfLines={1}>
                         {user.address.slice(0, 10)}…{user.address.slice(-6)}
                       </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color="#BDBDBD"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          {transferType === "ZAPS" &&
+            recipient.length < 2 &&
+            recentRecipients.length > 0 &&
+            !showDropdown && (
+              <View style={styles.dropdownContainer}>
+                <Text style={styles.dropdownHeader}>Recent contacts</Text>
+                {recentRecipients.map((username) => (
+                  <TouchableOpacity
+                    key={username}
+                    style={styles.dropdownItem}
+                    onPress={() => {
+                      setRecipient(username);
+                      setShowDropdown(false);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.dropdownAvatar}>
+                      <Text style={styles.dropdownAvatarText}>
+                        {username.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.dropdownInfo}>
+                      <Text style={styles.dropdownUsername}>{username}</Text>
                     </View>
                     <Ionicons
                       name="chevron-forward"
@@ -1211,6 +1254,14 @@ const styles = StyleSheet.create({
     elevation: 6,
     overflow: "hidden",
     zIndex: 20,
+  },
+  dropdownHeader: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#F8F9FA",
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#555",
   },
   dropdownItem: {
     flexDirection: "row",

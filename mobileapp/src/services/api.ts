@@ -11,6 +11,33 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
+const RECENT_RECIPIENTS_KEY = "recent_recipient_usernames";
+const MAX_RECENT_RECIPIENTS = 20;
+
+export async function getRecentRecipients(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveRecentRecipient(username: string): Promise<void> {
+  if (!username) return;
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
+    const current = raw ? (JSON.parse(raw) as string[]) : [];
+    const next = [username, ...current.filter((item) => item !== username)].slice(
+      0,
+      MAX_RECENT_RECIPIENTS
+    );
+    await AsyncStorage.setItem(RECENT_RECIPIENTS_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore cache failures.
+  }
+}
+
 export interface YieldBalance {
   apy: string;
   totalYieldEarned: string;
