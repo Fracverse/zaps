@@ -265,6 +265,7 @@ async fn load_report_candidates(
         JOIN user_yield_balances b ON b.user_id = u.id
         JOIN user_push_tokens t ON t.user_id = u.id
         WHERE b.earning_balance > 0
+          AND u.auto_earn_enabled = true
           AND t.expo_push_token IS NOT NULL
           AND t.expo_push_token <> ''
         GROUP BY u.id, u.username, b.earning_balance, b.last_yield_sync_at, {report_column}
