@@ -24,6 +24,11 @@ export default function OverviewPage() {
     30000,
   );
 
+  const { data: registryData, loading: registryLoading, error: registryError } = usePolling(
+    () => api.registryStats(),
+    30000,
+  );
+
   const likes = feedData?.reduce((total, feed) => total + feed.likes_count, 0) ?? 0;
   const comments = feedData?.reduce((total, feed) => total + feed.comments_count, 0) ?? 0;
   const activeFeeds = feedData?.length ?? 0;
@@ -76,6 +81,52 @@ export default function OverviewPage() {
             value={activeFeeds}
             sub="Recent public feeds"
             color="text-emerald-600"
+          />
+        </div>
+      )}
+
+      {/* Username Registry */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold text-slate-900">Username Registry</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Registration metrics and weekly growth indicators.
+        </p>
+      </div>
+
+      {registryError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {registryError} — showing the most recently loaded values
+        </div>
+      )}
+
+      {registryLoading && !registryData ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-28 animate-pulse rounded-xl border border-slate-200 bg-white"
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <StatCard
+            label="Total Registered"
+            value={registryData?.total_usernames ?? 0}
+            sub="Unique usernames on-chain"
+            color="text-indigo-600"
+          />
+          <StatCard
+            label="Weekly Growth"
+            value={registryData?.weekly_growth ?? 0}
+            sub="New registrations this week"
+            color="text-emerald-600"
+          />
+          <StatCard
+            label="Active Registrations"
+            value={registryData?.active_registrations ?? 0}
+            sub="Currently active claims"
+            color="text-amber-600"
           />
         </div>
       )}
