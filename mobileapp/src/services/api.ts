@@ -11,33 +11,47 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
+const RECENT_RECIPIENTS_KEY = "recent_recipient_usernames";
+const MAX_RECENT_RECIPIENTS = 20;
+
+export async function getRecentRecipients(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveRecentRecipient(username: string): Promise<void> {
+  if (!username) return;
+  try {
+    const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
+    const current = raw ? (JSON.parse(raw) as string[]) : [];
+    const next = [username, ...current.filter((item) => item !== username)].slice(
+      0,
+      MAX_RECENT_RECIPIENTS
+    );
+    await AsyncStorage.setItem(RECENT_RECIPIENTS_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore cache failures.
+  }
+}
+
 export interface YieldBalance {
-  apy: string;
-  totalYieldEarned: string;
-  availableBalance: string;
-  earningBalance: string;
+  apy: string | number;
+  totalYieldEarned: string | number;
+  availableBalance: string | number;
+  earningBalance: string | number;
   explanation: string;
   autoEarnEnabled: boolean;
 }
 
 export async function fetchYieldBalance(): Promise<YieldBalance> {
   const headers = await getAuthHeaders();
-  try {
-    const res = await fetch(`${API_BASE}/api/yield/balance`, { headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<YieldBalance>;
-  } catch {
-    // Fallback to mock while backend is not yet live
-    return {
-      apy: "8.75%",
-      totalYieldEarned: "₦3,280.45",
-      availableBalance: "₦32,450.00",
-      earningBalance: "₦3,280.45",
-      explanation:
-        "Your earnings are generated from your wallet balance and may vary as rates change. APY is an annualized estimate and total yield is updated automatically over time.",
-      autoEarnEnabled: true,
-    };
-  }
+  const res = await fetch(`${API_BASE}/api/yield/balance`, { headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<YieldBalance>;
 }
 
 export async function updateAutoEarn(enabled: boolean): Promise<void> {

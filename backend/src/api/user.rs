@@ -1,6 +1,7 @@
 use crate::api::feed::AuthUser;
+use crate::services::redis_cache::UsernameAddressCache;
 use axum::{
-    extract::{Path, State},
+    extract::{FromRef, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -8,6 +9,28 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
+
+/// #544: state for routes that need the username->address Redis cache
+/// alongside the DB pool. Existing handlers keep extracting `State<PgPool>`
+/// directly (via the `FromRef` impl below) — only `resolve_address` needs
+/// the full state.
+#[derive(Clone)]
+pub struct UserState {
+    pub pool: sqlx::PgPool,
+    pub cache: Option<UsernameAddressCache>,
+}
+
+impl UserState {
+    pub fn new(pool: sqlx::PgPool, cache: Option<UsernameAddressCache>) -> Self {
+        Self { pool, cache }
+    }
+}
+
+impl FromRef<UserState> for sqlx::PgPool {
+    fn from_ref(state: &UserState) -> Self {
+        state.pool.clone()
+    }
+}
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
@@ -368,6 +391,56 @@ pub async fn reject_friend_request(
         Ok(_) => Json(serde_json::json!({ "status": "REJECTED" })).into_response(),
         Err(e) => {
             tracing::error!("reject_friend_request failed: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── #544: cached username -> address resolution ────────────────────────────
+
+#[derive(Serialize)]
+pub struct ResolveAddressResponse {
+    pub username: String,
+    pub address: String,
+}
+
+/// GET /api/users/resolve/:username — resolve a username to its registered
+/// Stellar address for transfer/payout flows, checking the Redis cache
+/// before Postgres and populating it (30-minute TTL) on a DB hit.
+pub async fn resolve_address(
+    State(state): State<UserState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    if let Some(cache) = &state.cache {
+        if let Some(address) = cache.get_address(&username).await {
+            return Json(ResolveAddressResponse { username, address }).into_response();
+        }
+    }
+
+    let row = sqlx::query("SELECT address FROM users WHERE username = $1")
+        .bind(&username)
+        .fetch_optional(&state.pool)
+        .await;
+
+    match row {
+        Ok(Some(row)) => {
+            let address: String = row.get("address");
+            if let Some(cache) = &state.cache {
+                cache.set_address(&username, &address).await;
+            }
+            Json(ResolveAddressResponse { username, address }).into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "username not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to resolve username: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Internal database error" })),

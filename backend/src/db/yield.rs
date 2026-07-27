@@ -179,6 +179,27 @@ pub async fn get_current_yield_rate(pool: &PgPool) -> Result<Option<i32>, sqlx::
     Ok(rate)
 }
 
+/// BE-547: age of the most recent APY checkpoint, in seconds.
+///
+/// `None` when no checkpoint has ever been recorded. Used by the hourly
+/// checkpoint worker to decide whether a tick is actually due: `tokio::interval`
+/// restarts its clock on process start, so without this a crash-looping or
+/// frequently-redeployed process would write a checkpoint on every boot.
+pub async fn seconds_since_last_yield_rate(pool: &PgPool) -> Result<Option<i64>, sqlx::Error> {
+    let age: Option<f64> = sqlx::query_scalar(
+        r#"
+        SELECT EXTRACT(EPOCH FROM (NOW() - created_at))
+          FROM yield_rates_history
+         ORDER BY created_at DESC
+         LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(age.map(|secs| secs as i64))
+}
+
 /// Read whether the user has auto-earn (auto-sweep) enabled.
 pub async fn get_auto_earn_enabled(pool: &PgPool, user_id: Uuid) -> Result<bool, sqlx::Error> {
     let enabled = sqlx::query_scalar(
@@ -306,6 +327,61 @@ pub async fn touch_yield_sync_at(pool: &PgPool, user_id: Uuid) -> Result<(), sql
     .bind(user_id)
     .execute(pool)
     .await?;
+
+    Ok(())
+}
+
+/// BE-053: Users currently in sweep-failure backoff (excluded from this cycle).
+pub async fn list_sweep_backoff_excluded_users(
+    pool: &PgPool,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT user_id FROM sweep_failure_history
+        WHERE next_retry_at > NOW()
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| row.get("user_id")).collect())
+}
+
+/// BE-053: Record a sweep failure and push the user's next retry back with
+/// exponential backoff (60s * 2^failures, capped at 1 hour) so repeated
+/// failures don't flood the logs every cycle.
+pub async fn record_sweep_failure(
+    pool: &PgPool,
+    user_id: Uuid,
+    error: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO sweep_failure_history (user_id, failure_count, last_error, last_failed_at, next_retry_at)
+        VALUES ($1, 1, $2, NOW(), NOW() + INTERVAL '60 seconds')
+        ON CONFLICT (user_id) DO UPDATE
+        SET failure_count = sweep_failure_history.failure_count + 1,
+            last_error = EXCLUDED.last_error,
+            last_failed_at = NOW(),
+            next_retry_at = NOW() + (
+                INTERVAL '60 seconds' * POWER(2, LEAST(sweep_failure_history.failure_count + 1, 6))
+            )
+        "#,
+    )
+    .bind(user_id)
+    .bind(error)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// BE-053: Clear a user's failure history after a successful sweep.
+pub async fn clear_sweep_failure(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM sweep_failure_history WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }

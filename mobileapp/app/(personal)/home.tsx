@@ -130,8 +130,8 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [availableBalance] = useState("₦32,450.00");
-  const [totalYieldEarned] = useState("₦3,280.45");
+  const [availableBalance, setAvailableBalance] = useState("₦0.00");
+  const [totalYieldEarned, setTotalYieldEarned] = useState("₦0.00");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
   const [yieldStatus, setYieldStatus] = useState<
     "loading" | "success" | "error"
@@ -176,9 +176,31 @@ export default function HomeScreen() {
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
     setAutoYieldEnabled(data.autoEarnEnabled);
+    
+    const formatCurr = (val: number) =>
+      `₦${val.toLocaleString("en-NG", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+
+    // Parse numbers formatting correctly
+    const parseAPIValue = (val: string | number) => {
+      if (typeof val === "number") return formatCurr(val);
+      const strVal = String(val);
+      if (strVal.includes("₦")) return strVal;
+      const parsed = Number(strVal);
+      return isNaN(parsed) ? strVal : formatCurr(parsed);
+    };
+
+    const formattedYield = parseAPIValue(data.totalYieldEarned);
+    const formattedAvailable = parseAPIValue(data.availableBalance);
+    
+    setAvailableBalance(formattedAvailable);
+    setTotalYieldEarned(formattedYield);
+    
     return {
-      apy: data.apy,
-      totalYieldEarned: data.totalYieldEarned,
+      apy: typeof data.apy === "number" ? `${data.apy}%` : String(data.apy).includes("%") ? String(data.apy) : `${data.apy}%`,
+      totalYieldEarned: formattedYield,
       explanation: data.explanation,
     };
   };
@@ -634,13 +656,19 @@ export default function HomeScreen() {
       >
         {/* Balance Card */}
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
-          <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          {/* Available Balance Section */}
+          <View style={styles.balanceSection}>
+            <Text style={styles.balanceLabel}>Available Balance</Text>
+            <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          </View>
 
-          <View style={styles.earningRow}>
-            <View style={styles.earningDot} />
-            <Text style={styles.earningRowLabel}>Earning Balance</Text>
-            <Text style={styles.earningRowValue}>{totalYieldEarned}</Text>
+          {/* Earning Balance Section */}
+          <View style={styles.earningBalanceSection}>
+            <View style={styles.earningBalanceHeader}>
+              <View style={styles.earningDot} />
+              <Text style={styles.earningRowLabel}>Earning Balance</Text>
+            </View>
+            <Text style={styles.earningBalanceAmount}>{totalYieldEarned}</Text>
           </View>
 
           <TouchableOpacity
@@ -1258,6 +1286,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 2,
   },
+  balanceSection: {
+    marginBottom: 16,
+  },
   balanceLabel: {
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
@@ -1268,17 +1299,19 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
-    marginBottom: 14,
   },
-  earningRow: {
+  earningBalanceSection: {
+    backgroundColor: "#F2F9F0",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E8F5E9",
+  },
+  earningBalanceHeader: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#F2F9F0",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   earningDot: {
     width: 8,
@@ -1291,10 +1324,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
     color: "#456047",
-    marginRight: 8,
   },
-  earningRowValue: {
-    fontSize: 13,
+  earningBalanceAmount: {
+    fontSize: 28,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
