@@ -36,14 +36,6 @@ pub struct TokenSalvagedEvent {
     pub tx_hash: String,
 }
 
-/// BE-061: emitted when the yield vault compounds interest.
-pub struct YieldAccruedEvent {
-    pub added_yield: i64,
-    pub elapsed_ledgers: i64,
-    pub new_index: i64,
-    pub tx_hash: String,
-}
-
 /// #542: emitted by the user_registry contract's `register_user` when a
 /// Stellar address claims a Zaps username on-chain.
 pub struct UserRegisteredEvent {
@@ -52,14 +44,31 @@ pub struct UserRegisteredEvent {
     pub tx_hash: String,
 }
 
+/// BE-047: emitted by the social_graph contract when one user adds another
+/// as a friend.
+pub struct FriendAddedEvent {
+    pub requester: String,
+    pub friend: String,
+    pub tx_hash: String,
+}
+
+/// BE-047: emitted by the social_graph contract when one user removes a
+/// friend.
+pub struct FriendRemovedEvent {
+    pub user: String,
+    pub friend: String,
+    pub tx_hash: String,
+}
+
 pub enum ZapsEvent {
     YieldDeposited(YieldDepositedEvent),
     YieldWithdrawn(YieldWithdrawnEvent),
     YieldRateUpdated(YieldRateUpdatedEvent),
     YieldAccrued(YieldAccruedEvent),
-    // 2. Add the new variant to the enum
     TokenSalvaged(TokenSalvagedEvent),
     UserRegistered(UserRegisteredEvent),
+    FriendAdded(FriendAddedEvent),
+    FriendRemoved(FriendRemovedEvent),
     Unknown,
 }
 
@@ -181,14 +190,6 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
                 tx_hash,
             })
         }
-        "YieldAccrued" => {
-            let added_yield = find_nested_i64(value, "added_yield").unwrap_or_default();
-            let elapsed_ledgers = find_nested_i64(value, "elapsed_ledgers").unwrap_or_default();
-            let new_index = find_nested_i64(value, "new_index").unwrap_or_default();
-            let tx_hash = extract_tx_hash(value);
-
-            ZapsEvent::YieldAccrued(YieldAccruedEvent { added_yield, elapsed_ledgers, new_index, tx_hash })
-        }
         // #542: address + username come straight off the UserRegistered event
         // payload XDR (decoded to JSON upstream), same as every other event here.
         "UserRegistered" => {
@@ -196,7 +197,11 @@ pub fn parse_zaps_event(topic: &str, value: &Value) -> ZapsEvent {
             let username = find_nested_string(value, "username").unwrap_or_default();
             let tx_hash = extract_tx_hash(value);
 
-            ZapsEvent::UserRegistered(UserRegisteredEvent { address, username, tx_hash })
+            ZapsEvent::UserRegistered(UserRegisteredEvent {
+                address,
+                username,
+                tx_hash,
+            })
         }
         _ => ZapsEvent::Unknown,
     }
