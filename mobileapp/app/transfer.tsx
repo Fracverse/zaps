@@ -137,6 +137,10 @@ function TransferScreen() {
   const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Registry check state (not registered / blacklisted warnings)
+  type UsernameStatus = "idle" | "checking" | "registered" | "not_registered" | "blacklisted";
+  const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>("idle");
+
   const searchUsers = useCallback(async (query: string) => {
     if (!query || query.length < 2) {
       setSearchResults([]);
@@ -152,6 +156,9 @@ function TransferScreen() {
       const data: ZapsUser[] = await res.json();
       setSearchResults(data);
       setShowDropdown(data.length > 0);
+
+      // If the search returned no results and the query looks like a full username,
+      // a subsequent resolve call (in the debounce effect) will determine registry status.
     } catch {
       setSearchResults([]);
       setShowDropdown(false);
@@ -160,23 +167,78 @@ function TransferScreen() {
     }
   }, []);
 
-  // Debounce search while user types (ZAPS mode only)
+  /**
+   * Check the registry status of an exact username via the resolve endpoint.
+   * Sets usernameStatus to:
+   *   - "registered"     → 200 OK (user exists in the registry)
+   *   - "not_registered" → 404 (user does not exist)
+   *   - "blacklisted"    → 200 OK + is_blacklisted flag on the response
+   *   - "checking"       → while the request is in flight
+   *   - "idle"           → when no check is needed
+   */
+  const checkUsernameRegistry = useCallback(async (username: string) => {
+    if (!username || username.length < 2) {
+      setUsernameStatus("idle");
+      return;
+    }
+    setUsernameStatus("checking");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/users/resolve/${encodeURIComponent(username)}`
+      );
+      if (res.status === 404) {
+        setUsernameStatus("not_registered");
+        return;
+      }
+      if (!res.ok) {
+        // Non-404 error — treat as unknown, keep current status
+        setUsernameStatus("idle");
+        return;
+      }
+      const body: { username: string; address: string; is_blacklisted?: boolean } =
+        await res.json();
+      if (body.is_blacklisted) {
+        setUsernameStatus("blacklisted");
+      } else {
+        setUsernameStatus("registered");
+      }
+    } catch {
+      // Network error — don't block the user from proceeding
+      setUsernameStatus("idle");
+    }
+  }, []);
+
+  // Debounce search while user types (ZAPS mode only) + registry check
   useEffect(() => {
     if (transferType !== "ZAPS") return;
     if (searchTimer.current) clearTimeout(searchTimer.current);
+
+    // Reset registry status when the user is actively typing
+    if (recipient.length >= 2) {
+      setUsernameStatus("idle");
+    }
+
     searchTimer.current = setTimeout(() => {
       searchUsers(recipient);
+      // After search settles, check the exact username against the registry
+      if (recipient.length >= 3) {
+        checkUsernameRegistry(recipient);
+      } else {
+        setUsernameStatus("idle");
+      }
     }, 350);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
-  }, [recipient, transferType, searchUsers]);
+  }, [recipient, transferType, searchUsers, checkUsernameRegistry]);
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
     setRecipient(user.username);
     setSelectedUser(user);
     setSearchResults([]);
     setShowDropdown(false);
+    // User selected from search results → definitely registered
+    setUsernameStatus("registered");
   }, []);
 
   useEffect(() => {
@@ -358,6 +420,8 @@ function TransferScreen() {
             onChangeText={(text: string) => {
               setRecipient(text);
               setSelectedUser(null);
+              // Reset registry warning when user edits the field
+              setUsernameStatus("idle");
               if (transferType !== "ZAPS") return;
               if (text.length < 2) {
                 setShowDropdown(false);
@@ -422,6 +486,8 @@ function TransferScreen() {
                     onPress={() => {
                       setRecipient(username);
                       setShowDropdown(false);
+                      // Check registry for recent-contact selection
+                      checkUsernameRegistry(username);
                     }}
                     activeOpacity={0.75}
                   >
@@ -443,6 +509,56 @@ function TransferScreen() {
               </View>
             )}
         </View>
+
+        {/* ── Registry status warning banners (ZAPS mode only) ──────── */}
+        {transferType === "ZAPS" && recipient.length >= 3 && (
+          <>
+            {usernameStatus === "checking" && (
+              <View style={styles.warningBanner} testID="warning-checking">
+                <ActivityIndicator size="small" color={COLORS.primary} />
+                <Text style={styles.warningBannerText}>
+                  Checking username…
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "not_registered" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerDanger]}
+                testID="warning-not-registered"
+              >
+                <Ionicons name="alert-circle" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  @{recipient} is not registered on Zaps.
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "blacklisted" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerBlacklisted]}
+                testID="warning-blacklisted"
+              >
+                <Ionicons name="shield-outline" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  @{recipient} has been flagged and cannot receive payments.
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "registered" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerSuccess]}
+                testID="warning-registered"
+              >
+                <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
+                <Text style={styles.warningBannerTextSuccess}>
+                  @{recipient} is a registered Zaps user.
+                </Text>
+              </View>
+            )}
+          </>
+        )}
 
         {/* Custom Amount Display */}
         <TouchableOpacity
@@ -879,7 +995,13 @@ function TransferScreen() {
             loading={step !== 3 && submitting}
             disabled={
               (step === 0 && !transferType) ||
-              (step === 1 && (!recipient || !amount)) ||
+              (step === 1 &&
+                (!recipient ||
+                  !amount ||
+                  (transferType === "ZAPS" &&
+                    recipient.length >= 3 &&
+                    (usernameStatus === "not_registered" ||
+                      usernameStatus === "blacklisted")))) ||
               (step === 3 && submitting) ||
               submitting
             }
@@ -1354,6 +1476,51 @@ const styles = StyleSheet.create({
   },
   goBackButton: {
     borderColor: "#E0E0E0",
+  },
+
+  // ── Registry status warning banners ────────────────────────────────────────
+  warningBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginTop: 8,
+    backgroundColor: "#F0FDF4",
+  },
+  warningBannerDanger: {
+    backgroundColor: "#FEF2F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+  },
+  warningBannerBlacklisted: {
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+  },
+  warningBannerSuccess: {
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#BBF7D0",
+  },
+  warningBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: COLORS.primary,
+  },
+  warningBannerTextDanger: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#DC2626",
+  },
+  warningBannerTextSuccess: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#16A34A",
   },
 });
 
