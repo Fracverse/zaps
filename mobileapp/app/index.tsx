@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
+import { PrivySocialButtons } from "../src/components/PrivySocialButtons";
 import { Stack, useRouter } from "expo-router";
 
 import Icon1 from "../assets/icon-1.svg";
@@ -38,7 +39,10 @@ export default function OnboardingScreen() {
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
           <ZapsLogo width={116} height={53} style={styles.splashLogo} />
         </View>
@@ -78,15 +82,24 @@ export default function OnboardingScreen() {
         </View>
 
         <View style={styles.footer}>
+          {/* Privy Social Connection Buttons */}
+          <PrivySocialButtons nextRoute="/username" testIDPrefix="index-privy" />
+
+          <View style={styles.dividerRow}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
           <Button
-            title="Continue"
+            title="Set Up Wallet Manually"
             onPress={() => router.push("/onboarding-start")}
-            variant="primary"
-            style={styles.continueButton}
-            textStyle={styles.buttonText}
+            variant="secondary"
+            style={styles.manualButton}
+            textStyle={styles.manualButtonText}
           />
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -100,14 +113,13 @@ const styles = StyleSheet.create({
   },
   splashContent: {
     alignItems: "center",
-    gap: 10, // Added gap as requested
+    gap: 10,
   },
   splashLogo: {
-    // width/height handled by SVG props
-    marginBottom: 0, // Reset margin since using gap
+    marginBottom: 0,
   },
   splashText: {
-    fontSize: 80, // Increased to 80px
+    fontSize: 80,
     fontFamily: "Anton_400Regular",
     color: COLORS.primary,
     letterSpacing: 4,
@@ -118,44 +130,42 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.secondary,
   },
   content: {
-    flex: 1,
     paddingHorizontal: 20,
-    justifyContent: "space-between",
     paddingVertical: 20,
+    justifyContent: "space-between",
+    flexGrow: 1,
   },
   header: {
     alignItems: "center",
-    marginBottom: 20,
-    paddingTop: 20,
+    marginBottom: 16,
+    paddingTop: 10,
   },
-
   featureContainer: {
-    flex: 1,
-    justifyContent: "center",
-    gap: 16, // Space between rows
+    marginVertical: 12,
+    gap: 16,
     paddingHorizontal: 10,
   },
   trackRow: {
     width: "100%",
-    backgroundColor: "#74D189", // Slightly darker green for track
-    borderRadius: 100, // Full pill shape
+    backgroundColor: "#74D189",
+    borderRadius: 100,
     height: 80,
     justifyContent: "center",
     padding: 5,
   },
   featureCard: {
     backgroundColor: COLORS.primary,
-    borderRadius: 100, // Full pill shape
+    borderRadius: 100,
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 24,
     paddingVertical: 18,
     position: "absolute",
-    height: "100%", // Match track height
+    height: "100%",
   },
   cardLeft: {
     left: 5,
-    paddingRight: 40, // Visual balance
+    paddingRight: 40,
     minWidth: "55%",
   },
   cardCenter: {
@@ -172,43 +182,64 @@ const styles = StyleSheet.create({
   },
   icon: {
     marginRight: 10,
-    tintColor: "#AEDCBA", // Light green tint for icons inside dark card
+    tintColor: "#AEDCBA",
   },
   featureText: {
-    color: "#80FA98", // Light green text
+    color: "#80FA98",
     fontSize: 18,
     fontFamily: "Outfit_500Medium",
   },
   titleContainer: {
     alignItems: "center",
-    marginBottom: 30,
+    marginVertical: 16,
   },
   title: {
-    fontSize: 42, // Larger as per screenshot
+    fontSize: 40,
     fontFamily: "Anton_400Regular",
     color: COLORS.primary,
     textAlign: "center",
-    lineHeight: 50,
+    lineHeight: 46,
     textTransform: "uppercase",
   },
   subtitle: {
-    fontSize: 20,
+    fontSize: 18,
     color: COLORS.primary,
     textAlign: "center",
-    marginTop: 16,
-    lineHeight: 24,
+    marginTop: 12,
+    lineHeight: 22,
     fontFamily: "Outfit_500Medium",
   },
   footer: {
     paddingBottom: 20,
+    gap: 12,
   },
-  continueButton: {
-    backgroundColor: COLORS.primary,
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 4,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(26,75,74,0.2)",
+  },
+  dividerText: {
+    fontSize: 13,
+    color: COLORS.primary,
+    fontFamily: "Outfit_600SemiBold",
+  },
+  manualButton: {
+    backgroundColor: "transparent",
     borderRadius: 100,
-    height: 60,
+    height: 52,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
   },
-  buttonText: {
-    fontSize: 18,
-    fontFamily: "Outfit_500Medium",
+  manualButtonText: {
+    fontSize: 16,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.primary,
   },
 });
+

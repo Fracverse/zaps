@@ -19,7 +19,11 @@ import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { AccountTypeCard } from "../src/components/AccountTypeCard";
+import { TransferConfirmationCard } from "../src/components/TransferConfirmationCard";
+import type { ZapsUser } from "../src/types/user";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import {
   checkFreighter,
   connectFreighter,
@@ -31,6 +35,10 @@ import {
   getLocalKeypair,
   StellarWalletState,
 } from "../src/services/stellarWallet";
+import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+import BatchPayoutItemRow from "../src/components/BatchPayoutItemRow";
+import BatchPayoutSummary from "../src/components/BatchPayoutSummary";
+import type { BatchPayoutItem } from "../src/types/batchPayout";
 
 import ZapsIcon from "../assets/icon-4.svg";
 import WalletIcon from "../assets/wallet.svg";
@@ -49,6 +57,79 @@ const STELLAR_ASSET_ISSUERS: Record<string, string | undefined> = {
   USDC: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
   USDT: "GCQTGZQQ5G4PTM2GL7CDIFKUBIPEC52BROAQIAPW53XBRJVN6ZJVTG6V",
 };
+
+const EXPECTED_CSV_HEADERS = ["recipient_name", "recipient_address", "amount", "currency"];
+
+function parseCSV(text: string): { items: BatchPayoutItem[]; errors: string[] } {
+  const lines = text.trim().split(/\r?\n/);
+  const errors: string[] = [];
+  const items: BatchPayoutItem[] = [];
+
+  if (lines.length < 2) {
+    return { items, errors: ["CSV must contain a header row and at least one data row."] };
+  }
+
+  const headerLine = lines[0].toLowerCase().trim();
+  const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+
+  const missingHeaders = EXPECTED_CSV_HEADERS.filter(
+    (expected) => !headers.includes(expected)
+  );
+  if (missingHeaders.length > 0) {
+    return {
+      items,
+      errors: [
+        `Missing required columns: ${missingHeaders.join(", ")}. Expected: ${EXPECTED_CSV_HEADERS.join(", ")}`,
+      ],
+    };
+  }
+
+  const nameIdx = headers.indexOf("recipient_name");
+  const addrIdx = headers.indexOf("recipient_address");
+  const amtIdx = headers.indexOf("amount");
+  const curIdx = headers.indexOf("currency");
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i].trim();
+    if (!row) continue;
+
+    const cols = row.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+    const name = cols[nameIdx] || "";
+    const address = cols[addrIdx] || "";
+    const amount = cols[amtIdx] || "";
+    const currency = cols[curIdx] || "";
+
+    const rowErrors: string[] = [];
+
+    if (!name) rowErrors.push(`Row ${i}: recipient_name is required.`);
+    if (!address) rowErrors.push(`Row ${i}: recipient_address is required.`);
+    else if (!address.startsWith("G") || address.length < 20)
+      rowErrors.push(`Row ${i}: "${address}" is not a valid Stellar address.`);
+    if (!amount) rowErrors.push(`Row ${i}: amount is required.`);
+    else if (isNaN(Number(amount)) || Number(amount) <= 0)
+      rowErrors.push(`Row ${i}: amount must be a positive number.`);
+    if (!currency) rowErrors.push(`Row ${i}: currency is required.`);
+
+    if (rowErrors.length > 0) {
+      errors.push(...rowErrors);
+    } else {
+      items.push({
+        id: `item-${i}`,
+        recipientName: name,
+        recipientAddress: address,
+        amount,
+        currency: currency.toUpperCase(),
+        status: "pending",
+      });
+    }
+  }
+
+  if (items.length === 0 && errors.length === 0) {
+    errors.push("No valid data rows found in CSV.");
+  }
+
+  return { items, errors };
+}
 
 const TOKENS = [
   {
@@ -105,16 +186,12 @@ const API_BASE =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
-interface ZapsUser {
-  username: string;
-  address: string;
-  avatar_url: string | null;
-}
+
 
 function TransferScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [transferType, setTransferType] = useState<"ZAPS" | "external" | null>(
+  const [transferType, setTransferType] = useState<"ZAPS" | "external" | "BATCH" | null>(
     "ZAPS"
   );
   const [recipient, setRecipient] = useState("");
@@ -132,9 +209,17 @@ function TransferScreen() {
 
   // Recipient search state
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Batch upload state
+  const [batchFile, setBatchFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
+  const [batchItems, setBatchItems] = useState<BatchPayoutItem[]>([]);
+  const [batchErrors, setBatchErrors] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   const searchUsers = useCallback(async (query: string) => {
     if (!query || query.length < 2) {
@@ -173,8 +258,16 @@ function TransferScreen() {
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
     setRecipient(user.username);
+    setSelectedUser(user);
     setSearchResults([]);
     setShowDropdown(false);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const cached = await getRecentRecipients();
+      setRecentRecipients(cached);
+    })();
   }, []);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
@@ -235,11 +328,23 @@ function TransferScreen() {
   );
 
   const handleNext = async () => {
+    if (step === 0 && transferType === "BATCH") {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(1);
+      return;
+    }
+
     if (step === 2) {
       if (!walletState?.isConnected) {
-        setStep(4);
+        setStep(5);
         return;
       }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(3);
+      return;
+    }
+
+    if (step === 3) {
       setSubmitting(true);
       try {
         const assetIssuer =
@@ -249,8 +354,8 @@ function TransferScreen() {
         const result = await submitPayment(
           recipient,
           amount,
-          walletState.source!,
-          walletState.publicKey,
+          walletState!.source!,
+          walletState!.publicKey,
           token.symbol,
           assetIssuer,
           description || undefined
@@ -266,15 +371,19 @@ function TransferScreen() {
           hash: result.hash,
         });
         await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
+        await saveRecentRecipient(recipient);
       } catch (e) {
         Alert.alert("Transfer Failed", (e as Error).message);
         setSubmitting(false);
         return;
       }
       setSubmitting(false);
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(4);
+      return;
     }
 
-    if (step === 3) {
+    if (step === 4) {
       router.replace("/(personal)/home");
       return;
     }
@@ -286,11 +395,17 @@ function TransferScreen() {
   const handleBack = () => {
     if (step === 0) {
       router.back();
-    } else if (step === 3) {
-      router.replace("/(personal)/home");
     } else if (step === 4) {
+      router.replace("/(personal)/home");
+    } else if (step === 5) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setStep(2);
+      setStep(3);
+    } else if (transferType === "BATCH" && step === 1) {
+      setTransferType("ZAPS");
+      setStep(0);
+    } else if (transferType === "BATCH" && step <= 3) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(step - 1);
     } else {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(step - 1);
@@ -299,7 +414,7 @@ function TransferScreen() {
 
   const handleDisconnect = async () => {
     setWalletState(null);
-    setStep(2);
+    setStep(3);
   };
 
   const renderStep0 = () => (
@@ -320,6 +435,16 @@ function TransferScreen() {
           selected={transferType === "external"}
           onPress={() => setTransferType("external")}
         />
+        <AccountTypeCard
+          title="Distribution List"
+          description="Upload a CSV file with batch payout recipients"
+          Icon={ZapsIcon}
+          selected={transferType === "BATCH"}
+          onPress={() => {
+            setTransferType("BATCH");
+            setStep(1);
+          }}
+        />
       </View>
     </View>
   );
@@ -338,6 +463,7 @@ function TransferScreen() {
             value={recipient}
             onChangeText={(text: string) => {
               setRecipient(text);
+              setSelectedUser(null);
               if (transferType !== "ZAPS") return;
               if (text.length < 2) {
                 setShowDropdown(false);
@@ -379,6 +505,39 @@ function TransferScreen() {
                       <Text style={styles.dropdownAddress} numberOfLines={1}>
                         {user.address.slice(0, 10)}…{user.address.slice(-6)}
                       </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color="#BDBDBD"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          {transferType === "ZAPS" &&
+            recipient.length < 2 &&
+            recentRecipients.length > 0 &&
+            !showDropdown && (
+              <View style={styles.dropdownContainer}>
+                <Text style={styles.dropdownHeader}>Recent contacts</Text>
+                {recentRecipients.map((username) => (
+                  <TouchableOpacity
+                    key={username}
+                    style={styles.dropdownItem}
+                    onPress={() => {
+                      setRecipient(username);
+                      setShowDropdown(false);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.dropdownAvatar}>
+                      <Text style={styles.dropdownAvatarText}>
+                        {username.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={styles.dropdownInfo}>
+                      <Text style={styles.dropdownUsername}>{username}</Text>
                     </View>
                     <Ionicons
                       name="chevron-forward"
@@ -605,7 +764,40 @@ function TransferScreen() {
     </View>
   );
 
-  const renderStep3 = () => (
+  const renderStep3 = () => {
+    const displayUser = selectedUser || {
+      username: recipient,
+      address: "",
+      avatar_url: null as string | null,
+      isVerified: undefined as boolean | undefined,
+    };
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={styles.subtitle}>
+          Review the details below before sending.
+        </Text>
+
+        <TransferConfirmationCard
+          recipient={displayUser}
+          amount={amount}
+          tokenSymbol={token.symbol}
+          description={description}
+        />
+
+        <View style={styles.confirmationActions}>
+          <Button
+            title="Go Back"
+            onPress={handleBack}
+            variant="outline"
+            style={styles.goBackButton}
+          />
+        </View>
+      </View>
+    );
+  };
+
+  const renderStep4 = () => (
     <View style={[styles.stepContainer, styles.centerContent]}>
       <View style={styles.successOuter}>
         <View
@@ -633,7 +825,7 @@ function TransferScreen() {
     </View>
   );
 
-  const renderStep4 = () => (
+  const renderStep5 = () => (
     <View style={styles.stepContainer}>
       <Text style={styles.subtitle}>
         Connect a Stellar wallet to authorize this transfer.
@@ -658,8 +850,7 @@ function TransferScreen() {
             <Button
               title="Continue with this wallet"
               onPress={() => {
-                setStep(2);
-                handleNext();
+                setStep(3);
               }}
               loading={submitting}
               style={{ backgroundColor: "#1A4B4A", marginTop: 16 }}
@@ -729,23 +920,162 @@ function TransferScreen() {
     </View>
   );
 
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "text/csv",
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled) return;
+
+      const file = result.assets?.[0];
+      if (!file) return;
+
+      setBatchFile(result);
+
+      const content = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      const { items, errors } = parseCSV(content);
+      setBatchItems(items);
+      setBatchErrors(errors);
+    } catch (e) {
+      setBatchErrors([(e as Error).message]);
+    }
+  };
+
+  const handleSubmitBatch = async () => {
+    setUploading(true);
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      const token = await AsyncStorage.getItem("auth_token");
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_BASE}/api/admin/distribution-lists`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ items: batchItems }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(4);
+    } catch (e) {
+      Alert.alert("Upload Failed", (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const renderBatchUpload = () => (
+    <View style={styles.stepContainer}>
+      <Text style={styles.subtitle}>
+        Upload a CSV file containing the distribution list.
+      </Text>
+
+      <TouchableOpacity
+        style={styles.filePickerArea}
+        onPress={handlePickFile}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="cloud-upload-outline" size={48} color={COLORS.primary} />
+        <Text style={styles.filePickerText}>
+          {batchFile?.assets?.[0]?.name || "Tap to select CSV file"}
+        </Text>
+        <Text style={styles.filePickerHint}>
+          {batchFile?.assets?.[0]?.name
+            ? `${(batchFile.assets[0].size ?? 0 / 1024).toFixed(1)} KB`
+            : "Expected columns: recipient_name, recipient_address, amount, currency"}
+        </Text>
+      </TouchableOpacity>
+
+      {batchErrors.length > 0 && (
+        <View style={styles.batchErrorsContainer}>
+          <Text style={styles.batchErrorsTitle}>
+            {batchErrors.length} error{batchErrors.length !== 1 ? "s" : ""} found
+          </Text>
+          {batchErrors.slice(0, 10).map((err, idx) => (
+            <Text key={idx} style={styles.batchErrorText}>
+              {"\u2022"} {err}
+            </Text>
+          ))}
+          {batchErrors.length > 10 && (
+            <Text style={styles.batchErrorText}>
+              {"\u2022"} ...and {batchErrors.length - 10} more
+            </Text>
+          )}
+        </View>
+      )}
+
+      {batchItems.length > 0 && (
+        <View style={styles.batchItemsSummary}>
+          <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+          <Text style={styles.batchItemsSummaryText}>
+            {batchItems.length} valid item{batchItems.length !== 1 ? "s" : ""} parsed
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const renderBatchPreview = () => {
+    if (batchItems.length === 0) return null;
+
+    const summary = {
+      id: "batch-preview",
+      totalAmount: batchItems
+        .reduce((sum, item) => sum + Number(item.amount), 0)
+        .toFixed(2),
+      currency: batchItems[0].currency,
+      itemCount: batchItems.length,
+      completedCount: 0,
+      failedCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={styles.subtitle}>
+          Review the parsed distribution list items.
+        </Text>
+        <BatchPayoutSummary summary={summary} items={batchItems} />
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {step < 3 && step !== 4 && (
+      {(step !== 5 && step !== 4) && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {step === 2 ? "Summary & confirmation" : "Social Transfer"}
+            {transferType === "BATCH"
+              ? step === 1
+                ? "Upload List"
+                : step === 2
+                  ? "Preview List"
+                  : "Distribution List"
+              : step === 2
+                ? "Summary"
+                : step === 3
+                  ? "Confirm Transfer"
+                  : "Social Transfer"}
           </Text>
           <View style={{ width: 40 }} />
         </View>
       )}
 
-      {step === 4 && (
+      {step === 5 && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
@@ -758,43 +1088,89 @@ function TransferScreen() {
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
-          (step === 3 || step === 4) && { justifyContent: "center" },
+          (step === 4 || step === 5) && { justifyContent: "center" },
         ]}
         showsVerticalScrollIndicator={false}
       >
         {step === 0 && renderStep0()}
-        {step === 1 && renderStep1()}
-        {step === 2 && renderStep2()}
-        {step === 3 && renderStep3()}
-        {step === 4 && renderStep4()}
+        {transferType === "BATCH" ? (
+          <>
+            {step === 1 && renderBatchUpload()}
+            {step === 2 && renderBatchPreview()}
+            {step === 3 && renderBatchPreview()}
+            {step === 4 && renderStep4()}
+          </>
+        ) : (
+          <>
+            {step === 1 && renderStep1()}
+            {step === 2 && renderStep2()}
+            {step === 3 && renderStep3()}
+            {step === 4 && renderStep4()}
+            {step === 5 && renderStep5()}
+          </>
+        )}
       </ScrollView>
 
-      {step !== 4 && (
-        <View style={styles.footer}>
-          <Button
-            title={
-              step === 1
-                ? "Review"
-                : step === 2
-                  ? submitting
-                    ? "Submitting..."
-                    : "Confirm & Pay"
-                  : step === 3
-                    ? "Done"
+      {transferType === "BATCH" ? (
+        step !== 4 && (
+          <View style={styles.footer}>
+            <Button
+              title={
+                step === 1
+                  ? batchItems.length > 0
+                    ? "Preview List"
+                    : "Upload CSV"
+                  : step === 2
+                    ? "Submit Distribution List"
                     : "Continue"
-            }
-            onPress={handleNext}
-            loading={submitting}
-            disabled={
-              (step === 0 && !transferType) ||
-              (step === 1 && (!recipient || !amount)) ||
-              (step === 2 && false) ||
-              (step === 3 && false) ||
-              submitting
-            }
-            style={{ backgroundColor: "#1A4B4A" }}
-          />
-        </View>
+              }
+              onPress={() => {
+                if (step === 0) {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setStep(1);
+                } else if (step === 1 && batchItems.length > 0) {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setStep(2);
+                } else if (step === 2) {
+                  handleSubmitBatch();
+                }
+              }}
+              loading={uploading}
+              disabled={
+                (step === 1 && batchItems.length === 0) ||
+                uploading
+              }
+              style={{ backgroundColor: "#1A4B4A" }}
+            />
+          </View>
+        )
+      ) : (
+        (step !== 5 && step !== 4) && (
+          <View style={styles.footer}>
+            <Button
+              title={
+                step === 1
+                  ? "Review"
+                  : step === 2
+                    ? "Continue"
+                    : step === 3
+                      ? submitting
+                        ? "Sending..."
+                        : "Send"
+                      : "Continue"
+              }
+              onPress={handleNext}
+              loading={step !== 3 && submitting}
+              disabled={
+                (step === 0 && !transferType) ||
+                (step === 1 && (!recipient || !amount)) ||
+                (step === 3 && submitting) ||
+                submitting
+              }
+              style={{ backgroundColor: "#1A4B4A" }}
+            />
+          </View>
+        )
       )}
     </SafeAreaView>
   );
@@ -1212,6 +1588,14 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     zIndex: 20,
   },
+  dropdownHeader: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#F8F9FA",
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#555",
+  },
   dropdownItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -1247,6 +1631,73 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_400Regular",
     color: "#999",
     marginTop: 2,
+  },
+
+  // ── Confirmation step ─────────────────────────────────────────────────────
+  confirmationActions: {
+    marginTop: 24,
+  },
+  goBackButton: {
+    borderColor: "#E0E0E0",
+  },
+
+  // ── Batch upload ───────────────────────────────────────────────────────────
+  filePickerArea: {
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderStyle: "dashed",
+    borderRadius: 16,
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F0FDF4",
+    marginBottom: 20,
+  },
+  filePickerText: {
+    fontSize: 16,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.primary,
+    marginTop: 12,
+    textAlign: "center",
+  },
+  filePickerHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#666",
+    marginTop: 6,
+    textAlign: "center",
+  },
+  batchErrorsContainer: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  batchErrorsTitle: {
+    fontSize: 15,
+    fontFamily: "Outfit_700Bold",
+    color: "#991B1B",
+    marginBottom: 8,
+  },
+  batchErrorText: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#991B1B",
+    marginBottom: 4,
+    lineHeight: 18,
+  },
+  batchItemsSummary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#F0FDF4",
+    borderRadius: 12,
+    padding: 16,
+  },
+  batchItemsSummaryText: {
+    fontSize: 15,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#065F46",
   },
 });
 
