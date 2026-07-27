@@ -174,6 +174,14 @@ async fn main() {
     // Initialize rate limiter: 5 requests per second, max 10 tokens
     let rate_limiter = RateLimiter::new(5, 10);
 
+    // #561 — Session Refresh & Auth Middleware
+    // Build the shared in-memory token cache.  Validated JWT tokens are cached
+    // for TOKEN_CACHE_TTL (5 min) to avoid a DB round-trip on every request.
+    let auth_cache = api::AuthTokenCache::new();
+
+    // Spawn the background sweep task that evicts expired entries every 10 min.
+    api::spawn_cache_sweep(auth_cache.clone());
+
     // BE-061: Redis pool backing the yield cache. Shared by the API (read-through)
     // and the indexer (eviction on yield events). Absent REDIS_URL — or an
     // unusable one — yield reads simply fall through to Postgres.
@@ -240,17 +248,25 @@ async fn main() {
             )),
         );
 
-    let other_routes = Router::new()
-        .nest("/api/feed", api::feed_routes(pool.clone()))
-        .nest("/api/social", api::social_routes(pool.clone()))
-        .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
-        .nest(
-            "/api/yield",
-            api::yield_routes_with_state(api::r#yield::YieldState::new(
-                pool.clone(),
-                yield_cache.clone(),
-            )),
-        );
+    // #561 — routes that require a valid Privy JWT are wrapped with the auth
+    // middleware so the token is validated (and cached) before any handler runs.
+    let auth_required_routes = api::protected_routes(
+        Router::new()
+            .nest("/api/feed", api::feed_routes(pool.clone()))
+            .nest("/api/social", api::social_routes(pool.clone()))
+            .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
+            .nest(
+                "/api/yield",
+                api::yield_routes_with_state(api::r#yield::YieldState::new(
+                    pool.clone(),
+                    yield_cache.clone(),
+                )),
+            ),
+        pool.clone(),
+        auth_cache.clone(),
+    );
+
+    let other_routes = auth_required_routes;
 
     let app = Router::new()
         .merge(public_routes)

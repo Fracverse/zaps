@@ -36,6 +36,8 @@ import {
   StellarWalletState,
 } from "../src/services/stellarWallet";
 import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+// #580 — Biometric Verification Overlay
+import { authenticateWithBiometrics } from "./biometric";
 import BatchPayoutItemRow from "../src/components/BatchPayoutItemRow";
 import BatchPayoutSummary from "../src/components/BatchPayoutSummary";
 import type { BatchPayoutItem } from "../src/types/batchPayout";
@@ -407,6 +409,26 @@ function TransferScreen() {
     }
 
     if (step === 3) {
+      // #580 — Biometric Verification Overlay
+      // Gate the payment submission behind biometric / passcode authentication.
+      // The transfer is blocked unless the user successfully authenticates.
+      const biometricResult = await authenticateWithBiometrics(
+        "Verify your identity to confirm the transfer"
+      );
+
+      if (!biometricResult.success) {
+        if (biometricResult.reason === "cancelled") {
+          // User deliberately dismissed the prompt — do nothing, stay on step 3.
+          return;
+        }
+        Alert.alert(
+          "Authentication Required",
+          "You must verify your identity before sending a payment. Please try again.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+
       setSubmitting(true);
       try {
         const assetIssuer =

@@ -1,14 +1,22 @@
 use axum::{
+    middleware,
     routing::{delete, get, post},
     Router,
 };
 
 pub mod auth;
+pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
 pub mod social;
 pub mod user;
 pub mod r#yield;
+
+// Re-export the middleware types used in main.rs so callers can import them
+// from `zaps_backend::api::*` without needing the full module path.
+pub use auth_middleware::{
+    auth_middleware, spawn_cache_sweep, AuthMiddlewareState, AuthTokenCache, AuthenticatedUser,
+};
 
 pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
@@ -16,6 +24,37 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
         .with_state(pool)
+}
+
+/// #561 — Session Refresh & Auth Middleware
+///
+/// Wraps the supplied `router` with `auth_middleware` so that every route it
+/// contains requires a valid `Authorization: Bearer <token>` header.
+///
+/// Validated tokens are cached for up to 5 minutes in `cache` to avoid a DB
+/// round-trip on every request.  See `auth_middleware::AuthTokenCache` for the
+/// TTL and eviction semantics.
+///
+/// # Usage (in main.rs)
+/// ```rust
+/// let auth_cache = api::AuthTokenCache::new();
+/// let protected = api::protected_routes(
+///     Router::new()
+///         .nest("/api/feed",   api::feed_routes(pool.clone()))
+///         .nest("/api/social", api::social_routes(pool.clone())),
+///     pool.clone(),
+///     auth_cache,
+/// );
+/// ```
+pub fn protected_routes(
+    router: Router,
+    pool: sqlx::PgPool,
+    cache: AuthTokenCache,
+) -> Router {
+    router.layer(middleware::from_fn_with_state(
+        AuthMiddlewareState { pool, cache },
+        auth_middleware,
+    ))
 }
 
 /// User routes without a Redis cache; username resolution falls through to Postgres.
@@ -85,5 +124,10 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))
         .route("/toggle-auto", post(r#yield::toggle_auto_earn))
+        // #549 — Unsigned Transaction XDR Generator
+        // These routes construct unsigned Soroban transaction envelopes for
+        // client-side signing without touching the database.
+        .route("/build/deposit", post(r#yield::build_unsigned_deposit))
+        .route("/build/withdraw", post(r#yield::build_unsigned_withdraw))
         .with_state(state)
 }
