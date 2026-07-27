@@ -2,7 +2,7 @@
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, String,
+    BytesN, Env, String, Symbol,
 };
 
 #[contract]
@@ -126,7 +126,13 @@ impl UserRegistryContract {
         env.storage().persistent().set(&username_key, &user);
         env.storage()
             .persistent()
-            .set(&DataKey::UserDeposit(user), &reservation_amount);
+            .set(&DataKey::UserDeposit(user.clone()), &reservation_amount);
+
+        // #542: publish so the off-chain indexer can sync this registration
+        // to the `users` table. Without this, on-chain registration and the
+        // off-chain database silently diverge.
+        env.events()
+            .publish((Symbol::new(&env, "UserRegistered"),), (user, username));
     }
 
     /// Retrieve the Address associated with a username
@@ -145,6 +151,18 @@ impl UserRegistryContract {
             .persistent()
             .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"))
+    }
+
+    /// Best-effort username lookup for callers (e.g. other contracts resolving
+    /// a display name for events) that must not panic on an unregistered
+    /// address. Returns an empty string instead of panicking, mirroring
+    /// `get_avatar`'s fallback behavior below.
+    pub fn username_or_empty(env: Env, user: Address) -> String {
+        let user_key = AddressToUsernameKey { address: user };
+        env.storage()
+            .persistent()
+            .get(&user_key)
+            .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
     /// Update user profile metadata (e.g. avatar URI)

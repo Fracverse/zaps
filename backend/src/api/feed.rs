@@ -401,3 +401,88 @@ pub async fn get_private_feed(
         }
     }
 }
+
+// ── #543: payout by username ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct PayoutByUsernameRequest {
+    pub username: String,
+    /// Payout amount in stroops (1 XLM = 10_000_000 stroops).
+    pub amount: i64,
+}
+
+#[derive(Serialize)]
+pub struct PayoutByUsernameResponse {
+    pub envelope_xdr: String,
+    pub recipient_address: String,
+}
+
+/// POST /api/payout/username — resolve `username` to its registered Stellar
+/// address and return an unsigned payment transaction envelope from the
+/// authenticated caller to that address. The client wallet is responsible
+/// for setting the real sequence number, signing, and submitting.
+pub async fn payout_by_username(
+    State(pool): State<PgPool>,
+    auth: AuthUser,
+    Json(payload): Json<PayoutByUsernameRequest>,
+) -> impl IntoResponse {
+    if payload.amount <= 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "amount must be positive" })),
+        )
+            .into_response();
+    }
+
+    let row = sqlx::query("SELECT address FROM users WHERE username = $1")
+        .bind(&payload.username)
+        .fetch_optional(&pool)
+        .await;
+
+    let recipient_address: String = match row {
+        Ok(Some(row)) => row.get("address"),
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "username not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("Failed to resolve username for payout: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    if recipient_address == auth.address {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "cannot pay yourself" })),
+        )
+            .into_response();
+    }
+
+    match crate::services::stellar::build_payout_envelope_xdr(
+        &auth.address,
+        &recipient_address,
+        payload.amount,
+    ) {
+        Ok(envelope_xdr) => Json(PayoutByUsernameResponse {
+            envelope_xdr,
+            recipient_address,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to build payout envelope: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to build transaction" })),
+            )
+                .into_response()
+        }
+    }
+}

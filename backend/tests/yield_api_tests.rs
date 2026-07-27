@@ -17,9 +17,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt; // for `oneshot`
 use uuid::Uuid;
-use zaps_backend::api::feed::AuthUser;
 
-// Re-exported from crate.
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 async fn test_pool() -> PgPool {
@@ -35,6 +33,10 @@ async fn test_pool() -> PgPool {
     pool
 }
 
+/// Builds a syntactically valid, unique Stellar-shaped address for a test
+/// user: `users.address` is `VARCHAR(56)` (see backend/migrations/0001_schema.sql),
+/// so the total length here must be exactly 56 or `seed_user` fails with a
+/// "value too long for type character varying(56)" database error.
 fn test_address(prefix: &str, run: &str) -> String {
     let padding = 56 - prefix.len() - run.len();
     format!("{prefix}{run}{}", "X".repeat(padding))
@@ -173,12 +175,13 @@ async fn test_yield_balance_history_toggle() {
     assert!(body.get("apy").is_some(), "apy missing");
 
     // auto_earn_enabled default comes from `users.auto_earn_enabled`.
-    assert!(
-    !body.get("auto_earn_enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true),
-    "auto_earn_enabled should default to false"
-);
+    assert_eq!(
+        body.get("auto_earn_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+        false,
+        "auto_earn_enabled should default to false"
+    );
 
     // 2) Seed at least one yield history transaction by POST /deposit.
     let deposit_payload = serde_json::json!({ "amount": 5000 });
@@ -341,11 +344,316 @@ async fn test_yield_balance_history_toggle() {
         .execute(&pool)
         .await
         .ok();
+}
 
-    // Avoid unused import warning.
- let _ = AuthUser {
-    id: Uuid::nil(),
-    address: "".to_string(),
-    username: "".to_string(),
-};
+// ── #480 [BE-062] — validation & input-format tests ─────────────────────────
+
+/// `amount` must be strictly positive for both /deposit and /withdraw.
+#[tokio::test]
+async fn test_deposit_and_withdraw_reject_non_positive_amount() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDNONPOS", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    for bad_amount in [0, -1, -1_000_000] {
+        for path in ["/deposit", "/withdraw"] {
+            let (status, body) = response_json(
+                &router,
+                post_req_json(
+                    path,
+                    Some(&token),
+                    serde_json::json!({ "amount": bad_amount }),
+                ),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "{path} with amount={bad_amount} must be rejected"
+            );
+            assert!(
+                body.get("error").is_some(),
+                "{path} with amount={bad_amount} must return an error message"
+            );
+        }
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// /deposit must reject amounts greater than the user's available balance.
+#[tokio::test]
+async fn test_deposit_rejects_insufficient_available_balance() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDDEPINSUF", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // Fresh user's yield balance defaults to 0 available; any positive
+    // deposit amount must be rejected as insufficient.
+    let (status, body) = response_json(
+        &router,
+        post_req_json(
+            "/deposit",
+            Some(&token),
+            serde_json::json!({ "amount": 100 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("error").and_then(|v| v.as_str()),
+        Some("Insufficient available balance")
+    );
+    assert_eq!(body.get("available").and_then(|v| v.as_i64()), Some(0));
+
+    sqlx::query("DELETE FROM user_yield_balances WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// /withdraw must reject amounts greater than the user's earning balance.
+#[tokio::test]
+async fn test_withdraw_rejects_insufficient_earning_balance() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDWDINSUF", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // Fresh user's yield balance defaults to 0 earning; any positive
+    // withdrawal amount must be rejected as insufficient.
+    let (status, body) = response_json(
+        &router,
+        post_req_json(
+            "/withdraw",
+            Some(&token),
+            serde_json::json!({ "amount": 500 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body.get("error").and_then(|v| v.as_str()),
+        Some("Insufficient earning balance")
+    );
+    assert_eq!(body.get("earning").and_then(|v| v.as_i64()), Some(0));
+
+    sqlx::query("DELETE FROM user_yield_balances WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Malformed JSON syntax must not be accepted by any POST endpoint.
+#[tokio::test]
+async fn test_post_endpoints_reject_malformed_json_syntax() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDSYNTAX", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    for (path, raw_body) in [
+        ("/deposit", "{ amount: 1000 "),
+        ("/withdraw", "not-json-at-all"),
+        ("/toggle-auto", "{ \"enabled\": "),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_req_raw(path, Some(&token), raw_body))
+            .await
+            .expect("oneshot failed");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{path} must reject malformed JSON syntax with 400"
+        );
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// Well-formed JSON that is missing required fields, or uses the wrong type
+/// for a field, must be rejected (Axum's `Json` extractor returns 422 for
+/// data errors, as opposed to 400 for syntax errors).
+#[tokio::test]
+async fn test_post_endpoints_reject_invalid_input_shapes() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDSHAPE", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    for (path, raw_body) in [
+        // Missing required field.
+        ("/deposit", "{}"),
+        ("/withdraw", "{}"),
+        ("/toggle-auto", "{}"),
+        // Wrong field type.
+        ("/deposit", r#"{"amount": "one-thousand"}"#),
+        ("/withdraw", r#"{"amount": null}"#),
+        ("/toggle-auto", r#"{"enabled": "yes"}"#),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_req_raw(path, Some(&token), raw_body))
+            .await
+            .expect("oneshot failed");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{path} with body {raw_body} must reject invalid input shape with 422"
+        );
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// /history must clamp out-of-range `limit`/`offset` query params instead of
+/// erroring: limit is clamped to [1, 100], offset is clamped to >= 0.
+#[tokio::test]
+async fn test_history_clamps_out_of_range_pagination_params() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDCLAMP", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // limit above the max (100) is clamped down.
+    let (status, body) = response_json(
+        &router,
+        get_req("/history?limit=9999&offset=0", Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.get("limit").and_then(|v| v.as_i64()), Some(100));
+
+    // limit of 0 (or negative) is clamped up to the minimum of 1.
+    let (status, body) =
+        response_json(&router, get_req("/history?limit=0&offset=0", Some(&token))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.get("limit").and_then(|v| v.as_i64()), Some(1));
+
+    // Negative offset is clamped up to 0.
+    let (status, body) = response_json(
+        &router,
+        get_req("/history?limit=10&offset=-5", Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.get("offset").and_then(|v| v.as_i64()), Some(0));
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// /history must reject query params that fail to deserialize to the
+/// expected type (e.g. non-numeric `limit`/`offset`).
+#[tokio::test]
+async fn test_history_rejects_non_numeric_pagination_params() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDBADQ", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    for path in [
+        "/history?limit=not-a-number&offset=0",
+        "/history?limit=10&offset=not-a-number",
+    ] {
+        let (status, _) = response_json(&router, get_req(path, Some(&token))).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{path} must reject non-numeric pagination params with 400"
+        );
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+
+/// /toggle-auto's `enabled` field is required and must be a boolean.
+#[tokio::test]
+async fn test_toggle_auto_requires_boolean_enabled_field() {
+    let pool = test_pool().await;
+    let router = yield_router(pool.clone());
+
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDTOGGLE", &run);
+    let user_id = seed_user(&pool, &address).await;
+    let token = address.clone();
+
+    // Valid boolean values succeed.
+    for enabled in [true, false] {
+        let (status, body) = response_json(
+            &router,
+            post_req_json(
+                "/toggle-auto",
+                Some(&token),
+                serde_json::json!({ "enabled": enabled }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.get("auto_earn_enabled").and_then(|v| v.as_bool()),
+            Some(enabled)
+        );
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
 }

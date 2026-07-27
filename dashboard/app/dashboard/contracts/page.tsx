@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api } from "@/lib/api";
 import StatCard from "@/components/StatCard";
@@ -161,6 +161,83 @@ function FeeConfigPanel() {
   );
 }
 
+// ── Usernames table ───────────────────────────────────────────────────────────
+function UsernamesTable() {
+  const { data, loading, error } = usePolling(() => api.registryClaims(), 30000);
+  const [sortKey, setSortKey] = useState<"username" | "registered_at">("registered_at");
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const sorted = useMemo(() => {
+    if (!data) return [];
+    return [...data].sort((a, b) => {
+      const cmp = sortKey === "username"
+        ? a.username.localeCompare(b.username)
+        : new Date(a.registered_at).getTime() - new Date(b.registered_at).getTime();
+      return sortAsc ? cmp : -cmp;
+    });
+  }, [data, sortKey, sortAsc]);
+
+  function toggleSort(key: "username" | "registered_at") {
+    if (sortKey === key) setSortAsc((v) => !v);
+    else { setSortKey(key); setSortAsc(true); }
+  }
+
+  const th = (key: "username" | "registered_at", label: string) => (
+    <th
+      className="text-left px-4 py-3 cursor-pointer select-none hover:text-slate-700"
+      onClick={() => toggleSort(key)}
+    >
+      {label} {sortKey === key ? (sortAsc ? "↑" : "↓") : ""}
+    </th>
+  );
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-semibold text-slate-800 mb-3">
+        Registered Usernames
+      </h2>
+      {error && (
+        <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
+      )}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
+            <tr>
+              {th("username", "Username")}
+              <th className="text-left px-4 py-3">Public Key</th>
+              {th("registered_at", "Registered")}
+              <th className="text-left px-4 py-3">TX Hash</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && !data ? (
+              Array.from({ length: 4 }).map((_, row) => (
+                <tr key={row}>
+                  {Array.from({ length: 4 }).map((__, col) => (
+                    <td key={col} className="px-4 py-3"><div className="h-4 animate-pulse rounded bg-slate-100" /></td>
+                  ))}
+                </tr>
+              ))
+            ) : sorted.length === 0 ? (
+              <tr><td colSpan={4} className="px-4 py-6 text-center text-slate-400">No registrations found</td></tr>
+            ) : (
+              sorted.map((c) => (
+                <tr key={c.username} className="border-t border-slate-100 hover:bg-slate-50">
+                  <td className="px-4 py-3 font-medium text-slate-900">{c.username}</td>
+                  <td className="px-4 py-3 text-slate-600 font-mono text-xs truncate max-w-[200px]">{c.public_key}</td>
+                  <td className="px-4 py-3 text-slate-500">{new Date(c.registered_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-slate-500 font-mono text-xs truncate max-w-[160px]">{c.tx_hash ?? "—"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {data && <p className="mt-2 text-xs text-slate-400">{data.length} active registrations</p>}
+    </section>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ContractsPage() {
   const health = usePolling(() => api.contractHealth(), 15000);
@@ -307,6 +384,9 @@ export default function ContractsPage() {
           </ul>
         )}
       </section>
+
+      {/* Registered usernames table */}
+      <UsernamesTable />
 
       {/* Admin section — fee coefficient */}
       <FeeConfigPanel />

@@ -92,3 +92,57 @@ pub struct YieldRateHistory {
     pub apy: i32,
     pub created_at: NaiveDateTime,
 }
+
+// ─── Bulk disbursement (BE-554 / BE-555) ─────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PayoutBatch {
+    pub id: Uuid,
+    pub idempotency_key: String,
+    pub created_by: Uuid,
+    /// PENDING, PROCESSING, COMPLETED, PARTIALLY_FAILED, FAILED, CANCELLED
+    pub status: String,
+    pub currency: String,
+    pub total_recipients: i32,
+    pub total_amount: i64,
+    pub succeeded_count: i32,
+    pub failed_count: i32,
+    pub started_at: Option<NaiveDateTime>,
+    pub completed_at: Option<NaiveDateTime>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct BatchRecipient {
+    pub id: Uuid,
+    pub batch_id: Uuid,
+    /// `None` when the payout targets a raw Stellar address rather than a
+    /// registered Zaps user.
+    pub user_id: Option<Uuid>,
+    pub destination_address: Option<String>,
+    pub amount: i64,
+    /// PENDING, SUBMITTED, CONFIRMED, FAILED
+    pub status: String,
+    pub sdp_payment_id: Option<String>,
+    pub tx_hash: Option<String>,
+    pub attempt_count: i32,
+    pub last_error: Option<String>,
+    pub locked_at: Option<NaiveDateTime>,
+    pub locked_by: Option<String>,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DispatchLog {
+    pub id: Uuid,
+    pub batch_id: Uuid,
+    pub recipient_id: Option<Uuid>,
+    pub attempt: i32,
+    /// CLAIMED, SUBMITTED, CONFIRMED, FAILED, RETRY_SCHEDULED, CANCELLED
+    pub event: String,
+    pub sdp_response_code: Option<String>,
+    pub detail: Option<String>,
+    pub created_at: NaiveDateTime,
+}

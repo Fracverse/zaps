@@ -24,6 +24,8 @@ import {
 import * as Notifications from "expo-notifications";
 import "../src/locales/i18n"; // Initialize i18n
 import { logNavigation, startNavigation } from "../src/utils/performance";
+import * as Linking from "expo-linking";
+import { parseSdpClaimUrl } from "../src/utils/sdpDeepLink";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -57,6 +59,38 @@ function LayoutContent() {
 
     setupNotifications();
   }, []);
+
+  // Handle SDP claiming invite deep links — cold start (getInitialURL) and
+  // warm start (url event) both funnel through the same parser/navigation.
+  const handleIncomingUrl = React.useCallback(
+    (url: string | null) => {
+      if (!url) return;
+
+      const result = parseSdpClaimUrl(url);
+      if (!result.valid) {
+        // Not every deep link is an SDP claim link (or it's malformed) —
+        // ignore silently rather than disrupting normal navigation.
+        return;
+      }
+
+      router.push(`/claim/${result.token}`);
+    },
+    [router]
+  );
+
+  React.useEffect(() => {
+    // Cold start: app was launched directly from the deep link.
+    Linking.getInitialURL().then(handleIncomingUrl);
+
+    // Warm start: app was already running in the background.
+    const subscription = Linking.addEventListener("url", ({ url }) =>
+      handleIncomingUrl(url)
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [handleIncomingUrl]);
 
   React.useEffect(() => {
     const receivedListener = Notifications.addNotificationReceivedListener(
@@ -110,6 +144,12 @@ function LayoutContent() {
             gestureEnabled: true,
             animation: "slide_from_right",
           }}
+        />
+
+        {/* SDP claiming invite validation — Issue #578 */}
+        <Stack.Screen
+          name="claim/[token]"
+          options={{ animation: "slide_from_right" }}
         />
 
         {/* Non-critical info screens — deferred animation for faster perceived load */}
