@@ -37,6 +37,20 @@ jest.mock("../src/services/api", () => ({
   saveRecentRecipient: jest.fn(),
 }));
 
+// Mock new upstream imports used by transfer.tsx (virtual because not in direct deps)
+jest.mock("expo-document-picker", () => ({
+  getDocumentAsync: jest.fn(),
+}), { virtual: true });
+
+jest.mock("expo-file-system", () => ({
+  readAsStringAsync: jest.fn(),
+  EncodingType: { UTF8: "utf8" },
+  documentDirectory: "/mock",
+}), { virtual: true });
+
+jest.mock("../src/components/BatchPayoutItemRow", () => "BatchPayoutItemRow");
+jest.mock("../src/components/BatchPayoutSummary", () => "BatchPayoutSummary");
+
 // Mock SVG imports
 jest.mock("../assets/icon-4.svg", () => "ZapsIcon");
 jest.mock("../assets/wallet.svg", () => "WalletIcon");
