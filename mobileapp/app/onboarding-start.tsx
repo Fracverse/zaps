@@ -19,6 +19,7 @@ import { Input } from "../src/components/Input";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchWithRetry } from "../src/utils/retry";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { PrivySocialButtons } from "../src/components/PrivySocialButtons";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8080";
 const PROFILE_CACHE_KEY = "user_profile";
@@ -158,8 +159,19 @@ export default function ProfileSetupScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.subtitle}>
-          Customize your profile so others can find and recognize you on Zaps.
+          Customize your profile so others can find and recognize you on Zaps, or sign in with social accounts.
         </Text>
+
+        <View style={styles.privySection}>
+          <Text style={styles.socialHeaderTitle}>Quick Social Sign In</Text>
+          <PrivySocialButtons nextRoute="/username" testIDPrefix="onboarding-privy" />
+        </View>
+
+        <View style={styles.dividerRow}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>OR CUSTOMIZE MANUAL PROFILE</Text>
+          <View style={styles.dividerLine} />
+        </View>
 
         <View style={styles.avatarSection}>
           <TouchableOpacity
@@ -349,5 +361,31 @@ const styles = StyleSheet.create({
   saveButton: {
     height: 56,
     borderRadius: 28,
+  },
+  privySection: {
+    marginBottom: 20,
+  },
+  socialHeaderTitle: {
+    fontSize: 15,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.black,
+    marginBottom: 10,
+  },
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 24,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#EEEEEE",
+  },
+  dividerText: {
+    fontSize: 11,
+    color: "#888888",
+    fontFamily: "Outfit_600SemiBold",
+    letterSpacing: 0.5,
   },
 });

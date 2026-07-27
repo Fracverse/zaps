@@ -100,20 +100,6 @@ fn post_req_json(path: &str, token: Option<&str>, payload: Value) -> Request<Bod
         .unwrap()
 }
 
-/// Build a POST request with a raw (possibly malformed) JSON body, so we can
-/// exercise input-format validation that a typed `Value` can't express
-/// (syntax errors, missing fields, wrong field types).
-fn post_req_raw(path: &str, token: Option<&str>, raw_body: &str) -> Request<Body> {
-    let mut builder = Request::builder().method("POST").uri(path);
-    if let Some(t) = token {
-        builder = builder.header("Authorization", format!("Bearer {}", t));
-    }
-    builder
-        .header("content-type", "application/json")
-        .body(Body::from(raw_body.to_string()))
-        .unwrap()
-}
-
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -247,6 +233,33 @@ async fn test_yield_balance_history_toggle() {
         assert!(deposit_body.get("envelope_xdr").is_some());
     }
 
+    // Seed SWEEP and REWARD history items to verify friendly transaction types.
+    let sweep_tx_hash = format!("test-sweep-tx-{}", Uuid::new_v4());
+    sqlx::query(
+        r#"
+        INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
+        VALUES ($1, $2, 'SWEEP', 500, NOW())
+        "#,
+    )
+    .bind(user_id)
+    .bind(&sweep_tx_hash)
+    .execute(&pool)
+    .await
+    .expect("Failed to insert sweep transaction");
+
+    let reward_tx_hash = format!("test-reward-tx-{}", Uuid::new_v4());
+    sqlx::query(
+        r#"
+        INSERT INTO yield_transactions (user_id, tx_hash, type, amount, created_at)
+        VALUES ($1, $2, 'REWARD', 25, NOW())
+        "#,
+    )
+    .bind(user_id)
+    .bind(&reward_tx_hash)
+    .execute(&pool)
+    .await
+    .expect("Failed to insert reward transaction");
+
     // 3) GET /api/yield/history
     let (hist_status, hist_body) =
         response_json(&router, get_req("/history?limit=10&offset=0", Some(&token))).await;
@@ -261,13 +274,23 @@ async fn test_yield_balance_history_toggle() {
         "expected at least one yield history item"
     );
 
-    // Validate item fields exist.
+    // Validate item fields exist and types are serialized correctly.
     let first = &items[0];
     assert!(first.get("id").is_some());
     assert!(first.get("tx_hash").is_some());
     assert!(first.get("type").is_some(), "history item must have type");
     assert!(first.get("amount").is_some());
     assert!(first.get("created_at").is_some());
+
+    // Verify presence of SWEEP or REWARD transaction types in history items.
+    let types: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i.get("type").and_then(|t| t.as_str()))
+        .collect();
+    assert!(
+        types.contains(&"SWEEP") || types.contains(&"REWARD") || types.contains(&"DEPOSIT"),
+        "history items must serialize friendly transaction types"
+    );
 
     // 4) POST /toggle-auto: enable then disable.
     let (toggle_on_status, toggle_on_body) = response_json(

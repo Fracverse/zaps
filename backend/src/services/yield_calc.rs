@@ -1,5 +1,5 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::db::models::UserYieldBalance;
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 /// Stellar mainnet/testnet approximate ledger cadence (~5 seconds).
 pub const SECONDS_PER_YEAR: i64 = 31_536_000;
@@ -93,7 +93,8 @@ mod tests {
 
     #[test]
     fn zero_balance_yields_no_interest() {
-        let est = estimate_accrued_yield(0, 500, sync_at(2026, 1, 1), now_at("2026-06-01T00:00:00Z"));
+        let est =
+            estimate_accrued_yield(0, 500, sync_at(2026, 1, 1), now_at("2026-06-01T00:00:00Z"));
         assert_eq!(est.accrued_interest, 0);
         assert_eq!(est.total_earning_balance, 0);
     }
@@ -111,7 +112,12 @@ mod tests {
 
     #[test]
     fn negative_elapsed_is_clamped_to_zero() {
-        let est = estimate_accrued_yield(500_000, 500, sync_at(2026, 6, 2), now_at("2026-06-01T00:00:00Z"));
+        let est = estimate_accrued_yield(
+            500_000,
+            500,
+            sync_at(2026, 6, 2),
+            now_at("2026-06-01T00:00:00Z"),
+        );
         assert_eq!(est.accrued_interest, 0);
         // total_earning_balance should equal earning_balance when no time has elapsed
         assert_eq!(est.total_earning_balance, 500_000);
@@ -119,14 +125,24 @@ mod tests {
 
     #[test]
     fn zero_apy_yields_no_interest() {
-        let est = estimate_accrued_yield(1_000_000, 0, sync_at(2026, 1, 1), now_at("2026-12-31T00:00:00Z"));
+        let est = estimate_accrued_yield(
+            1_000_000,
+            0,
+            sync_at(2026, 1, 1),
+            now_at("2026-12-31T00:00:00Z"),
+        );
         assert_eq!(est.accrued_interest, 0);
         assert_eq!(est.total_earning_balance, 1_000_000);
     }
 
     #[test]
     fn negative_earning_balance_yields_zero() {
-        let est = estimate_accrued_yield(-100, 500, sync_at(2026, 1, 1), now_at("2026-06-01T00:00:00Z"));
+        let est = estimate_accrued_yield(
+            -100,
+            500,
+            sync_at(2026, 1, 1),
+            now_at("2026-06-01T00:00:00Z"),
+        );
         assert_eq!(est.accrued_interest, 0);
         assert_eq!(est.total_earning_balance, 0);
     }
@@ -156,7 +172,10 @@ mod tests {
         let now = now_at("2027-01-01T00:00:00Z");
         let est = estimate_accrued_yield(balance, 10_000, sync_at(2026, 1, 1), now);
 
-        assert!(est.accrued_interest >= 0, "saturating_mul must not produce a negative result");
+        assert!(
+            est.accrued_interest >= 0,
+            "saturating_mul must not produce a negative result"
+        );
         assert!(
             est.total_earning_balance >= balance,
             "total must be at least the principal"
@@ -166,7 +185,12 @@ mod tests {
     #[test]
     fn very_large_balance_saturates_instead_of_wrapping() {
         // i64::MAX earning balance — saturating_mul must not panic or wrap
-        let est = estimate_accrued_yield(i64::MAX, 10_000, sync_at(2026, 1, 1), now_at("2027-01-01T00:00:00Z"));
+        let est = estimate_accrued_yield(
+            i64::MAX,
+            10_000,
+            sync_at(2026, 1, 1),
+            now_at("2027-01-01T00:00:00Z"),
+        );
         // Result is implementation-defined on saturation, but must not panic and
         // total_earning_balance must be >= earning_balance (no wrap-around underflow).
         assert!(est.total_earning_balance >= 0);
@@ -176,7 +200,12 @@ mod tests {
     fn interest_at_one_second_elapsed_is_minimal() {
         let balance = 1_000_000_i64;
         // Only 1 second has elapsed — interest should be at most 1 micro-unit
-        let est = estimate_accrued_yield(balance, 500, sync_at(2026, 1, 1), now_at("2026-01-01T00:00:01Z"));
+        let est = estimate_accrued_yield(
+            balance,
+            500,
+            sync_at(2026, 1, 1),
+            now_at("2026-01-01T00:00:01Z"),
+        );
         assert!(est.accrued_interest <= 1);
         assert!(est.accrued_interest >= 0);
     }

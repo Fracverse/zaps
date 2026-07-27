@@ -14,10 +14,17 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
+        .route("/privy", post(auth::privy_auth))
         .with_state(pool)
 }
 
+/// User routes without a Redis cache; username resolution falls through to Postgres.
 pub fn user_routes(pool: sqlx::PgPool) -> Router {
+    user_routes_with_state(user::UserState::new(pool, None))
+}
+
+/// #544: User routes wired to the Redis username->address cache.
+pub fn user_routes_with_state(state: user::UserState) -> Router {
     Router::new()
         .route(
             "/profile",
@@ -28,7 +35,8 @@ pub fn user_routes(pool: sqlx::PgPool) -> Router {
         .route("/friends/request", post(user::send_friend_request))
         .route("/friends/:id/accept", post(user::accept_friend_request))
         .route("/friends/:id/reject", post(user::reject_friend_request))
-        .with_state(pool)
+        .route("/resolve/:username", get(user::resolve_address))
+        .with_state(state)
 }
 
 pub fn feed_routes(pool: sqlx::PgPool) -> Router {
@@ -36,6 +44,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .route("/public", get(feed::get_public_feed))
         .route("/friends", get(feed::get_friends_feed))
         .route("/private", get(feed::get_private_feed))
+        .with_state(pool)
+}
+
+/// #543
+pub fn payout_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/username", post(feed::payout_by_username))
         .with_state(pool)
 }
 
@@ -56,12 +71,19 @@ pub fn bridge_routes(state: bridge::BridgeState) -> Router {
         .with_state(state)
 }
 
+/// Yield routes without a Redis cache; reads fall through to Postgres.
 pub fn yield_routes(pool: sqlx::PgPool) -> Router {
+    yield_routes_with_state(r#yield::YieldState::new(pool, None))
+}
+
+/// BE-061: Yield routes wired to the Redis cache the indexer evicts from.
+pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
     Router::new()
         .route("/balance", get(r#yield::get_balance))
+        .route("/metrics", get(r#yield::get_metrics))
         .route("/history", get(r#yield::get_history))
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))
         .route("/toggle-auto", post(r#yield::toggle_auto_earn))
-        .with_state(pool)
+        .with_state(state)
 }

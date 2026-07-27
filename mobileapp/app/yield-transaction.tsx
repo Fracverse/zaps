@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  TextInput,
   Modal,
   KeyboardAvoidingView,
   Platform,
@@ -20,19 +19,23 @@ import { COLORS } from "../src/constants/colors";
 type TransactionType = "deposit" | "withdraw";
 
 const NAIRA_KEYPAD_KEYS = [
-  "1", "2", "3",
-  "4", "5", "6",
-  "7", "8", "9",
-  ".", "0", "⌫",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  ".",
+  "0",
+  "⌫",
 ];
 
 // ── Naira Keypad ─────────────────────────────────────────────────────────────
 
-function NairaKeypad({
-  onPress,
-}: {
-  onPress: (key: string) => void;
-}) {
+function NairaKeypad({ onPress }: { onPress: (key: string) => void }) {
   return (
     <View style={styles.keypad}>
       {NAIRA_KEYPAD_KEYS.map((key) => (
@@ -100,10 +103,15 @@ export default function YieldTransactionScreen() {
             <Ionicons name="checkmark" size={56} color={COLORS.primary} />
           </View>
           <Text style={styles.successTitle}>
-            {mode === "deposit" ? "Deposit Successful!" : "Withdrawal Successful!"}
+            {mode === "deposit"
+              ? "Deposit Successful!"
+              : "Withdrawal Successful!"}
           </Text>
           <Text style={styles.successSubtitle}>
-            ₦{parseFloat(amount).toLocaleString("en-NG", { minimumFractionDigits: 2 })}{" "}
+            ₦
+            {parseFloat(amount).toLocaleString("en-NG", {
+              minimumFractionDigits: 2,
+            })}{" "}
             {mode === "deposit"
               ? "has been moved to your earning balance."
               : "has been returned to your available balance."}
@@ -125,7 +133,10 @@ export default function YieldTransactionScreen() {
 
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backButton}
+        >
           <Ionicons name="arrow-back" size={24} color={COLORS.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Yield Transaction</Text>
@@ -144,29 +155,51 @@ export default function YieldTransactionScreen() {
           {/* Mode toggle */}
           <View style={styles.toggleRow}>
             <TouchableOpacity
-              style={[styles.toggleBtn, mode === "deposit" && styles.toggleBtnActive]}
-              onPress={() => { setMode("deposit"); setAmount(""); }}
+              style={[
+                styles.toggleBtn,
+                mode === "deposit" && styles.toggleBtnActive,
+              ]}
+              onPress={() => {
+                setMode("deposit");
+                setAmount("");
+              }}
             >
               <Ionicons
                 name="arrow-down-circle-outline"
                 size={18}
                 color={mode === "deposit" ? COLORS.secondary : COLORS.primary}
               />
-              <Text style={[styles.toggleBtnText, mode === "deposit" && styles.toggleBtnTextActive]}>
+              <Text
+                style={[
+                  styles.toggleBtnText,
+                  mode === "deposit" && styles.toggleBtnTextActive,
+                ]}
+              >
                 Deposit
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.toggleBtn, mode === "withdraw" && styles.toggleBtnActive]}
-              onPress={() => { setMode("withdraw"); setAmount(""); }}
+              style={[
+                styles.toggleBtn,
+                mode === "withdraw" && styles.toggleBtnActive,
+              ]}
+              onPress={() => {
+                setMode("withdraw");
+                setAmount("");
+              }}
             >
               <Ionicons
                 name="arrow-up-circle-outline"
                 size={18}
                 color={mode === "withdraw" ? COLORS.secondary : COLORS.primary}
               />
-              <Text style={[styles.toggleBtnText, mode === "withdraw" && styles.toggleBtnTextActive]}>
+              <Text
+                style={[
+                  styles.toggleBtnText,
+                  mode === "withdraw" && styles.toggleBtnTextActive,
+                ]}
+              >
                 Withdraw
               </Text>
             </TouchableOpacity>
@@ -188,9 +221,16 @@ export default function YieldTransactionScreen() {
           </Text>
 
           {/* Amount display */}
-          <View style={[styles.amountDisplay, exceedsLimit && styles.amountDisplayError]}>
+          <View
+            style={[
+              styles.amountDisplay,
+              exceedsLimit && styles.amountDisplayError,
+            ]}
+          >
             <Text style={styles.amountCurrency}>₦</Text>
-            <Text style={[styles.amountValue, !amount && styles.amountPlaceholder]}>
+            <Text
+              style={[styles.amountValue, !amount && styles.amountPlaceholder]}
+            >
               {amount || "0.00"}
             </Text>
           </View>
@@ -222,7 +262,10 @@ export default function YieldTransactionScreen() {
 
           {/* Confirm button */}
           <TouchableOpacity
-            style={[styles.confirmButton, !isValid && styles.confirmButtonDisabled]}
+            style={[
+              styles.confirmButton,
+              !isValid && styles.confirmButtonDisabled,
+            ]}
             onPress={() => isValid && setShowConfirm(true)}
             disabled={!isValid}
           >
@@ -237,14 +280,17 @@ export default function YieldTransactionScreen() {
       <Modal visible={showConfirm} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Confirm{" "}
-              {mode === "deposit" ? "Deposit" : "Withdrawal"}
+            <Text style={styles.modalTitle}>
+              Confirm {mode === "deposit" ? "Deposit" : "Withdrawal"}
             </Text>
 
             <View style={styles.modalRow}>
               <Text style={styles.modalLabel}>Amount</Text>
               <Text style={styles.modalValue}>
-                ₦{parseFloat(amount).toLocaleString("en-NG", { minimumFractionDigits: 2 })}
+                ₦
+                {parseFloat(amount).toLocaleString("en-NG", {
+                  minimumFractionDigits: 2,
+                })}
               </Text>
             </View>
             <View style={styles.modalRow}>

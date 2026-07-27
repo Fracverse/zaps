@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
@@ -124,14 +130,12 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [availableBalance] = useState("₦32,450.00");
-  const [currentApy] = useState("8.75%");
-  const [totalYieldEarned] = useState("₦3,280.45");
-  const [balance] = useState("₦32,450.00");
+  const [availableBalance, setAvailableBalance] = useState("₦0.00");
+  const [totalYieldEarned, setTotalYieldEarned] = useState("₦0.00");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
-  const [yieldStatus, setYieldStatus] = useState<"loading" | "success" | "error">(
-    "loading"
-  );
+  const [yieldStatus, setYieldStatus] = useState<
+    "loading" | "success" | "error"
+  >("loading");
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [chartWidth, setChartWidth] = useState(0);
@@ -172,9 +176,31 @@ export default function HomeScreen() {
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
     setAutoYieldEnabled(data.autoEarnEnabled);
+    
+    const formatCurr = (val: number) =>
+      `₦${val.toLocaleString("en-NG", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+
+    // Parse numbers formatting correctly
+    const parseAPIValue = (val: string | number) => {
+      if (typeof val === "number") return formatCurr(val);
+      const strVal = String(val);
+      if (strVal.includes("₦")) return strVal;
+      const parsed = Number(strVal);
+      return isNaN(parsed) ? strVal : formatCurr(parsed);
+    };
+
+    const formattedYield = parseAPIValue(data.totalYieldEarned);
+    const formattedAvailable = parseAPIValue(data.availableBalance);
+    
+    setAvailableBalance(formattedAvailable);
+    setTotalYieldEarned(formattedYield);
+    
     return {
-      apy: data.apy,
-      totalYieldEarned: data.totalYieldEarned,
+      apy: typeof data.apy === "number" ? `${data.apy}%` : String(data.apy).includes("%") ? String(data.apy) : `${data.apy}%`,
+      totalYieldEarned: formattedYield,
       explanation: data.explanation,
     };
   };
@@ -502,11 +528,15 @@ export default function HomeScreen() {
     })}`;
 
   const monthlyEarnings = useMemo(() => {
-    const baseTotal = MONTHLY_EARNINGS.reduce((sum, item) => sum + item.amount, 0);
+    const baseTotal = MONTHLY_EARNINGS.reduce(
+      (sum, item) => sum + item.amount,
+      0
+    );
     const targetTotal = parseCurrencyAmount(
       yieldData?.totalYieldEarned ?? "₦3,280.45"
     );
-    const scale = targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
+    const scale =
+      targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
     return MONTHLY_EARNINGS.map((item) => ({
       ...item,
       amount: Number((item.amount * scale).toFixed(2)),
@@ -560,7 +590,15 @@ export default function HomeScreen() {
     const areaPath = `${linePath} L ${last.x} ${areaBaseY} L ${first.x} ${areaBaseY} Z`;
 
     return { points, linePath, areaPath };
-  }, [chartHeight, chartPadding.bottom, chartPadding.left, chartPadding.right, chartPadding.top, chartWidth, monthlyEarnings]);
+  }, [
+    chartHeight,
+    chartPadding.bottom,
+    chartPadding.left,
+    chartPadding.right,
+    chartPadding.top,
+    chartWidth,
+    monthlyEarnings,
+  ]);
 
   const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
     <View style={[styles.skeletonBase, style]}>
@@ -618,13 +656,19 @@ export default function HomeScreen() {
       >
         {/* Balance Card */}
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Available Balance</Text>
-          <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          {/* Available Balance Section */}
+          <View style={styles.balanceSection}>
+            <Text style={styles.balanceLabel}>Available Balance</Text>
+            <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          </View>
 
-          <View style={styles.earningRow}>
-            <View style={styles.earningDot} />
-            <Text style={styles.earningRowLabel}>Earning Balance</Text>
-            <Text style={styles.earningRowValue}>{totalYieldEarned}</Text>
+          {/* Earning Balance Section */}
+          <View style={styles.earningBalanceSection}>
+            <View style={styles.earningBalanceHeader}>
+              <View style={styles.earningDot} />
+              <Text style={styles.earningRowLabel}>Earning Balance</Text>
+            </View>
+            <Text style={styles.earningBalanceAmount}>{totalYieldEarned}</Text>
           </View>
 
           <TouchableOpacity
@@ -695,54 +739,58 @@ export default function HomeScreen() {
             activeOpacity={0.9}
             onPress={openEarningsModal}
           >
-          <View>
-            <Text style={styles.earningLabel}>Earning Balance</Text>
-            <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
-            <View style={styles.earningStatusRow}>
-              <Animated.View
-                style={[
-                  styles.earningStatusDot,
-                  { transform: [{ scale: earningPulseAnim }] },
-                ]}
-              />
-              <Text style={styles.earningStatusText}>
-                {autoYieldEnabled
-                  ? "Your money is working"
-                  : "Auto-earn is off"}
-              </Text>
-            </View>
-          </View>
-          {yieldStatus === "loading" ? (
-            <View style={styles.earningContent}>
-              <SkeletonBlock style={styles.earningLabelSkeleton} />
-              <SkeletonBlock style={styles.earningAmountSkeleton} />
-              <SkeletonBlock style={styles.earningHintSkeleton} />
-            </View>
-          ) : yieldStatus === "error" ? (
-            <View style={styles.earningContent}>
+            <View>
               <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningErrorText}>Unable to load yield</Text>
-              <TouchableOpacity
-                style={styles.retryChip}
-                onPress={handleYieldRetry}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="refresh" size={12} color={COLORS.primary} />
-                <Text style={styles.retryChipText}>Retry</Text>
-              </TouchableOpacity>
+              <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
+              <View style={styles.earningStatusRow}>
+                <Animated.View
+                  style={[
+                    styles.earningStatusDot,
+                    { transform: [{ scale: earningPulseAnim }] },
+                  ]}
+                />
+                <Text style={styles.earningStatusText}>
+                  {autoYieldEnabled
+                    ? "Your money is working"
+                    : "Auto-earn is off"}
+                </Text>
+              </View>
             </View>
-          ) : (
-            <View style={styles.earningContent}>
-              <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>
-                {yieldData?.totalYieldEarned ?? "₦0.00"}
-              </Text>
-              <Text style={styles.earningHint}>Tap to view yield breakdown</Text>
+            {yieldStatus === "loading" ? (
+              <View style={styles.earningContent}>
+                <SkeletonBlock style={styles.earningLabelSkeleton} />
+                <SkeletonBlock style={styles.earningAmountSkeleton} />
+                <SkeletonBlock style={styles.earningHintSkeleton} />
+              </View>
+            ) : yieldStatus === "error" ? (
+              <View style={styles.earningContent}>
+                <Text style={styles.earningLabel}>Earning Balance</Text>
+                <Text style={styles.earningErrorText}>
+                  Unable to load yield
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryChip}
+                  onPress={handleYieldRetry}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="refresh" size={12} color={COLORS.primary} />
+                  <Text style={styles.retryChipText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.earningContent}>
+                <Text style={styles.earningLabel}>Earning Balance</Text>
+                <Text style={styles.earningAmount}>
+                  {yieldData?.totalYieldEarned ?? "₦0.00"}
+                </Text>
+                <Text style={styles.earningHint}>
+                  Tap to view yield breakdown
+                </Text>
+              </View>
+            )}
+            <View style={styles.earningIconWrap}>
+              <Ionicons name="trending-up" size={20} color="#A7F3C0" />
             </View>
-          )}
-          <View style={styles.earningIconWrap}>
-            <Ionicons name="trending-up" size={20} color="#A7F3C0" />
-          </View>
           </TouchableOpacity>
         </View>
 
@@ -971,7 +1019,9 @@ export default function HomeScreen() {
               </>
             ) : yieldStatus === "error" ? (
               <View style={styles.yieldErrorCard}>
-                <Text style={styles.yieldErrorTitle}>Could not load details</Text>
+                <Text style={styles.yieldErrorTitle}>
+                  Could not load details
+                </Text>
                 <Text style={styles.yieldErrorCopy}>
                   {yieldError}. Check your connection and try again.
                 </Text>
@@ -1013,7 +1063,9 @@ export default function HomeScreen() {
                   }
                 >
                   <View style={styles.earningsChartHeader}>
-                    <Text style={styles.earningsChartTitle}>Monthly earnings</Text>
+                    <Text style={styles.earningsChartTitle}>
+                      Monthly earnings
+                    </Text>
                     <Text style={styles.earningsChartMeta}>
                       {monthlyEarnings[selectedMonthIndex]?.month}:{" "}
                       {formatCurrency(
@@ -1109,7 +1161,9 @@ export default function HomeScreen() {
 
                 <View style={styles.autoYieldRow}>
                   <View style={styles.autoYieldTextWrap}>
-                    <Text style={styles.autoYieldTitle}>Auto-yield deposits</Text>
+                    <Text style={styles.autoYieldTitle}>
+                      Auto-yield deposits
+                    </Text>
                     <Text style={styles.autoYieldSubtitle}>
                       Automatically put idle balance to work
                     </Text>
@@ -1232,6 +1286,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 2,
   },
+  balanceSection: {
+    marginBottom: 16,
+  },
   balanceLabel: {
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
@@ -1242,17 +1299,19 @@ const styles = StyleSheet.create({
     fontSize: 34,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
-    marginBottom: 14,
   },
-  earningRow: {
+  earningBalanceSection: {
+    backgroundColor: "#F2F9F0",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E8F5E9",
+  },
+  earningBalanceHeader: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    backgroundColor: "#F2F9F0",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginBottom: 20,
+    marginBottom: 8,
   },
   earningDot: {
     width: 8,
@@ -1265,10 +1324,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
     color: "#456047",
-    marginRight: 8,
   },
-  earningRowValue: {
-    fontSize: 13,
+  earningBalanceAmount: {
+    fontSize: 28,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
