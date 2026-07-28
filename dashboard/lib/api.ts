@@ -1,6 +1,9 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 const SERVER_BASE =
   process.env.NEXT_PUBLIC_SERVER_URL ?? "http://localhost:3000";
+/** Stellar Disbursement Platform admin API base URL */
+const SDP_BASE =
+  process.env.NEXT_PUBLIC_SDP_URL ?? "http://localhost:8000";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const token =
@@ -127,6 +130,63 @@ export const api = {
 
   userPayments: (username: string) =>
     req<SocialFeedItem[]>(`/api/users/${encodeURIComponent(username)}/payments`),
+
+  // ── Identity linking (Privy DID ↔ Stellar address) ────────────────────────
+  /** Fetch the full identity link table from the backend admin API. */
+  identityLinks: (params?: { query?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.query) qs.set("q", params.query);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return req<{ links: IdentityLink[]; total: number }>(
+      `/admin/identity/links${suffix}`
+    );
+  },
+
+  /** Fetch a single identity link by user ID. */
+  getIdentityLink: (userId: string) =>
+    req<IdentityLink>(`/admin/identity/links/${encodeURIComponent(userId)}`),
+
+  // ── SDP (Stellar Disbursement Platform) ───────────────────────────────────
+  sdp: {
+    /**
+     * Upload a CSV file to create a new SDP disbursement batch.
+     * The Authorization header carries the admin Bearer token;
+     * SDP-Admin-Token provides the platform-level credential.
+     */
+    uploadDisbursementCSV: (file: File, disbursementName: string) => {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("disbursement_name", disbursementName);
+      return sdpReq<SdpDisbursement>("/api/disbursements", {
+        method: "POST",
+        body: form,
+        // Content-Type is intentionally omitted so the browser sets the
+        // multipart boundary automatically.
+        headers: {},
+      });
+    },
+
+    /** List all disbursements with optional pagination. */
+    listDisbursements: (limit = 20, offset = 0) =>
+      sdpReq<{ disbursements: SdpDisbursement[]; total: number }>(
+        `/api/disbursements?limit=${limit}&offset=${offset}`
+      ),
+
+    /** Fetch a single disbursement by ID. */
+    getDisbursement: (id: string) =>
+      sdpReq<SdpDisbursement>(`/api/disbursements/${id}`),
+
+    /**
+     * Retrieve execution logs for a disbursement.
+     * Logs include status transitions, errors, and blockchain confirmations.
+     */
+    getDisbursementLogs: (id: string) =>
+      sdpReq<{ logs: SdpExecutionLog[] }>(
+        `/api/disbursements/${id}/logs`
+      ),
+  },
 };
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
@@ -137,6 +197,39 @@ async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+/**
+ * Fetch helper for the Stellar Disbursement Platform admin API.
+ *
+ * Request headers follow the SDP convention:
+ *   Authorization: Bearer <admin-jwt>          (from localStorage "token")
+ *   SDP-Admin-Token: <sdp-static-admin-token>  (from env NEXT_PUBLIC_SDP_ADMIN_TOKEN)
+ *
+ * For multipart requests (CSV upload) the caller should pass an empty or
+ * partial `headers` object so that Content-Type is NOT set — the browser
+ * fills in the correct `multipart/form-data; boundary=…` value automatically.
+ */
+async function sdpReq<T>(path: string, init?: RequestInit): Promise<T> {
+  const token =
+    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const sdpAdminToken =
+    process.env.NEXT_PUBLIC_SDP_ADMIN_TOKEN ?? "";
+
+  const isMultipart = init?.body instanceof FormData;
+
+  const res = await fetch(`${SDP_BASE}${path}`, {
+    ...init,
+    headers: {
+      // Only set Content-Type for JSON requests; let browser handle multipart.
+      ...(isMultipart ? {} : { "Content-Type": "application/json" }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(sdpAdminToken ? { "SDP-Admin-Token": sdpAdminToken } : {}),
       ...init?.headers,
     },
   });
@@ -326,4 +419,69 @@ export interface RegistryStats {
   total_usernames: number;
   weekly_growth: number;
   active_registrations: number;
+}
+
+// ── Identity linking ────────────────────────────────────────────────────────
+
+/**
+ * Maps a Privy DID (did:privy:…) to a Stellar public address.
+ * Returned by the backend admin identity API.
+ */
+export interface IdentityLink {
+  /** Internal user ID (UUID). */
+  user_id: string;
+  /** Privy decentralised identifier string, e.g. did:privy:clxxxxxxxxxxx */
+  privy_did: string;
+  /** Stellar public key (G-address, 56 chars). */
+  stellar_address: string;
+  /** Display name or username, if available. */
+  display_name?: string;
+  /** Email associated with the Privy account, if available. */
+  email?: string;
+  /** ISO-8601 timestamp of when the link was created. */
+  linked_at: string;
+  /** Verification status of the identity link. */
+  status: "active" | "pending" | "revoked";
+}
+
+// ── Stellar Disbursement Platform (SDP) ────────────────────────────────────
+
+/** A disbursement batch managed by the Stellar Disbursement Platform. */
+export interface SdpDisbursement {
+  id: string;
+  name: string;
+  status:
+    | "DRAFT"
+    | "READY"
+    | "STARTED"
+    | "PAUSED"
+    | "COMPLETED"
+    | "FAILED";
+  asset_code: string;
+  asset_issuer?: string;
+  total_payments: number;
+  successful_payments: number;
+  failed_payments: number;
+  cancelled_payments: number;
+  remaining_payments: number;
+  total_amount: string;
+  disbursed_amount: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  completed_at?: string;
+  wallet?: { name: string; homepage: string };
+}
+
+/**
+ * A single execution log entry for an SDP disbursement.
+ * Logs capture status transitions, RPC confirmations, and any errors.
+ */
+export interface SdpExecutionLog {
+  id: string;
+  disbursement_id: string;
+  level: "info" | "warning" | "error";
+  message: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
 }
