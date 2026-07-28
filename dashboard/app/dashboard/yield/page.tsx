@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo, useCallback } from "react";
 import { format } from "date-fns";
+import { X } from "lucide-react";
 
 interface VaultParams {
   apy: string;
@@ -61,6 +62,11 @@ export default function YieldPage() {
   const [signing, setSigning] = useState(false);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
+  // Emergency pause confirmation drawer state
+  const [showPauseDrawer, setShowPauseDrawer] = useState(false);
+  const [pauseAction, setPauseAction] = useState<"pause" | "resume" | null>(null);
+  const [pauseConfirmed, setPauseConfirmed] = useState(false);
+
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortAsc, setSortAsc] = useState(false);
@@ -91,6 +97,44 @@ export default function YieldPage() {
       setSigning(false);
     }
   }, [params, confirmed]);
+
+  const handlePauseClick = (action: "pause" | "resume") => {
+    setPauseAction(action);
+    setPauseConfirmed(false);
+    setShowPauseDrawer(true);
+  };
+
+  const handlePauseConfirm = async () => {
+    if (!pauseConfirmed) {
+      setPauseConfirmed(true);
+      return;
+    }
+    setSigning(true);
+    setMsg(null);
+    try {
+      const { isConnected, getAddress, signTransaction } = await import("@stellar/freighter-api");
+      const connected = await isConnected();
+      if (!connected.isConnected) throw new Error("Freighter wallet not connected");
+
+      const addr = await getAddress();
+      if (!addr.address) throw new Error("Could not retrieve public key");
+
+      const newPaused = pauseAction === "pause";
+      const placeholderXdr = btoa(JSON.stringify({ fn: "set_vault_params", ...params, paused: newPaused, admin: addr.address }));
+
+      const result = await signTransaction(placeholderXdr, { networkPassphrase: "Test SDF Network ; September 2015" });
+      if ("error" in result) throw new Error(result.error);
+
+      setParams((p) => ({ ...p, paused: newPaused }));
+      setMsg({ type: "ok", text: `Vault ${newPaused ? "paused" : "resumed"} successfully. Signed XDR: ${(result as { signedTxXdr: string }).signedTxXdr.slice(0, 24)}…` });
+      setShowPauseDrawer(false);
+      setPauseConfirmed(false);
+    } catch (err) {
+      setMsg({ type: "err", text: err instanceof Error ? err.message : "Failed to sign" });
+    } finally {
+      setSigning(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -163,14 +207,25 @@ export default function YieldPage() {
               </div>
 
               <div className="flex items-center gap-3">
-                <label className="text-xs font-semibold text-slate-600">Pause Vault</label>
-                <button
-                  type="button"
-                  onClick={() => setParams((p) => ({ ...p, paused: !p.paused }))}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${params.paused ? "bg-red-500" : "bg-slate-300"}`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${params.paused ? "translate-x-4" : "translate-x-1"}`} />
-                </button>
+                <label className="text-xs font-semibold text-slate-600">Emergency Controls</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handlePauseClick("pause")}
+                    disabled={params.paused}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Pause Vault
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePauseClick("resume")}
+                    disabled={!params.paused}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Resume Vault
+                  </button>
+                </div>
                 <span className={`text-xs ${params.paused ? "text-red-600 font-medium" : "text-slate-400"}`}>
                   {params.paused ? "Paused" : "Active"}
                 </span>
@@ -254,6 +309,82 @@ export default function YieldPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Emergency Pause Confirmation Drawer */}
+      {showPauseDrawer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="bg-red-600 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">
+                {pauseAction === "pause" ? "⚠ Emergency Pause" : "Resume Operations"}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowPauseDrawer(false);
+                  setPauseConfirmed(false);
+                }}
+                className="text-white hover:text-red-200 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              {pauseAction === "pause" ? (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    You are about to <strong>pause all vault operations</strong>. This will:
+                  </p>
+                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
+                    <li>Block all new deposits</li>
+                    <li>Block all withdrawals</li>
+                    <li>Halt yield accrual</li>
+                    <li>Freeze vault interactions</li>
+                  </ul>
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
+                    <p className="text-xs text-red-800 font-medium">
+                      This action requires administrator privileges and will be signed via Freighter.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    You are about to <strong>resume vault operations</strong>. This will:
+                  </p>
+                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
+                    <li>Allow new deposits</li>
+                    <li>Allow withdrawals</li>
+                    <li>Resume yield accrual</li>
+                    <li>Restore vault interactions</li>
+                  </ul>
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6">
+                    <p className="text-xs text-green-800 font-medium">
+                      This action requires administrator privileges and will be signed via Freighter.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {!pauseConfirmed ? (
+                <button
+                  onClick={() => setPauseConfirmed(true)}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 transition-colors"
+                >
+                  First Confirmation
+                </button>
+              ) : (
+                <button
+                  onClick={handlePauseConfirm}
+                  disabled={signing}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                >
+                  {signing ? "Signing with Freighter…" : "Final Confirmation - Sign & Submit"}
+                </button>
+              )}
             </div>
           </div>
         </div>
