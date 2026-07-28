@@ -262,7 +262,8 @@ async fn main() {
                     pool.clone(),
                     yield_cache.clone(),
                 )),
-            ),
+            )
+            .nest("/api/payouts", api::payout_routes(pool.clone())),
         pool.clone(),
         auth_cache.clone(),
     );
