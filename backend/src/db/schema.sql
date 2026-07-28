@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
     display_name VARCHAR(100),
     bio VARCHAR(255),
     avatar_url TEXT,
+    privy_did VARCHAR(255) UNIQUE, -- Privy DID; NULL until an identity is linked
+    privy_linked_at TIMESTAMP,
     auto_earn_enabled BOOLEAN NOT NULL DEFAULT false,
     last_daily_yield_report_at TIMESTAMP,
     last_weekly_yield_report_at TIMESTAMP,
@@ -71,6 +73,11 @@ CREATE INDEX IF NOT EXISTS idx_payments_sender_id ON payments(sender_id);
 CREATE INDEX IF NOT EXISTS idx_payments_receiver_id ON payments(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_users_display_name ON users(display_name);
 CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
+-- Privy DID lookup (#560)
+CREATE INDEX IF NOT EXISTS idx_users_privy_did ON users(privy_did) WHERE privy_did IS NOT NULL;
+-- Username registry (#541): case-insensitive uniqueness + prefix search
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username));
+CREATE INDEX IF NOT EXISTS idx_users_username_lower_pattern ON users(LOWER(username) text_pattern_ops);
 CREATE INDEX IF NOT EXISTS idx_bridge_tx_status ON bridge_transactions(status);
 CREATE INDEX IF NOT EXISTS idx_bridge_tx_created_at ON bridge_transactions(created_at DESC);
 

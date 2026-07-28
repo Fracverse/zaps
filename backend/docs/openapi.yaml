@@ -153,6 +153,27 @@ components:
           type: string
           nullable: true
 
+    UserSuggestionsResponse:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The normalised (lowercased, trimmed) prefix that was matched.
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchUser'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+          format: int64
+          description: Total matches for the prefix, ignoring limit/offset.
+        has_more:
+          type: boolean
+
     FriendUser:
       type: object
       properties:
@@ -695,9 +716,31 @@ paths:
         - name: q
           in: query
           required: true
-          description: Search term matched against username and address (ILIKE)
+          description: >-
+            Prefix matched case-insensitively against username, and
+            case-sensitively against address. LIKE metacharacters are escaped
+            and matched literally.
           schema:
             type: string
+            minLength: 1
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped to 1-50.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
+        - name: offset
+          in: query
+          required: false
+          description: Rows to skip; negative values are clamped to 0.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         '200':
           description: Matching users
@@ -707,6 +750,74 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/SearchUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/suggestions:
+    get:
+      tags:
+        - Users
+      summary: Username autocomplete suggestions (paginated)
+      description: >-
+        Username-only prefix search for autocomplete. Unlike /api/users/search
+        this validates `q` as a username prefix (lowercase alphanumeric, at most
+        15 characters) and returns a paginated envelope with the total number of
+        matches alongside each profile's avatar.
+      operationId: suggestUsernames
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: >-
+            Username prefix. Lowercased before matching; rejected with 400 if it
+            is empty, longer than 15 characters, or contains anything other than
+            lowercase letters and digits.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 15
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped to 1-25.
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 25
+        - name: offset
+          in: query
+          required: false
+          description: Rows to skip; negative values are clamped to 0.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: Paginated username suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSuggestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           description: Missing or invalid JWT
           content:
