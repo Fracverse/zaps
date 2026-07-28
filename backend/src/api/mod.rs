@@ -86,6 +86,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
+pub fn registry_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/claims", get(user::get_registry_claims))
+        .route("/stats", get(user::get_registry_stats))
+        .with_state(pool)
+}
+
 /// #543
 pub fn payout_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
