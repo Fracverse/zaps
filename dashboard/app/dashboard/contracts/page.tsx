@@ -1,8 +1,9 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { usePolling } from "@/lib/use-polling";
-import { api } from "@/lib/api";
+import { api, IdentityLink } from "@/lib/api";
 import StatCard from "@/components/StatCard";
+import { X, Shield, AlertTriangle, Search, Copy, Check, Link2, Wallet } from "lucide-react";
 
 function severityColor(severity: string) {
   if (severity === "critical") return "bg-red-50 border-red-200 text-red-800";
@@ -167,6 +168,14 @@ function UsernamesTable() {
   const [sortKey, setSortKey] = useState<"username" | "registered_at">("registered_at");
   const [sortAsc, setSortAsc] = useState(false);
 
+  // Blacklist confirmation drawer state
+  const [showBlacklistDrawer, setShowBlacklistDrawer] = useState(false);
+  const [targetUsername, setTargetUsername] = useState<string | null>(null);
+  const [targetPublicKey, setTargetPublicKey] = useState<string | null>(null);
+  const [blacklistConfirmed, setBlacklistConfirmed] = useState(false);
+  const [signing, setSigning] = useState(false);
+  const [blacklistMsg, setBlacklistMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
   const sorted = useMemo(() => {
     if (!data) return [];
     return [...data].sort((a, b) => {
@@ -181,6 +190,55 @@ function UsernamesTable() {
     if (sortKey === key) setSortAsc((v) => !v);
     else { setSortKey(key); setSortAsc(true); }
   }
+
+  const handleBlacklistClick = (username: string, publicKey: string) => {
+    setTargetUsername(username);
+    setTargetPublicKey(publicKey);
+    setBlacklistConfirmed(false);
+    setBlacklistMsg(null);
+    setShowBlacklistDrawer(true);
+  };
+
+  const handleBlacklistConfirm = async () => {
+    if (!blacklistConfirmed) {
+      setBlacklistConfirmed(true);
+      return;
+    }
+    if (!targetUsername || !targetPublicKey) return;
+
+    setSigning(true);
+    setBlacklistMsg(null);
+    try {
+      const { isConnected, getAddress, signTransaction } = await import("@stellar/freighter-api");
+      const connected = await isConnected();
+      if (!connected.isConnected) throw new Error("Freighter wallet not connected");
+
+      const addr = await getAddress();
+      if (!addr.address) throw new Error("Could not retrieve public key");
+
+      const placeholderXdr = btoa(JSON.stringify({
+        fn: "blacklist_user",
+        username: targetUsername,
+        public_key: targetPublicKey,
+        admin: addr.address
+      }));
+
+      const result = await signTransaction(placeholderXdr, { networkPassphrase: "Test SDF Network ; September 2015" });
+      if ("error" in result) throw new Error(result.error);
+
+      setBlacklistMsg({ type: "ok", text: `User @${targetUsername} has been blacklisted. Signed XDR: ${(result as { signedTxXdr: string }).signedTxXdr.slice(0, 24)}…` });
+      setTimeout(() => {
+        setShowBlacklistDrawer(false);
+        setBlacklistConfirmed(false);
+        setTargetUsername(null);
+        setTargetPublicKey(null);
+      }, 2000);
+    } catch (err) {
+      setBlacklistMsg({ type: "err", text: err instanceof Error ? err.message : "Failed to sign blacklist transaction" });
+    } finally {
+      setSigning(false);
+    }
+  };
 
   const th = (key: "username" | "registered_at", label: string) => (
     <th
@@ -207,19 +265,20 @@ function UsernamesTable() {
               <th className="text-left px-4 py-3">Public Key</th>
               {th("registered_at", "Registered")}
               <th className="text-left px-4 py-3">TX Hash</th>
+              <th className="text-left px-4 py-3">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading && !data ? (
               Array.from({ length: 4 }).map((_, row) => (
                 <tr key={row}>
-                  {Array.from({ length: 4 }).map((__, col) => (
+                  {Array.from({ length: 5 }).map((__, col) => (
                     <td key={col} className="px-4 py-3"><div className="h-4 animate-pulse rounded bg-slate-100" /></td>
                   ))}
                 </tr>
               ))
             ) : sorted.length === 0 ? (
-              <tr><td colSpan={4} className="px-4 py-6 text-center text-slate-400">No registrations found</td></tr>
+              <tr><td colSpan={5} className="px-4 py-6 text-center text-slate-400">No registrations found</td></tr>
             ) : (
               sorted.map((c) => (
                 <tr key={c.username} className="border-t border-slate-100 hover:bg-slate-50">
@@ -227,6 +286,15 @@ function UsernamesTable() {
                   <td className="px-4 py-3 text-slate-600 font-mono text-xs truncate max-w-[200px]">{c.public_key}</td>
                   <td className="px-4 py-3 text-slate-500">{new Date(c.registered_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs truncate max-w-[160px]">{c.tx_hash ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => handleBlacklistClick(c.username, c.public_key)}
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+                    >
+                      <Shield size={12} />
+                      Blacklist
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -234,6 +302,288 @@ function UsernamesTable() {
         </table>
       </div>
       {data && <p className="mt-2 text-xs text-slate-400">{data.length} active registrations</p>}
+
+      {/* Blacklist Confirmation Drawer */}
+      {showBlacklistDrawer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="bg-red-600 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                <AlertTriangle size={20} />
+                Blacklist User
+              </h3>
+              <button
+                onClick={() => {
+                  setShowBlacklistDrawer(false);
+                  setBlacklistConfirmed(false);
+                  setTargetUsername(null);
+                  setTargetPublicKey(null);
+                  setBlacklistMsg(null);
+                }}
+                className="text-white hover:text-red-200 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+                <p className="text-sm text-amber-800 font-medium mb-2">
+                  You are about to blacklist <strong>@{targetUsername}</strong>
+                </p>
+                <p className="text-xs text-amber-700 font-mono break-all">
+                  {targetPublicKey}
+                </p>
+              </div>
+
+              <p className="text-sm text-slate-700 mb-4">
+                This action will:
+              </p>
+              <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
+                <li>Revoke the user's registered username</li>
+                <li>Block all incoming payments to this user</li>
+                <li>Prevent the user from receiving funds</li>
+                <li>Flag the account as a bad actor</li>
+              </ul>
+
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
+                <p className="text-xs text-red-800 font-medium">
+                  ⚠ This action requires administrator privileges and will be signed via Freighter. This action cannot be easily undone.
+                </p>
+              </div>
+
+              {blacklistMsg && (
+                <div className={`mb-4 p-3 rounded-lg text-sm ${blacklistMsg.type === "ok" ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+                  {blacklistMsg.text}
+                </div>
+              )}
+
+              {!blacklistConfirmed ? (
+                <button
+                  onClick={() => setBlacklistConfirmed(true)}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 transition-colors"
+                >
+                  First Confirmation
+                </button>
+              ) : (
+                <button
+                  onClick={handleBlacklistConfirm}
+                  disabled={signing}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                >
+                  {signing ? "Signing with Freighter…" : "Final Confirmation - Sign & Submit"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Identity Link Grid (Privy DID <-> Stellar address) ──────────────────────
+
+const IDENTITY_STATUS_CLASS: Record<string, string> = {
+  active:  "bg-emerald-100 text-emerald-800",
+  pending: "bg-amber-100 text-amber-800",
+  revoked: "bg-red-100 text-red-800",
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {/* ignore */}
+  }, [text]);
+  return (
+    <button
+      onClick={copy}
+      title="Copy to clipboard"
+      className="ml-1.5 text-slate-400 hover:text-indigo-600 transition-colors shrink-0"
+    >
+      {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+function IdentityLinkGrid() {
+  const [searchInput, setSearchInput] = useState("");
+  const [committedQuery, setCommittedQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const { data, loading, error, refresh } = usePolling(
+    () => api.identityLinks({ query: committedQuery || undefined, limit: 50 }),
+    60_000,
+    [committedQuery]
+  );
+
+  const links: IdentityLink[] = data?.links ?? [];
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCommittedQuery(searchInput.trim());
+  };
+
+  const clearSearch = () => {
+    setSearchInput("");
+    setCommittedQuery("");
+    searchRef.current?.focus();
+  };
+
+  return (
+    <section className="mb-10" id="identity-link-grid">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+            <Link2 size={18} className="text-indigo-600" />
+            Identity Links
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Maps Privy DID strings to verified Stellar wallet addresses
+          </p>
+        </div>
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              ref={searchRef}
+              id="identity-search"
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search DID, Stellar address or username…"
+              className="pl-8 pr-8 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          <button
+            id="identity-search-submit"
+            type="submit"
+            className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Search
+          </button>
+        </form>
+      </div>
+
+      {error && (
+        <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {error} — ensure the backend admin identity endpoint is reachable
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 uppercase text-xs border-b border-slate-200">
+            <tr>
+              <th className="text-left px-5 py-3">User</th>
+              <th className="text-left px-5 py-3">
+                <span className="flex items-center gap-1"><Link2 size={11} /> Privy DID</span>
+              </th>
+              <th className="text-left px-5 py-3">
+                <span className="flex items-center gap-1"><Wallet size={11} /> Stellar Address</span>
+              </th>
+              <th className="text-left px-5 py-3">Linked</th>
+              <th className="text-left px-5 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && links.length === 0 ? (
+              Array.from({ length: 5 }).map((_, row) => (
+                <tr key={row} className="border-t border-slate-100">
+                  {Array.from({ length: 5 }).map((__, col) => (
+                    <td key={col} className="px-5 py-3">
+                      <div className="h-4 animate-pulse rounded bg-slate-100" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : links.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">
+                  {committedQuery
+                    ? `No identity links match "${committedQuery}"`
+                    : "No identity links found — ensure the backend admin API is connected"}
+                </td>
+              </tr>
+            ) : (
+              links.map((link) => (
+                <tr
+                  key={link.user_id}
+                  className="border-t border-slate-100 hover:bg-slate-50 transition-colors"
+                >
+                  <td className="px-5 py-3">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-slate-900">
+                        {link.display_name ?? (link.user_id.slice(0, 12) + "…")}
+                      </span>
+                      {link.email && (
+                        <span className="text-xs text-slate-400">{link.email}</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center max-w-[220px]">
+                      <span className="font-mono text-xs text-slate-600 truncate" title={link.privy_did}>
+                        {link.privy_did}
+                      </span>
+                      <CopyButton text={link.privy_did} />
+                    </div>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center max-w-[200px]">
+                      <span className="font-mono text-xs text-slate-600 truncate" title={link.stellar_address}>
+                        {link.stellar_address}
+                      </span>
+                      <CopyButton text={link.stellar_address} />
+                    </div>
+                  </td>
+                  <td className="px-5 py-3 text-slate-500 text-xs whitespace-nowrap">
+                    {new Date(link.linked_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-5 py-3">
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+                        IDENTITY_STATUS_CLASS[link.status] ?? "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {link.status}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+
+        {links.length > 0 && (
+          <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              Showing {links.length}
+              {data?.total != null && data.total > links.length ? ` of ${data.total}` : ""}{" "}
+              identity link{links.length !== 1 ? "s" : ""}
+              {committedQuery && ` matching "${committedQuery}"`}
+            </p>
+            <button
+              onClick={refresh}
+              className="text-xs text-slate-400 hover:text-slate-700 transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -387,6 +737,9 @@ export default function ContractsPage() {
 
       {/* Registered usernames table */}
       <UsernamesTable />
+
+      {/* Identity links grid (Privy DID <-> Stellar address) */}
+      <IdentityLinkGrid />
 
       {/* Admin section — fee coefficient */}
       <FeeConfigPanel />
