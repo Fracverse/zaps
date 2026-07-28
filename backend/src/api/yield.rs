@@ -642,6 +642,8 @@ pub async fn toggle_auto_earn(
 #[derive(Deserialize)]
 pub struct DepositRequest {
     /// Amount to move from available to earning balance (in micro-units).
+    /// Must be a whole number; fractional micro-units are rejected.
+    #[serde(deserialize_with = "deserialize_whole_number")]
     pub amount: i64,
 }
 
@@ -801,6 +803,8 @@ pub async fn deposit(
 pub struct WithdrawRequest {
     /// Amount to move from earning to available balance (in micro-units).
     /// Pass the full earning balance to withdraw everything.
+    /// Must be a whole number; fractional micro-units are rejected.
+    #[serde(deserialize_with = "deserialize_whole_number")]
     pub amount: i64,
 }
 
