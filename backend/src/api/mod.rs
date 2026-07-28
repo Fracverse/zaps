@@ -8,6 +8,7 @@ pub mod auth;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
+pub mod payouts;
 pub mod social;
 pub mod user;
 pub mod r#yield;
@@ -97,6 +98,9 @@ pub fn registry_routes(pool: sqlx::PgPool) -> Router {
 pub fn payout_routes(pool: sqlx::PgPool) -> Router {
     Router::new()
         .route("/username", post(feed::payout_by_username))
+        .route("/batches", get(payouts::list_batches))
+        .route("/batch", post(payouts::create_batch))
+        .route("/batch/:id", get(payouts::get_batch_detail))
         .with_state(pool)
 }
 
