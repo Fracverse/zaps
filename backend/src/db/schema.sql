@@ -70,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_sender_id ON payments(sender_id);
 CREATE INDEX IF NOT EXISTS idx_payments_receiver_id ON payments(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_users_display_name ON users(display_name);
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bridge_tx_status ON bridge_transactions(status);
 CREATE INDEX IF NOT EXISTS idx_bridge_tx_created_at ON bridge_transactions(created_at DESC);
 

@@ -449,3 +449,109 @@ pub async fn resolve_address(
         }
     }
 }
+
+// ── Registry endpoints for administrative dashboard ─────────────────────────
+
+#[derive(Serialize)]
+pub struct RegistryClaimResponse {
+    pub username: String,
+    pub public_key: String,
+    pub registered_at: String,
+    pub tx_hash: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RegistryStatsResponse {
+    pub total_usernames: i64,
+    pub weekly_growth: i64,
+    pub active_registrations: i64,
+}
+
+/// GET /api/registry/claims - fetch all registered usernames
+pub async fn get_registry_claims(
+    State(pool): State<sqlx::PgPool>,
+    _auth: AuthUser,
+) -> impl IntoResponse {
+    let rows = match sqlx::query(
+        r#"
+        SELECT username, address as public_key, created_at as registered_at
+        FROM users
+        ORDER BY created_at DESC
+        LIMIT 1000
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Failed to fetch registry claims: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let claims: Vec<RegistryClaimResponse> = rows
+        .into_iter()
+        .map(|row| {
+            let registered_at: chrono::NaiveDateTime = row.get("registered_at");
+            let registered_at_str = registered_at.and_utc().to_rfc3339();
+            RegistryClaimResponse {
+                username: row.get("username"),
+                public_key: row.get("public_key"),
+                registered_at: registered_at_str,
+                tx_hash: None,
+            }
+        })
+        .collect();
+
+    Json(claims).into_response()
+}
+
+/// GET /api/registry/stats - get username registry metrics
+pub async fn get_registry_stats(
+    State(pool): State<sqlx::PgPool>,
+    _auth: AuthUser,
+) -> impl IntoResponse {
+    let total_usernames: i64 = match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+        .fetch_one(&pool)
+        .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!("Failed to count total usernames: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let weekly_growth: i64 = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM users WHERE created_at >= NOW() - INTERVAL '7 days'"
+    )
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!("Failed to calculate weekly growth: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    Json(RegistryStatsResponse {
+        total_usernames,
+        weekly_growth,
+        active_registrations: total_usernames,
+    })
+    .into_response()
+}
