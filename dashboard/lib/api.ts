@@ -105,6 +105,19 @@ export const api = {
 
   // Yield vault aggregate metrics
   yieldStats: () => req<YieldStats>("/admin/vault/stats"),
+
+  // Username registry
+  searchUsers: (query: string) =>
+    req<UserSearchResult[]>(`/api/users/search?q=${encodeURIComponent(query)}`),
+
+  registryClaims: () =>
+    req<RegistryClaim[]>("/api/registry/claims"),
+
+  registryStats: () =>
+    req<RegistryStats>("/api/registry/stats"),
+
+  userPayments: (username: string) =>
+    req<SocialFeedItem[]>(`/api/users/${encodeURIComponent(username)}/payments`),
 };
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
@@ -261,4 +274,23 @@ export interface YieldStats {
   total_value_locked: number;
   total_yield_distributed: number;
   apy: number;
+}
+
+export interface UserSearchResult {
+  username: string;
+  public_key: string;
+  registered_at: string;
+}
+
+export interface RegistryClaim {
+  username: string;
+  public_key: string;
+  registered_at: string;
+  tx_hash?: string;
+}
+
+export interface RegistryStats {
+  total_usernames: number;
+  weekly_growth: number;
+  active_registrations: number;
 }

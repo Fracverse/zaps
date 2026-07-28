@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
+import PaymentDetailDialog from "@/components/PaymentDetailDialog";
 
 const PAGE_SIZE = 20;
 
@@ -16,10 +17,15 @@ const visibilityStyles = {
 export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const { data, loading, error, refresh } = usePolling(
     () => api.socialFeed(),
     20000,
   );
+
+  const handleRowClick = useCallback((username: string) => {
+    setSelectedUser(username);
+  }, []);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -130,7 +136,8 @@ export default function TransactionsPage() {
                   return (
                     <tr
                       key={feed.id}
-                      className="transition-colors hover:bg-slate-50"
+                      className="transition-colors hover:bg-slate-50 cursor-pointer"
+                      onClick={() => handleRowClick(feed.sender_username)}
                     >
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">
                         {format(new Date(feed.created_at), "MMM d, yyyy HH:mm")}
@@ -195,6 +202,12 @@ export default function TransactionsPage() {
           </div>
         )}
       </div>
+      {selectedUser && (
+        <PaymentDetailDialog
+          username={selectedUser}
+          onClose={() => setSelectedUser(null)}
+        />
+      )}
     </div>
   );
 }

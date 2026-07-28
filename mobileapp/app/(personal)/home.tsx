@@ -146,6 +146,7 @@ export default function HomeScreen() {
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const [autoEarnSyncing, setAutoEarnSyncing] = useState(false);
   const [autoEarnTooltipVisible, setAutoEarnTooltipVisible] = useState(false);
+  const [autoEarnDescModalVisible, setAutoEarnDescModalVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
@@ -299,26 +300,44 @@ export default function HomeScreen() {
       Animated.sequence([
         Animated.timing(earningGlowAnim, {
           toValue: 1,
-          duration: 1400,
+          duration: 1200,
           useNativeDriver: true,
         }),
+
+        Animated.timing(earningGlowAnim, {
+          toValue: 0.4,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+
         Animated.timing(earningGlowAnim, {
           toValue: 0,
-          duration: 1400,
+          duration: 800,
           useNativeDriver: true,
         }),
       ])
     );
     const pulseLoop = Animated.loop(
       Animated.sequence([
+        // Slight delay so the status dot follows the card glow.
+
+        Animated.delay(250),
+
         Animated.timing(earningPulseAnim, {
-          toValue: 1.08,
-          duration: 900,
+          toValue: 1.03,
+          duration: 500,
           useNativeDriver: true,
         }),
+
+        Animated.timing(earningPulseAnim, {
+          toValue: 1.06,
+          duration: 450,
+          useNativeDriver: true,
+        }),
+
         Animated.timing(earningPulseAnim, {
           toValue: 1,
-          duration: 900,
+          duration: 700,
           useNativeDriver: true,
         }),
       ])
@@ -502,6 +521,17 @@ export default function HomeScreen() {
   const toggleAutoEarnTooltip = () => {
     void Haptics.selectionAsync().catch(() => undefined);
     setAutoEarnTooltipVisible((prev) => !prev);
+  };
+
+  const openAutoEarnDescModal = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+    setAutoEarnDescModalVisible(true);
+  };
+
+  const closeAutoEarnDescModal = () => {
+    setAutoEarnDescModalVisible(false);
   };
 
   const handleYieldRetry = () => {
@@ -806,9 +836,9 @@ export default function HomeScreen() {
                   Auto-Earn on Idle Funds
                 </Text>
                 <TouchableOpacity
-                  onPress={toggleAutoEarnTooltip}
+                  onPress={openAutoEarnDescModal}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="What is Auto-Earn?"
+                  accessibilityLabel="Learn about Auto-Earn"
                   accessibilityRole="button"
                 >
                   <Ionicons
@@ -819,7 +849,9 @@ export default function HomeScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.autoEarnCardSubtitle}>
-                Sweep idle balance into yield automatically
+                {autoYieldEnabled
+                  ? "Idle balance is actively earning yield"
+                  : "Enable to sweep idle balance into yield"}
               </Text>
             </View>
             <Switch
@@ -828,19 +860,14 @@ export default function HomeScreen() {
               disabled={autoEarnSyncing}
               trackColor={{ false: "#E2E8F0", true: "#34D399" }}
               thumbColor={COLORS.white}
+              accessibilityLabel="Toggle Auto-Earn on Idle Funds"
+              accessibilityRole="switch"
             />
           </View>
-          {autoEarnTooltipVisible && (
-            <View style={styles.autoEarnTooltip}>
-              <Ionicons
-                name="shield-checkmark"
-                size={14}
-                color="#16A34A"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.autoEarnTooltipText}>
-                No DeFi knowledge required.
-              </Text>
+          {autoEarnSyncing && (
+            <View style={styles.autoEarnSyncingRow}>
+              <Ionicons name="sync" size={13} color="#64748B" />
+              <Text style={styles.autoEarnSyncingText}>Saving preference…</Text>
             </View>
           )}
         </View>
@@ -1185,6 +1212,167 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
+      {/* Auto-Earn Description Modal */}
+      <Modal
+        visible={autoEarnDescModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeAutoEarnDescModal}
+        accessibilityViewIsModal={true}
+      >
+        <View style={styles.autoEarnModalOverlay}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={StyleSheet.absoluteFill}
+            onPress={closeAutoEarnDescModal}
+            accessibilityLabel="Dismiss"
+          />
+          <View style={styles.autoEarnModalCard}>
+            {/* Header */}
+            <View style={styles.autoEarnModalHeader}>
+              <View style={styles.autoEarnModalIconBadge}>
+                <Ionicons name="flash" size={22} color="#16A34A" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.autoEarnModalTitle}>
+                  Auto-Earn on Idle Funds
+                </Text>
+                <Text style={styles.autoEarnModalSubtitle}>
+                  How it works
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={closeAutoEarnDescModal}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Close"
+                accessibilityRole="button"
+              >
+                <Ionicons name="close" size={22} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Divider */}
+            <View style={styles.autoEarnModalDivider} />
+
+            {/* Yield rules / description */}
+            <View style={styles.autoEarnModalRulesList}>
+              <View style={styles.autoEarnModalRule}>
+                <View style={styles.autoEarnModalRuleIcon}>
+                  <Ionicons name="swap-horizontal" size={16} color="#1A4B4A" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoEarnModalRuleTitle}>
+                    Automatic sweeping
+                  </Text>
+                  <Text style={styles.autoEarnModalRuleDesc}>
+                    Any idle balance in your Zaps wallet is automatically swept
+                    into a yield vault at the end of each day, so your money
+                    never sits still.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.autoEarnModalRule}>
+                <View style={styles.autoEarnModalRuleIcon}>
+                  <Ionicons name="trending-up" size={16} color="#1A4B4A" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoEarnModalRuleTitle}>
+                    Competitive APY
+                  </Text>
+                  <Text style={styles.autoEarnModalRuleDesc}>
+                    Funds earn yield at the current APY displayed on your
+                    Earning Balance card. Rates are updated in real time based
+                    on on-chain liquidity.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.autoEarnModalRule}>
+                <View style={styles.autoEarnModalRuleIcon}>
+                  <Ionicons name="lock-open-outline" size={16} color="#1A4B4A" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoEarnModalRuleTitle}>
+                    Always accessible
+                  </Text>
+                  <Text style={styles.autoEarnModalRuleDesc}>
+                    Your funds are never locked. When you send a payment or
+                    withdraw, the required amount is swept back to your
+                    available balance instantly.
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.autoEarnModalRule}>
+                <View style={styles.autoEarnModalRuleIcon}>
+                  <Ionicons name="shield-checkmark" size={16} color="#1A4B4A" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.autoEarnModalRuleTitle}>
+                    No DeFi knowledge required
+                  </Text>
+                  <Text style={styles.autoEarnModalRuleDesc}>
+                    Everything is managed automatically. Simply toggle this
+                    setting on and Zaps handles the rest — no wallets, seeds, or
+                    protocols to manage manually.
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Divider */}
+            <View style={styles.autoEarnModalDivider} />
+
+            {/* Current status + CTA */}
+            <View style={styles.autoEarnModalFooter}>
+              <View style={styles.autoEarnModalStatusRow}>
+                <View
+                  style={[
+                    styles.autoEarnModalStatusDot,
+                    { backgroundColor: autoYieldEnabled ? "#34D399" : "#CBD5E1" },
+                  ]}
+                />
+                <Text style={styles.autoEarnModalStatusText}>
+                  Auto-Earn is currently{" "}
+                  <Text style={styles.autoEarnModalStatusBold}>
+                    {autoYieldEnabled ? "ON" : "OFF"}
+                  </Text>
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[
+                  styles.autoEarnModalToggleBtn,
+                  {
+                    backgroundColor: autoYieldEnabled
+                      ? "#FEE2E2"
+                      : COLORS.primary,
+                  },
+                ]}
+                onPress={() => {
+                  void handleAutoYieldToggle(!autoYieldEnabled);
+                  closeAutoEarnDescModal();
+                }}
+                disabled={autoEarnSyncing}
+                accessibilityLabel={
+                  autoYieldEnabled ? "Turn off Auto-Earn" : "Turn on Auto-Earn"
+                }
+                accessibilityRole="button"
+              >
+                <Text
+                  style={[
+                    styles.autoEarnModalToggleBtnText,
+                    { color: autoYieldEnabled ? "#DC2626" : COLORS.secondary },
+                  ]}
+                >
+                  {autoYieldEnabled ? "Turn Off Auto-Earn" : "Turn On Auto-Earn"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Comments Modal */}
       <Modal
         visible={commentsModalVisible}
@@ -1493,6 +1681,133 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Outfit_500Medium",
     color: "#166534",
+  },
+  autoEarnSyncingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#F1F5F9",
+  },
+  autoEarnSyncingText: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#64748B",
+  },
+  // Auto-Earn Description Modal
+  autoEarnModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+  },
+  autoEarnModalCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 24,
+    width: "100%",
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.15,
+    shadowRadius: 32,
+    elevation: 10,
+  },
+  autoEarnModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 14,
+  },
+  autoEarnModalIconBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#F0FDF4",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  autoEarnModalTitle: {
+    fontSize: 16,
+    fontFamily: "Outfit_700Bold",
+    color: "#111827",
+    lineHeight: 20,
+  },
+  autoEarnModalSubtitle: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  autoEarnModalDivider: {
+    height: 1,
+    backgroundColor: "#F1F5F9",
+    marginVertical: 14,
+  },
+  autoEarnModalRulesList: {
+    gap: 14,
+  },
+  autoEarnModalRule: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  autoEarnModalRuleIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#F0FDF4",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+    marginTop: 1,
+  },
+  autoEarnModalRuleTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#111827",
+    marginBottom: 3,
+  },
+  autoEarnModalRuleDesc: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#475569",
+    lineHeight: 19,
+  },
+  autoEarnModalFooter: {
+    gap: 12,
+  },
+  autoEarnModalStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  autoEarnModalStatusDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+  },
+  autoEarnModalStatusText: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: "#374151",
+  },
+  autoEarnModalStatusBold: {
+    fontFamily: "Outfit_700Bold",
+    color: "#111827",
+  },
+  autoEarnModalToggleBtn: {
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  autoEarnModalToggleBtnText: {
+    fontSize: 15,
+    fontFamily: "Outfit_700Bold",
   },
   earningContent: {
     flex: 1,

@@ -23,6 +23,8 @@ import { AccountTypeCard } from "../src/components/AccountTypeCard";
 import { TransferConfirmationCard } from "../src/components/TransferConfirmationCard";
 import type { ZapsUser } from "../src/types/user";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import {
   checkFreighter,
   connectFreighter,
@@ -35,6 +37,11 @@ import {
   StellarWalletState,
 } from "../src/services/stellarWallet";
 import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+// #580 — Biometric Verification Overlay
+import { authenticateWithBiometrics } from "./biometric";
+import BatchPayoutItemRow from "../src/components/BatchPayoutItemRow";
+import BatchPayoutSummary from "../src/components/BatchPayoutSummary";
+import type { BatchPayoutItem } from "../src/types/batchPayout";
 
 import * as Haptics from "expo-haptics";
 
@@ -55,6 +62,79 @@ const STELLAR_ASSET_ISSUERS: Record<string, string | undefined> = {
   USDC: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
   USDT: "GCQTGZQQ5G4PTM2GL7CDIFKUBIPEC52BROAQIAPW53XBRJVN6ZJVTG6V",
 };
+
+const EXPECTED_CSV_HEADERS = ["recipient_name", "recipient_address", "amount", "currency"];
+
+function parseCSV(text: string): { items: BatchPayoutItem[]; errors: string[] } {
+  const lines = text.trim().split(/\r?\n/);
+  const errors: string[] = [];
+  const items: BatchPayoutItem[] = [];
+
+  if (lines.length < 2) {
+    return { items, errors: ["CSV must contain a header row and at least one data row."] };
+  }
+
+  const headerLine = lines[0].toLowerCase().trim();
+  const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
+
+  const missingHeaders = EXPECTED_CSV_HEADERS.filter(
+    (expected) => !headers.includes(expected)
+  );
+  if (missingHeaders.length > 0) {
+    return {
+      items,
+      errors: [
+        `Missing required columns: ${missingHeaders.join(", ")}. Expected: ${EXPECTED_CSV_HEADERS.join(", ")}`,
+      ],
+    };
+  }
+
+  const nameIdx = headers.indexOf("recipient_name");
+  const addrIdx = headers.indexOf("recipient_address");
+  const amtIdx = headers.indexOf("amount");
+  const curIdx = headers.indexOf("currency");
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i].trim();
+    if (!row) continue;
+
+    const cols = row.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+    const name = cols[nameIdx] || "";
+    const address = cols[addrIdx] || "";
+    const amount = cols[amtIdx] || "";
+    const currency = cols[curIdx] || "";
+
+    const rowErrors: string[] = [];
+
+    if (!name) rowErrors.push(`Row ${i}: recipient_name is required.`);
+    if (!address) rowErrors.push(`Row ${i}: recipient_address is required.`);
+    else if (!address.startsWith("G") || address.length < 20)
+      rowErrors.push(`Row ${i}: "${address}" is not a valid Stellar address.`);
+    if (!amount) rowErrors.push(`Row ${i}: amount is required.`);
+    else if (isNaN(Number(amount)) || Number(amount) <= 0)
+      rowErrors.push(`Row ${i}: amount must be a positive number.`);
+    if (!currency) rowErrors.push(`Row ${i}: currency is required.`);
+
+    if (rowErrors.length > 0) {
+      errors.push(...rowErrors);
+    } else {
+      items.push({
+        id: `item-${i}`,
+        recipientName: name,
+        recipientAddress: address,
+        amount,
+        currency: currency.toUpperCase(),
+        status: "pending",
+      });
+    }
+  }
+
+  if (items.length === 0 && errors.length === 0) {
+    errors.push("No valid data rows found in CSV.");
+  }
+
+  return { items, errors };
+}
 
 const TOKENS = [
   {
@@ -207,7 +287,7 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
 function TransferScreen() {
   const router = useRouter();
   const [step, setStep] = useState(0);
-  const [transferType, setTransferType] = useState<"ZAPS" | "external" | null>(
+  const [transferType, setTransferType] = useState<"ZAPS" | "external" | "BATCH" | null>(
     "ZAPS"
   );
   const [recipient, setRecipient] = useState("");
@@ -231,6 +311,16 @@ function TransferScreen() {
   const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Registry check state (not registered / blacklisted warnings)
+  type UsernameStatus = "idle" | "checking" | "registered" | "not_registered" | "blacklisted";
+  const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>("idle");
+
+  // Batch upload state
+  const [batchFile, setBatchFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
+  const [batchItems, setBatchItems] = useState<BatchPayoutItem[]>([]);
+  const [batchErrors, setBatchErrors] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+
   const searchUsers = useCallback(async (query: string) => {
     if (!query || query.length < 2) {
       setSearchResults([]);
@@ -246,6 +336,9 @@ function TransferScreen() {
       const data: ZapsUser[] = await res.json();
       setSearchResults(data);
       setShowDropdown(data.length > 0);
+
+      // If the search returned no results and the query looks like a full username,
+      // a subsequent resolve call (in the debounce effect) will determine registry status.
     } catch {
       setSearchResults([]);
       setShowDropdown(false);
@@ -254,23 +347,78 @@ function TransferScreen() {
     }
   }, []);
 
-  // Debounce search while user types (ZAPS mode only)
+  /**
+   * Check the registry status of an exact username via the resolve endpoint.
+   * Sets usernameStatus to:
+   *   - "registered"     → 200 OK (user exists in the registry)
+   *   - "not_registered" → 404 (user does not exist)
+   *   - "blacklisted"    → 200 OK + is_blacklisted flag on the response
+   *   - "checking"       → while the request is in flight
+   *   - "idle"           → when no check is needed
+   */
+  const checkUsernameRegistry = useCallback(async (username: string) => {
+    if (!username || username.length < 2) {
+      setUsernameStatus("idle");
+      return;
+    }
+    setUsernameStatus("checking");
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/users/resolve/${encodeURIComponent(username)}`
+      );
+      if (res.status === 404) {
+        setUsernameStatus("not_registered");
+        return;
+      }
+      if (!res.ok) {
+        // Non-404 error — treat as unknown, keep current status
+        setUsernameStatus("idle");
+        return;
+      }
+      const body: { username: string; address: string; is_blacklisted?: boolean } =
+        await res.json();
+      if (body.is_blacklisted) {
+        setUsernameStatus("blacklisted");
+      } else {
+        setUsernameStatus("registered");
+      }
+    } catch {
+      // Network error — don't block the user from proceeding
+      setUsernameStatus("idle");
+    }
+  }, []);
+
+  // Debounce search while user types (ZAPS mode only) + registry check
   useEffect(() => {
     if (transferType !== "ZAPS") return;
     if (searchTimer.current) clearTimeout(searchTimer.current);
+
+    // Reset registry status when the user is actively typing
+    if (recipient.length >= 2) {
+      setUsernameStatus("idle");
+    }
+
     searchTimer.current = setTimeout(() => {
       searchUsers(recipient);
+      // After search settles, check the exact username against the registry
+      if (recipient.length >= 3) {
+        checkUsernameRegistry(recipient);
+      } else {
+        setUsernameStatus("idle");
+      }
     }, 350);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
-  }, [recipient, transferType, searchUsers]);
+  }, [recipient, transferType, searchUsers, checkUsernameRegistry]);
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
     setRecipient(user.username);
     setSelectedUser(user);
     setSearchResults([]);
     setShowDropdown(false);
+    // User selected from search results → definitely registered
+    setUsernameStatus("registered");
   }, []);
 
   useEffect(() => {
@@ -338,6 +486,12 @@ function TransferScreen() {
   );
 
   const handleNext = async () => {
+    if (step === 0 && transferType === "BATCH") {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(1);
+      return;
+    }
+
     if (step === 2) {
       if (!walletState?.isConnected) {
         setStep(5);
@@ -349,6 +503,26 @@ function TransferScreen() {
     }
 
     if (step === 3) {
+      // #580 — Biometric Verification Overlay
+      // Gate the payment submission behind biometric / passcode authentication.
+      // The transfer is blocked unless the user successfully authenticates.
+      const biometricResult = await authenticateWithBiometrics(
+        "Verify your identity to confirm the transfer"
+      );
+
+      if (!biometricResult.success) {
+        if (biometricResult.reason === "cancelled") {
+          // User deliberately dismissed the prompt — do nothing, stay on step 3.
+          return;
+        }
+        Alert.alert(
+          "Authentication Required",
+          "You must verify your identity before sending a payment. Please try again.",
+          [{ text: "OK" }]
+        );
+        return;
+      }
+
       setSubmitting(true);
       try {
         const assetIssuer =
@@ -404,6 +578,12 @@ function TransferScreen() {
     } else if (step === 5) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(3);
+    } else if (transferType === "BATCH" && step === 1) {
+      setTransferType("ZAPS");
+      setStep(0);
+    } else if (transferType === "BATCH" && step <= 3) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(step - 1);
     } else {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(step - 1);
@@ -433,6 +613,16 @@ function TransferScreen() {
           selected={transferType === "external"}
           onPress={() => setTransferType("external")}
         />
+        <AccountTypeCard
+          title="Distribution List"
+          description="Upload a CSV file with batch payout recipients"
+          Icon={ZapsIcon}
+          selected={transferType === "BATCH"}
+          onPress={() => {
+            setTransferType("BATCH");
+            setStep(1);
+          }}
+        />
       </View>
     </View>
   );
@@ -452,6 +642,8 @@ function TransferScreen() {
             onChangeText={(text: string) => {
               setRecipient(text);
               setSelectedUser(null);
+              // Reset registry warning when user edits the field
+              setUsernameStatus("idle");
               if (transferType !== "ZAPS") return;
               if (text.length < 2) {
                 setShowDropdown(false);
@@ -516,6 +708,8 @@ function TransferScreen() {
                     onPress={() => {
                       setRecipient(username);
                       setShowDropdown(false);
+                      // Check registry for recent-contact selection
+                      checkUsernameRegistry(username);
                     }}
                     activeOpacity={0.75}
                   >
@@ -537,6 +731,56 @@ function TransferScreen() {
               </View>
             )}
         </View>
+
+        {/* ── Registry status warning banners (ZAPS mode only) ──────── */}
+        {transferType === "ZAPS" && recipient.length >= 3 && (
+          <>
+            {usernameStatus === "checking" && (
+              <View style={styles.warningBanner} testID="warning-checking">
+                <ActivityIndicator size="small" color={COLORS.primary} />
+                <Text style={styles.warningBannerText}>
+                  Checking username…
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "not_registered" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerDanger]}
+                testID="warning-not-registered"
+              >
+                <Ionicons name="alert-circle" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  @{recipient} is not registered on Zaps.
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "blacklisted" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerBlacklisted]}
+                testID="warning-blacklisted"
+              >
+                <Ionicons name="shield-outline" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  @{recipient} has been flagged and cannot receive payments.
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "registered" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerSuccess]}
+                testID="warning-registered"
+              >
+                <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
+                <Text style={styles.warningBannerTextSuccess}>
+                  @{recipient} is a registered Zaps user.
+                </Text>
+              </View>
+            )}
+          </>
+        )}
 
         {/* Custom Amount Display */}
         <TouchableOpacity
@@ -889,21 +1133,156 @@ function TransferScreen() {
     </View>
   );
 
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "text/csv",
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled) return;
+
+      const file = result.assets?.[0];
+      if (!file) return;
+
+      setBatchFile(result);
+
+      const content = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+
+      const { items, errors } = parseCSV(content);
+      setBatchItems(items);
+      setBatchErrors(errors);
+    } catch (e) {
+      setBatchErrors([(e as Error).message]);
+    }
+  };
+
+  const handleSubmitBatch = async () => {
+    setUploading(true);
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      const token = await AsyncStorage.getItem("auth_token");
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_BASE}/api/admin/distribution-lists`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ items: batchItems }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep(4);
+    } catch (e) {
+      Alert.alert("Upload Failed", (e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const renderBatchUpload = () => (
+    <View style={styles.stepContainer}>
+      <Text style={styles.subtitle}>
+        Upload a CSV file containing the distribution list.
+      </Text>
+
+      <TouchableOpacity
+        style={styles.filePickerArea}
+        onPress={handlePickFile}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="cloud-upload-outline" size={48} color={COLORS.primary} />
+        <Text style={styles.filePickerText}>
+          {batchFile?.assets?.[0]?.name || "Tap to select CSV file"}
+        </Text>
+        <Text style={styles.filePickerHint}>
+          {batchFile?.assets?.[0]?.name
+            ? `${(batchFile.assets[0].size ?? 0 / 1024).toFixed(1)} KB`
+            : "Expected columns: recipient_name, recipient_address, amount, currency"}
+        </Text>
+      </TouchableOpacity>
+
+      {batchErrors.length > 0 && (
+        <View style={styles.batchErrorsContainer}>
+          <Text style={styles.batchErrorsTitle}>
+            {batchErrors.length} error{batchErrors.length !== 1 ? "s" : ""} found
+          </Text>
+          {batchErrors.slice(0, 10).map((err, idx) => (
+            <Text key={idx} style={styles.batchErrorText}>
+              {"\u2022"} {err}
+            </Text>
+          ))}
+          {batchErrors.length > 10 && (
+            <Text style={styles.batchErrorText}>
+              {"\u2022"} ...and {batchErrors.length - 10} more
+            </Text>
+          )}
+        </View>
+      )}
+
+      {batchItems.length > 0 && (
+        <View style={styles.batchItemsSummary}>
+          <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+          <Text style={styles.batchItemsSummaryText}>
+            {batchItems.length} valid item{batchItems.length !== 1 ? "s" : ""} parsed
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const renderBatchPreview = () => {
+    if (batchItems.length === 0) return null;
+
+    const summary = {
+      id: "batch-preview",
+      totalAmount: batchItems
+        .reduce((sum, item) => sum + Number(item.amount), 0)
+        .toFixed(2),
+      currency: batchItems[0].currency,
+      itemCount: batchItems.length,
+      completedCount: 0,
+      failedCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    return (
+      <View style={styles.stepContainer}>
+        <Text style={styles.subtitle}>
+          Review the parsed distribution list items.
+        </Text>
+        <BatchPayoutSummary summary={summary} items={batchItems} />
+      </View>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {step !== 5 && step !== 4 && (
+      {(step !== 5 && step !== 4) && (
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.black} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {step === 2
-              ? "Summary"
-              : step === 3
-                ? "Confirm Transfer"
-                : "Social Transfer"}
+            {transferType === "BATCH"
+              ? step === 1
+                ? "Upload List"
+                : step === 2
+                  ? "Preview List"
+                  : "Distribution List"
+              : step === 2
+                ? "Summary"
+                : step === 3
+                  ? "Confirm Transfer"
+                  : "Social Transfer"}
           </Text>
           <View style={{ width: 40 }} />
         </View>
@@ -927,41 +1306,90 @@ function TransferScreen() {
         showsVerticalScrollIndicator={false}
       >
         {step === 0 && renderStep0()}
-        {step === 1 && renderStep1()}
-        {step === 2 && renderStep2()}
-        {step === 3 && renderStep3()}
-        {step === 4 && renderStep4()}
-        {step === 5 && renderStep5()}
+        {transferType === "BATCH" ? (
+          <>
+            {step === 1 && renderBatchUpload()}
+            {step === 2 && renderBatchPreview()}
+            {step === 3 && renderBatchPreview()}
+            {step === 4 && renderStep4()}
+          </>
+        ) : (
+          <>
+            {step === 1 && renderStep1()}
+            {step === 2 && renderStep2()}
+            {step === 3 && renderStep3()}
+            {step === 4 && renderStep4()}
+            {step === 5 && renderStep5()}
+          </>
+        )}
       </ScrollView>
 
-      {step !== 5 && step !== 4 && (
-        <View style={styles.footer}>
-          <Button
-            title={
-              step === 1
-                ? "Review"
-                : step === 2
-                  ? "Continue"
-                  : step === 3
-                    ? submitting
-                      ? "Sending..."
-                      : "Send"
-                    : step === 4
-                      ? "Done"
+      {transferType === "BATCH" ? (
+        step !== 4 && (
+          <View style={styles.footer}>
+            <Button
+              title={
+                step === 1
+                  ? batchItems.length > 0
+                    ? "Preview List"
+                    : "Upload CSV"
+                  : step === 2
+                    ? "Submit Distribution List"
+                    : "Continue"
+              }
+              onPress={() => {
+                if (step === 0) {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setStep(1);
+                } else if (step === 1 && batchItems.length > 0) {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setStep(2);
+                } else if (step === 2) {
+                  handleSubmitBatch();
+                }
+              }}
+              loading={uploading}
+              disabled={
+                (step === 1 && batchItems.length === 0) ||
+                uploading
+              }
+              style={{ backgroundColor: "#1A4B4A" }}
+            />
+          </View>
+        )
+      ) : (
+        (step !== 5 && step !== 4) && (
+          <View style={styles.footer}>
+            <Button
+              title={
+                step === 1
+                  ? "Review"
+                  : step === 2
+                    ? "Continue"
+                    : step === 3
+                      ? submitting
+                        ? "Sending..."
+                        : "Send"
                       : "Continue"
-            }
-            onPress={handleNext}
-            loading={step !== 3 && submitting}
-            disabled={
-              (step === 0 && !transferType) ||
-              (step === 1 && (!recipient || !amount)) ||
-              (step === 3 && submitting) ||
-              submitting
-            }
-            style={{ backgroundColor: "#1A4B4A" }}
-          />
-        </View>
-      )}
+              }
+              onPress={handleNext}
+              loading={step !== 3 && submitting}
+              disabled={
+                (step === 0 && !transferType) ||
+                (step === 1 &&
+                  (!recipient ||
+                    !amount ||
+                    (transferType === "ZAPS" &&
+                      recipient.length >= 3 &&
+                      (usernameStatus === "not_registered" ||
+                        usernameStatus === "blacklisted")))) ||
+                (step === 3 && submitting) ||
+                submitting
+              }
+              style={{ backgroundColor: "#1A4B4A" }}
+            />
+          </View>
+        ))}
     </SafeAreaView>
   );
 }
