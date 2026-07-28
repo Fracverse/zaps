@@ -24,6 +24,7 @@ export default function PayoutsPage() {
     hasInvalidAddresses: boolean 
   } | null>(null);
   const [validating, setValidating] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   interface PayoutRecipient {
     id: string;
@@ -251,14 +252,29 @@ export default function PayoutsPage() {
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
     const file = e.dataTransfer.files?.[0];
     if (file) {
-      parseAndValidateCSV(file);
+      if (file.type === "text/csv" || file.name.endsWith(".csv")) {
+        parseAndValidateCSV(file);
+      } else {
+        setMsg({ type: "err", text: "Please upload a valid CSV file (.csv)" });
+      }
     }
   };
 
   const handleFileDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
   };
 
   // Auto-refresh batch statuses for active disbursements
@@ -406,8 +422,24 @@ export default function PayoutsPage() {
           <div
             onDrop={handleFileDrop}
             onDragOver={handleFileDragOver}
-            className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-indigo-500 hover:bg-slate-50 transition-colors cursor-pointer"
+            onDragLeave={handleFileDragLeave}
+            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-all duration-200 cursor-pointer ${
+              dragActive
+                ? "border-indigo-500 bg-indigo-50"
+                : "border-slate-300 hover:border-indigo-500 hover:bg-slate-50"
+            }`}
           >
+            {/* Drag overlay indicator */}
+            {dragActive && (
+              <div className="absolute inset-0 bg-indigo-500/10 rounded-lg flex items-center justify-center">
+                <div className="bg-white rounded-full p-3 shadow-lg">
+                  <svg className="h-8 w-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+              </div>
+            )}
+            
             <input
               type="file"
               accept=".csv"
@@ -415,17 +447,30 @@ export default function PayoutsPage() {
               className="hidden"
               id="csv-upload"
             />
-            <label htmlFor="csv-upload" className="cursor-pointer">
-              <div className="space-y-2">
-                <svg className="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <p className="text-sm text-slate-600">
-                  Drag & drop a CSV file here, or <span className="font-medium text-indigo-600">click to select</span>
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  CSV must have columns: recipient_name, recipient_address, amount, currency
-                </p>
+            <label htmlFor="csv-upload" className="cursor-pointer relative z-10">
+              <div className="space-y-3">
+                <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center ${
+                  dragActive ? "bg-indigo-100" : "bg-slate-100"
+                }`}>
+                  <svg 
+                    className={`h-10 w-10 transition-colors ${
+                      dragActive ? "text-indigo-600" : "text-slate-400"
+                    }`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-600">
+                    <span className="font-semibold text-indigo-600">Click to upload</span> or drag and drop
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    CSV file with columns: recipient_name, recipient_address, amount, currency
+                  </p>
+                </div>
               </div>
             </label>
           </div>
@@ -457,13 +502,32 @@ export default function PayoutsPage() {
         {/* Validation Results Grid */}
         {csvPreview && (
           <div className="space-y-4">
+            {/* Parse Error Logs */}
+            {csvPreview.errors.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-lg overflow-hidden">
+                <div className="bg-red-100 px-4 py-2 border-b border-red-200 flex items-center gap-2">
+                  <svg className="h-4 w-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span className="text-sm font-semibold text-red-800">CSV Parse Errors</span>
+                </div>
+                <div className="p-4">
+                  <ul className="space-y-2">
+                    {csvPreview.errors.map((error, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm text-red-700">
+                        <svg className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        <span>{error}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {/* Summary */}
             <div className="flex items-center gap-4 text-sm">
-              {csvPreview.errors.length > 0 && (
-                <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg flex-1">
-                  {csvPreview.errors.join(" ")}
-                </div>
-              )}
               {csvPreview.rows.length > 0 && (
                 <div className="flex-1 flex justify-between gap-4">
                   <span className="text-slate-700">
