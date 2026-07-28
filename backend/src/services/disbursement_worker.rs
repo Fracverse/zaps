@@ -41,6 +41,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::db::models::BatchRecipient;
+use crate::services::stellar::{SdpClient, SdpDisbursementRequest, SdpOutcome};
 
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 15;
 const DEFAULT_MAX_ATTEMPTS: i32 = 3;
@@ -104,36 +105,8 @@ impl DisbursementWorkerConfig {
     }
 }
 
-/// Payload posted to SDP for a single disbursement.
-#[derive(Debug, Serialize)]
-struct SdpDisbursementRequest<'a> {
-    /// Deterministic per-recipient key. SDP deduplicates on this, which is what
-    /// makes an at-least-once retry safe.
-    idempotency_key: String,
-    destination: &'a str,
-    amount: i64,
-    currency: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct SdpDisbursementResponse {
-    #[serde(default)]
-    payment_id: Option<String>,
-    #[serde(default)]
-    tx_hash: Option<String>,
-}
-
-/// Outcome of one dispatch attempt.
-enum DispatchOutcome {
-    Submitted {
-        sdp_payment_id: Option<String>,
-        tx_hash: Option<String>,
-    },
-    /// Transient — worth another attempt.
-    Retryable(String),
-    /// Permanent — retrying will not help (bad address, rejected amount).
-    Permanent(String),
-}
+/// Outcome of one dispatch attempt (alias of SdpOutcome for backward compat).
+type DispatchOutcome = SdpOutcome;
 
 /// Entry point. Runs until the process exits.
 pub async fn run(pool: PgPool, config: DisbursementWorkerConfig) {
@@ -152,7 +125,7 @@ pub async fn run(pool: PgPool, config: DisbursementWorkerConfig) {
         );
     }
 
-    let http = reqwest::Client::new();
+    let sdp_client = SdpClient::new(config.sdp_base_url.clone(), config.sdp_api_token.clone());
     let mut interval = tokio::time::interval(config.poll_interval);
 
     loop {
@@ -162,7 +135,7 @@ pub async fn run(pool: PgPool, config: DisbursementWorkerConfig) {
             tracing::error!("Failed to reclaim stale leases: {err:?}");
         }
 
-        if let Err(err) = process_cycle(&pool, &config, &http).await {
+        if let Err(err) = process_cycle(&pool, &config, &sdp_client).await {
             tracing::error!("Disbursement cycle failed: {err:?}");
         }
     }
@@ -200,7 +173,7 @@ async fn reclaim_stale_leases(pool: &PgPool, lease_timeout_secs: i64) -> Result<
 async fn process_cycle(
     pool: &PgPool,
     config: &DisbursementWorkerConfig,
-    http: &reqwest::Client,
+    sdp_client: &SdpClient,
 ) -> Result<(), sqlx::Error> {
     let Some(batch_id) = claim_next_batch(pool, &config.worker_id).await? else {
         tracing::debug!("Disbursement: no batches awaiting processing");
@@ -225,11 +198,11 @@ async fn process_cycle(
     // number.
     for recipient in recipients {
         let attempt = recipient.attempt_count + 1;
-        let outcome = dispatch_one(&recipient, config, http).await;
+        let outcome = dispatch_one(&recipient, sdp_client).await;
 
         match outcome {
-            DispatchOutcome::Submitted {
-                sdp_payment_id,
+            SdpOutcome::Submitted {
+                payment_id: sdp_payment_id,
                 tx_hash,
             } => {
                 mark_submitted(pool, &recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
@@ -237,7 +210,7 @@ async fn process_cycle(
                 log_dispatch(pool, batch_id, Some(recipient.id), attempt, "SUBMITTED", None, None)
                     .await?;
             }
-            DispatchOutcome::Retryable(err) if attempt < config.max_attempts => {
+            SdpOutcome::Retryable(err) if attempt < config.max_attempts => {
                 mark_retry(pool, &recipient, &err).await?;
                 log_dispatch(
                     pool,
@@ -250,7 +223,7 @@ async fn process_cycle(
                 )
                 .await?;
             }
-            DispatchOutcome::Retryable(err) | DispatchOutcome::Permanent(err) => {
+            SdpOutcome::Retryable(err) | SdpOutcome::Permanent(err) => {
                 // Either permanently bad, or out of retries. Fail this row only
                 // — one dead recipient must not strand the rest of the batch.
                 mark_failed(pool, &recipient, &err).await?;
@@ -340,27 +313,18 @@ async fn claim_recipients(
     .await
 }
 
-/// Submits a single recipient to SDP.
+/// Submits a single recipient to SDP using the SdpClient.
 async fn dispatch_one(
     recipient: &BatchRecipient,
-    config: &DisbursementWorkerConfig,
-    http: &reqwest::Client,
-) -> DispatchOutcome {
+    sdp_client: &SdpClient,
+) -> SdpOutcome {
     let Some(destination) = recipient.destination_address.as_deref() else {
         // The schema guarantees a user_id when there is no address, but this
         // worker sends to addresses. A row that reached here without one was
         // never resolvable, so retrying cannot help.
-        return DispatchOutcome::Permanent(
+        return SdpOutcome::Permanent(
             "recipient has no destination_address; resolve user_id to an address first".into(),
         );
-    };
-
-    let Some(token) = config.sdp_api_token.as_deref() else {
-        // Dry run: exercise the full state machine without moving money.
-        return DispatchOutcome::Submitted {
-            sdp_payment_id: Some(format!("dry-run-{}", recipient.id)),
-            tx_hash: None,
-        };
     };
 
     let request = SdpDisbursementRequest {
@@ -373,56 +337,7 @@ async fn dispatch_one(
         currency: "USDC",
     };
 
-    let response = http
-        .post(format!("{}/disbursements", config.sdp_base_url.trim_end_matches('/')))
-        .bearer_auth(token)
-        .json(&request)
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(r) => r,
-        // Network-level failure: no way to know whether SDP saw it, so retry
-        // and let the idempotency key deduplicate.
-        Err(err) => return DispatchOutcome::Retryable(format!("SDP request failed: {err}")),
-    };
-
-    let status = response.status();
-    if status.is_success() {
-        return match response.json::<SdpDisbursementResponse>().await {
-            Ok(body) => DispatchOutcome::Submitted {
-                sdp_payment_id: body.payment_id,
-                tx_hash: body.tx_hash,
-            },
-            // SDP accepted it; we just could not parse the body. Treating this
-            // as a failure would risk a double payment on retry, so record the
-            // submission and let reconciliation fill in the ids.
-            Err(err) => {
-                tracing::warn!(
-                    recipient_id = %recipient.id,
-                    error = ?err,
-                    "SDP returned success with an unparseable body"
-                );
-                DispatchOutcome::Submitted {
-                    sdp_payment_id: None,
-                    tx_hash: None,
-                }
-            }
-        };
-    }
-
-    let detail = response.text().await.unwrap_or_default();
-
-    // 4xx other than 408/429 means SDP rejected the request itself — a bad
-    // address or a malformed amount will be rejected identically forever.
-    if status.is_client_error()
-        && status != reqwest::StatusCode::REQUEST_TIMEOUT
-        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
-    {
-        return DispatchOutcome::Permanent(format!("SDP rejected request ({status}): {detail}"));
-    }
-
-    DispatchOutcome::Retryable(format!("SDP error ({status}): {detail}"))
+    sdp_client.submit_disbursement(&request).await
 }
 
 /// Deterministic idempotency key for a recipient row.

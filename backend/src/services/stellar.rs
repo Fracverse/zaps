@@ -199,3 +199,257 @@ pub struct SimulateTransactionCost {
     #[serde(rename = "memBytes")]
     pub mem_bytes: String,
 }
+
+// ─── Stellar Disbursement Platform (SDP) Client ─────────────────────────────
+
+/// Client for the Stellar Disbursement Platform REST API.
+///
+/// Wraps SDP endpoints for bulk payouts with authentication, error handling,
+/// and retry logic. Issue BE-552.
+pub struct SdpClient {
+    base_url: String,
+    api_token: Option<String>,
+    http_client: reqwest::Client,
+}
+
+impl SdpClient {
+    /// Create a new SDP client.
+    ///
+    /// If `api_token` is None, calls return dry-run results without contacting SDP.
+    pub fn new(base_url: String, api_token: Option<String>) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_token,
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap(),
+        }
+    }
+
+    /// Create an SDP client from environment variables.
+    ///
+    /// Reads `SDP_BASE_URL` (default: https://sdp.stellar.org) and
+    /// `SDP_API_TOKEN` (optional).
+    pub fn from_env() -> Self {
+        let base_url =
+            std::env::var("SDP_BASE_URL").unwrap_or_else(|_| "https://sdp.stellar.org".into());
+        let api_token = std::env::var("SDP_API_TOKEN").ok();
+        Self::new(base_url, api_token)
+    }
+
+    /// Submit a disbursement to SDP with idempotency support.
+    ///
+    /// Returns the outcome of the submission attempt. Transient errors
+    /// (network failures, 5xx) return `SdpOutcome::Retryable`. Permanent
+    /// errors (4xx) return `SdpOutcome::Permanent`. Success returns
+    /// `SdpOutcome::Submitted`.
+    pub async fn submit_disbursement(
+        &self,
+        request: &SdpDisbursementRequest<'_>,
+    ) -> SdpOutcome {
+        let Some(token) = self.api_token.as_deref() else {
+            // Dry-run mode: return synthetic success without contacting SDP
+            return SdpOutcome::Submitted {
+                payment_id: Some(format!("dry-run-{}", request.idempotency_key)),
+                tx_hash: None,
+            };
+        };
+
+        let response = self
+            .http_client
+            .post(format!("{}/disbursements", self.base_url))
+            .bearer_auth(token)
+            .json(request)
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(r) => r,
+            Err(err) => {
+                // Network-level failure: no way to know if SDP saw it, so
+                // retry and let the idempotency key deduplicate.
+                return SdpOutcome::Retryable(format!("SDP request failed: {err}"));
+            }
+        };
+
+        let status = response.status();
+        if status.is_success() {
+            return match response.json::<SdpDisbursementResponse>().await {
+                Ok(body) => SdpOutcome::Submitted {
+                    payment_id: body.payment_id,
+                    tx_hash: body.tx_hash,
+                },
+                // SDP accepted it; we just could not parse the body. Treating
+                // this as a failure would risk a double payment on retry.
+                Err(err) => {
+                    tracing::warn!(
+                        idempotency_key = %request.idempotency_key,
+                        error = ?err,
+                        "SDP returned success with unparseable body"
+                    );
+                    SdpOutcome::Submitted {
+                        payment_id: None,
+                        tx_hash: None,
+                    }
+                }
+            };
+        }
+
+        let detail = response.text().await.unwrap_or_default();
+
+        // 4xx other than 408/429 means SDP rejected the request itself — a
+        // bad address or malformed amount will be rejected identically forever.
+        if status.is_client_error()
+            && status != reqwest::StatusCode::REQUEST_TIMEOUT
+            && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            return SdpOutcome::Permanent(format!("SDP rejected request ({status}): {detail}"));
+        }
+
+        SdpOutcome::Retryable(format!("SDP error ({status}): {detail}"))
+    }
+
+    /// Get the status of a disbursement by payment ID.
+    pub async fn get_disbursement_status(
+        &self,
+        payment_id: &str,
+    ) -> Result<SdpDisbursementStatus, String> {
+        let Some(token) = self.api_token.as_deref() else {
+            return Err("SDP API token not configured".into());
+        };
+
+        let response = self
+            .http_client
+            .get(format!("{}/disbursements/{}", self.base_url, payment_id))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to query SDP: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            return Err(format!("SDP status query failed ({status}): {detail}"));
+        }
+
+        response
+            .json::<SdpDisbursementStatus>()
+            .await
+            .map_err(|e| format!("Failed to parse SDP status response: {e}"))
+    }
+
+    /// List recent disbursements with optional filters.
+    pub async fn list_disbursements(
+        &self,
+        params: &SdpListParams,
+    ) -> Result<SdpDisbursementList, String> {
+        let Some(token) = self.api_token.as_deref() else {
+            return Err("SDP API token not configured".into());
+        };
+
+        let mut url = format!("{}/disbursements", self.base_url);
+        let mut query_parts = Vec::new();
+
+        if let Some(limit) = params.limit {
+            query_parts.push(format!("limit={}", limit));
+        }
+        if let Some(offset) = params.offset {
+            query_parts.push(format!("offset={}", offset));
+        }
+        if let Some(ref status) = params.status {
+            query_parts.push(format!("status={}", status));
+        }
+
+        if !query_parts.is_empty() {
+            url.push_str("?");
+            url.push_str(&query_parts.join("&"));
+        }
+
+        let response = self
+            .http_client
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to list disbursements: {e}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let detail = response.text().await.unwrap_or_default();
+            return Err(format!("SDP list query failed ({status}): {detail}"));
+        }
+
+        response
+            .json::<SdpDisbursementList>()
+            .await
+            .map_err(|e| format!("Failed to parse SDP list response: {e}"))
+    }
+}
+
+// ─── SDP Request/Response Types ──────────────────────────────────────────────
+
+/// Request payload for submitting a disbursement to SDP.
+#[derive(Debug, Serialize)]
+pub struct SdpDisbursementRequest<'a> {
+    /// Deterministic per-recipient key. SDP deduplicates on this.
+    pub idempotency_key: String,
+    /// Destination Stellar address.
+    pub destination: &'a str,
+    /// Amount in stroops (smallest unit).
+    pub amount: i64,
+    /// Currency code (e.g., "USDC", "NGN").
+    pub currency: &'a str,
+}
+
+/// Response from SDP after submitting a disbursement.
+#[derive(Debug, Deserialize)]
+pub struct SdpDisbursementResponse {
+    #[serde(default)]
+    pub payment_id: Option<String>,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+}
+
+/// Outcome of a disbursement submission attempt.
+#[derive(Debug)]
+pub enum SdpOutcome {
+    /// Successfully submitted. May not have all IDs if response was unparseable.
+    Submitted {
+        payment_id: Option<String>,
+        tx_hash: Option<String>,
+    },
+    /// Transient error — worth retrying.
+    Retryable(String),
+    /// Permanent error — retrying won't help.
+    Permanent(String),
+}
+
+/// Status response for a disbursement.
+#[derive(Debug, Deserialize)]
+pub struct SdpDisbursementStatus {
+    pub payment_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+    #[serde(default)]
+    pub amount: Option<i64>,
+    #[serde(default)]
+    pub destination: Option<String>,
+}
+
+/// Parameters for listing disbursements.
+#[derive(Debug, Default)]
+pub struct SdpListParams {
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub status: Option<String>,
+}
+
+/// List response from SDP.
+#[derive(Debug, Deserialize)]
+pub struct SdpDisbursementList {
+    pub disbursements: Vec<SdpDisbursementStatus>,
+    #[serde(default)]
+    pub total: Option<u64>,
+}
