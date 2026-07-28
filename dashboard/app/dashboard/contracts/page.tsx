@@ -1,9 +1,9 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { usePolling } from "@/lib/use-polling";
-import { api } from "@/lib/api";
+import { api, IdentityLink } from "@/lib/api";
 import StatCard from "@/components/StatCard";
-import { X, Shield, AlertTriangle } from "lucide-react";
+import { X, Shield, AlertTriangle, Search, Copy, Check, Link2, Wallet } from "lucide-react";
 
 function severityColor(severity: string) {
   if (severity === "critical") return "bg-red-50 border-red-200 text-red-800";
@@ -381,6 +381,213 @@ function UsernamesTable() {
   );
 }
 
+// ── Identity Link Grid (Privy DID <-> Stellar address) ──────────────────────
+
+const IDENTITY_STATUS_CLASS: Record<string, string> = {
+  active:  "bg-emerald-100 text-emerald-800",
+  pending: "bg-amber-100 text-amber-800",
+  revoked: "bg-red-100 text-red-800",
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {/* ignore */}
+  }, [text]);
+  return (
+    <button
+      onClick={copy}
+      title="Copy to clipboard"
+      className="ml-1.5 text-slate-400 hover:text-indigo-600 transition-colors shrink-0"
+    >
+      {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+function IdentityLinkGrid() {
+  const [searchInput, setSearchInput] = useState("");
+  const [committedQuery, setCommittedQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  const { data, loading, error, refresh } = usePolling(
+    () => api.identityLinks({ query: committedQuery || undefined, limit: 50 }),
+    60_000,
+    [committedQuery]
+  );
+
+  const links: IdentityLink[] = data?.links ?? [];
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCommittedQuery(searchInput.trim());
+  };
+
+  const clearSearch = () => {
+    setSearchInput("");
+    setCommittedQuery("");
+    searchRef.current?.focus();
+  };
+
+  return (
+    <section className="mb-10" id="identity-link-grid">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+            <Link2 size={18} className="text-indigo-600" />
+            Identity Links
+          </h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Maps Privy DID strings to verified Stellar wallet addresses
+          </p>
+        </div>
+        <form onSubmit={handleSearch} className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              ref={searchRef}
+              id="identity-search"
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search DID, Stellar address or username…"
+              className="pl-8 pr-8 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          <button
+            id="identity-search-submit"
+            type="submit"
+            className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
+          >
+            Search
+          </button>
+        </form>
+      </div>
+
+      {error && (
+        <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {error} — ensure the backend admin identity endpoint is reachable
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 uppercase text-xs border-b border-slate-200">
+            <tr>
+              <th className="text-left px-5 py-3">User</th>
+              <th className="text-left px-5 py-3">
+                <span className="flex items-center gap-1"><Link2 size={11} /> Privy DID</span>
+              </th>
+              <th className="text-left px-5 py-3">
+                <span className="flex items-center gap-1"><Wallet size={11} /> Stellar Address</span>
+              </th>
+              <th className="text-left px-5 py-3">Linked</th>
+              <th className="text-left px-5 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && links.length === 0 ? (
+              Array.from({ length: 5 }).map((_, row) => (
+                <tr key={row} className="border-t border-slate-100">
+                  {Array.from({ length: 5 }).map((__, col) => (
+                    <td key={col} className="px-5 py-3">
+                      <div className="h-4 animate-pulse rounded bg-slate-100" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : links.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">
+                  {committedQuery
+                    ? `No identity links match "${committedQuery}"`
+                    : "No identity links found — ensure the backend admin API is connected"}
+                </td>
+              </tr>
+            ) : (
+              links.map((link) => (
+                <tr
+                  key={link.user_id}
+                  className="border-t border-slate-100 hover:bg-slate-50 transition-colors"
+                >
+                  <td className="px-5 py-3">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-slate-900">
+                        {link.display_name ?? (link.user_id.slice(0, 12) + "…")}
+                      </span>
+                      {link.email && (
+                        <span className="text-xs text-slate-400">{link.email}</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center max-w-[220px]">
+                      <span className="font-mono text-xs text-slate-600 truncate" title={link.privy_did}>
+                        {link.privy_did}
+                      </span>
+                      <CopyButton text={link.privy_did} />
+                    </div>
+                  </td>
+                  <td className="px-5 py-3">
+                    <div className="flex items-center max-w-[200px]">
+                      <span className="font-mono text-xs text-slate-600 truncate" title={link.stellar_address}>
+                        {link.stellar_address}
+                      </span>
+                      <CopyButton text={link.stellar_address} />
+                    </div>
+                  </td>
+                  <td className="px-5 py-3 text-slate-500 text-xs whitespace-nowrap">
+                    {new Date(link.linked_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-5 py-3">
+                    <span
+                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+                        IDENTITY_STATUS_CLASS[link.status] ?? "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {link.status}
+                    </span>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+
+        {links.length > 0 && (
+          <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              Showing {links.length}
+              {data?.total != null && data.total > links.length ? ` of ${data.total}` : ""}{" "}
+              identity link{links.length !== 1 ? "s" : ""}
+              {committedQuery && ` matching "${committedQuery}"`}
+            </p>
+            <button
+              onClick={refresh}
+              className="text-xs text-slate-400 hover:text-slate-700 transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ContractsPage() {
   const health = usePolling(() => api.contractHealth(), 15000);
@@ -530,6 +737,9 @@ export default function ContractsPage() {
 
       {/* Registered usernames table */}
       <UsernamesTable />
+
+      {/* Identity links grid (Privy DID <-> Stellar address) */}
+      <IdentityLinkGrid />
 
       {/* Admin section — fee coefficient */}
       <FeeConfigPanel />
