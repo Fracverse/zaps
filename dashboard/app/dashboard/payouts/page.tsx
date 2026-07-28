@@ -1,9 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api, BatchPayout, BatchRecipient } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 import { format } from "date-fns";
+
+// Stellar address validation pattern (starts with G, 56 chars, valid base32)
+const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 
 export default function PayoutsPage() {
   const [activeTab, setActiveTab] = useState<"history" | "batch">("history");
@@ -51,6 +54,18 @@ export default function PayoutsPage() {
     } catch (err) {
       console.error("Failed to request payout:", err);
     }
+  };
+
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      parseAndValidateCSV(file);
+    }
+  };
+
+  const handleFileDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
   };
 
   return (
