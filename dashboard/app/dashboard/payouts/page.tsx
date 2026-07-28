@@ -35,7 +35,16 @@ export default function PayoutsPage() {
     isInRegistry?: boolean;
     addressError?: string;
     registryError?: string;
+    status?: "pending" | "dispatched" | "failed" | "completed";
   }
+
+  // Batch tracking state for submitted payouts
+  const [batchStatuses, setBatchStatuses] = useState<{
+    [batchId: string]: {
+      status: "pending" | "dispatched" | "failed" | "completed";
+      updatedAt: string;
+    }
+  }>({});
 
   // Validate Stellar address format
   const validateStellarAddress = useCallback((address: string): { valid: boolean; error?: string } => {
@@ -250,6 +259,86 @@ export default function PayoutsPage() {
 
   const handleFileDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+  };
+
+  // Auto-refresh batch statuses for active disbursements
+  const { data: batchData, loading: batchLoading } = usePolling(
+    useCallback(async () => {
+      const activeBatchIds = Object.keys(batchStatuses).filter(
+        (id) => !["completed", "failed"].includes(batchStatuses[id]?.status ?? "")
+      );
+      if (activeBatchIds.length === 0) return null;
+
+      // Fetch status for active batches
+      const statuses: {
+        [batchId: string]: {
+          status: "pending" | "dispatched" | "failed" | "completed";
+          updatedAt: string;
+        }
+      } = {};
+
+      for (const batchId of activeBatchIds) {
+        try {
+          const payout = payouts.find((p) => p.id === batchId);
+          if (payout) {
+            statuses[batchId] = {
+              status: mapPayoutStatus(payout.status),
+              updatedAt: payout.createdAt,
+            };
+          }
+        } catch {
+          // Continue on error
+        }
+      }
+      return statuses;
+    }, [batchStatuses, payouts]),
+    10000 // Poll every 10 seconds
+  );
+
+  // Update batch statuses when new data arrives
+  useMemo(() => {
+    if (batchData) {
+      setBatchStatuses((prev) => ({ ...prev, ...batchData }));
+    }
+  }, [batchData]);
+
+  // Map API status to our tracking status
+  const mapPayoutStatus = (status: string): "pending" | "dispatched" | "failed" | "completed" => {
+    switch (status.toLowerCase()) {
+      case "pending":
+      case "processing":
+        return "pending";
+      case "dispatched":
+      case "sent":
+      case "completed":
+        return "dispatched";
+      case "failed":
+      case "error":
+        return "failed";
+      default:
+        return "pending";
+    }
+  };
+
+  // Status badge component for batch rows
+  const StatusIndicator = ({ status }: { status?: string }) => {
+    if (!status) return null;
+    
+    const statusConfig = {
+      pending: { color: "bg-yellow-100 text-yellow-800", icon: "⏳", label: "Pending" },
+      dispatched: { color: "bg-indigo-100 text-indigo-800", icon: "📤", label: "Dispatched" },
+      failed: { color: "bg-red-100 text-red-800", icon: "❌", label: "Failed" },
+      completed: { color: "bg-green-100 text-green-800", icon: "✅", label: "Completed" },
+    };
+    
+    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
+    
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
+        <span className="mr-1">{config.icon}</span>
+        {config.label}
+      </span>
+    );
   };
 
   return (
@@ -478,7 +567,7 @@ export default function PayoutsPage() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              {["ID", "Date", "Amount", "Asset", "Status", "Anchor"].map((h) => (
+              {["ID", "Date", "Amount", "Asset", "Status", "Anchor", "Progress"].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -486,23 +575,43 @@ export default function PayoutsPage() {
           <tbody className="divide-y divide-slate-100">
             {loading && payouts.length === 0 ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i}>{Array.from({ length: 6 }).map((_, j) => (
+                <tr key={i}>{Array.from({ length: 7 }).map((_, j) => (
                   <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-100 rounded animate-pulse" /></td>
                 ))}</tr>
               ))
             ) : payouts.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">No payouts yet</td></tr>
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">No payouts yet</td></tr>
             ) : (
-              payouts.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.id.slice(0, 8)}…</td>
-                  <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{format(new Date(p.createdAt), "MMM d, yyyy")}</td>
-                  <td className="px-4 py-3 font-medium">{(Number(p.amount) / 1_000_000).toFixed(2)}</td>
-                  <td className="px-4 py-3">{p.asset}</td>
-                  <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
-                  <td className="px-4 py-3 text-slate-400 text-xs">{p.anchorId}</td>
-                </tr>
-              ))
+              payouts.map((p) => {
+                const batchStatus = batchStatuses[p.id];
+                const isActive = batchStatus && !["completed", "failed"].includes(batchStatus.status);
+                
+                return (
+                  <tr 
+                    key={p.id} 
+                    className={`hover:bg-slate-50 transition-colors ${
+                      isActive ? "bg-blue-50/50" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.id.slice(0, 8)}…</td>
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{format(new Date(p.createdAt), "MMM d, yyyy HH:mm")}</td>
+                    <td className="px-4 py-3 font-medium">{(Number(p.amount) / 1_000_000).toFixed(2)}</td>
+                    <td className="px-4 py-3">{p.asset}</td>
+                    <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                    <td className="px-4 py-3 text-slate-400 text-xs">{p.anchorId}</td>
+                    <td className="px-4 py-3">
+                      {isActive ? (
+                        <div className="flex items-center gap-2">
+                          <StatusIndicator status={batchStatus.status} />
+                          <span className="text-xs text-blue-600 animate-pulse">Auto-refreshing...</span>
+                        </div>
+                      ) : (
+                        <StatusIndicator status={mapPayoutStatus(p.status)} />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
