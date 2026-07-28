@@ -813,6 +813,82 @@ export default function YieldPage() {
           </div>
         </div>
       )}
+
+      {/* Emergency Pause Confirmation Drawer */}
+      {showPauseDrawer && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="bg-red-600 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">
+                {pauseAction === "pause" ? "⚠ Emergency Pause" : "Resume Operations"}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowPauseDrawer(false);
+                  setPauseConfirmed(false);
+                }}
+                className="text-white hover:text-red-200 transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6">
+              {pauseAction === "pause" ? (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    You are about to <strong>pause all vault operations</strong>. This will:
+                  </p>
+                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
+                    <li>Block all new deposits</li>
+                    <li>Block all withdrawals</li>
+                    <li>Halt yield accrual</li>
+                    <li>Freeze vault interactions</li>
+                  </ul>
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
+                    <p className="text-xs text-red-800 font-medium">
+                      This action requires administrator privileges and will be signed via Freighter.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-700 mb-4">
+                    You are about to <strong>resume vault operations</strong>. This will:
+                  </p>
+                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
+                    <li>Allow new deposits</li>
+                    <li>Allow withdrawals</li>
+                    <li>Resume yield accrual</li>
+                    <li>Restore vault interactions</li>
+                  </ul>
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6">
+                    <p className="text-xs text-green-800 font-medium">
+                      This action requires administrator privileges and will be signed via Freighter.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {!pauseConfirmed ? (
+                <button
+                  onClick={() => setPauseConfirmed(true)}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 transition-colors"
+                >
+                  First Confirmation
+                </button>
+              ) : (
+                <button
+                  onClick={handlePauseConfirm}
+                  disabled={signing}
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
+                >
+                  {signing ? "Signing with Freighter…" : "Final Confirmation - Sign & Submit"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

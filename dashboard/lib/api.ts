@@ -76,6 +76,15 @@ export const api = {
     req<{ payouts: Payout[] }>(
       `/payouts/history?limit=${limit}&offset=${offset}`,
     ),
+  // Batch payouts (BE-554)
+  listBatchPayouts: (limit = 20, offset = 0) =>
+    req<{ batches: BatchPayout[]; total: number }>(
+      `/api/payouts/batches?limit=${limit}&offset=${offset}`,
+    ),
+  getBatchPayout: (id: string) =>
+    req<{ batch: BatchPayout; recipients: BatchRecipient[] }>(
+      `/api/payouts/batch/${id}`,
+    ),
 
   // Profile
   myProfile: () => req<Profile>("/profiles/me"),
@@ -191,6 +200,30 @@ export interface Payout {
   bankAccountId: string;
   anchorId: string;
   createdAt: string;
+}
+
+export interface BatchPayout {
+  id: string;
+  status: string;
+  currency: string;
+  total_recipients: number;
+  total_amount: number;
+  succeeded_count: number;
+  failed_count: number;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface BatchRecipient {
+  id: string;
+  user_id?: string;
+  destination_address?: string;
+  amount: number;
+  status: string;
+  tx_hash?: string;
+  attempt_count: number;
+  created_at: string;
 }
 
 export interface Profile {
