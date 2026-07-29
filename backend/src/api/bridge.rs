@@ -2,7 +2,7 @@ use crate::services::allbridge::{
     AllbridgeClient, AllbridgeQuoteRequest, BridgeStatusKind, BridgeTransferStatus,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -341,6 +341,335 @@ pub async fn run_status_poller(state: BridgeState) {
                     tracing::warn!("Bridge poller: status poll failed for {}: {:?}", tx_hash, e);
                 }
             }
+        }
+    }
+}
+
+// ── #553 Batch Payout Upload ──────────────────────────────────────────────────
+
+/// A single disbursement record accepted in both JSON-array and CSV upload modes.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct PayoutRecord {
+    /// Destination Stellar address or registered username.
+    pub destination: String,
+    /// Amount in stroops (1 XLM = 10_000_000 stroops) or as a decimal string.
+    pub amount: String,
+    /// Optional human-readable note attached to the payment.
+    #[serde(default)]
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchJsonPayload {
+    pub payouts: Vec<PayoutRecord>,
+}
+
+#[derive(Serialize)]
+pub struct BatchUploadResponse {
+    pub accepted: usize,
+    pub rejected: usize,
+    pub errors: Vec<String>,
+    pub batch_id: Option<String>,
+}
+
+/// Validate a single payout record, returning an error description if invalid.
+fn validate_record(idx: usize, record: &PayoutRecord) -> Option<String> {
+    if record.destination.trim().is_empty() {
+        return Some(format!("row {}: destination is required", idx + 1));
+    }
+    let amount_str = record.amount.trim().replace(',', "");
+    match amount_str.parse::<f64>() {
+        Ok(v) if v <= 0.0 => Some(format!("row {}: amount must be positive", idx + 1)),
+        Err(_) => Some(format!(
+            "row {}: amount '{}' is not a valid number",
+            idx + 1,
+            record.amount
+        )),
+        Ok(_) => None,
+    }
+}
+
+/// Parse a CSV byte slice into a list of payout records.
+/// Expected CSV columns (header row required): destination, amount, memo (optional).
+fn parse_csv(data: &[u8]) -> Result<Vec<PayoutRecord>, String> {
+    let text = std::str::from_utf8(data).map_err(|_| "CSV is not valid UTF-8".to_string())?;
+    let mut lines = text.lines();
+
+    // Parse header row
+    let header_line = lines
+        .next()
+        .ok_or_else(|| "CSV file is empty".to_string())?;
+    let headers: Vec<&str> = header_line.split(',').map(|h| h.trim()).collect();
+
+    let dest_col = headers
+        .iter()
+        .position(|h| h.to_lowercase() == "destination")
+        .ok_or_else(|| "CSV missing required column: destination".to_string())?;
+    let amount_col = headers
+        .iter()
+        .position(|h| h.to_lowercase() == "amount")
+        .ok_or_else(|| "CSV missing required column: amount".to_string())?;
+    let memo_col = headers
+        .iter()
+        .position(|h| h.to_lowercase() == "memo");
+
+    let mut records = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.splitn(headers.len(), ',').collect();
+        let destination = cols.get(dest_col).copied().unwrap_or("").trim().to_string();
+        let amount = cols.get(amount_col).copied().unwrap_or("").trim().to_string();
+        let memo = memo_col
+            .and_then(|i| cols.get(i).copied())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        records.push(PayoutRecord {
+            destination,
+            amount,
+            memo,
+        });
+    }
+
+    Ok(records)
+}
+
+/// Validate all records and split them into accepted/rejected sets.
+fn split_valid(records: Vec<PayoutRecord>) -> (Vec<PayoutRecord>, Vec<String>) {
+    let mut accepted = Vec::new();
+    let mut errors = Vec::new();
+    for (i, record) in records.into_iter().enumerate() {
+        if let Some(err) = validate_record(i, &record) {
+            errors.push(err);
+        } else {
+            accepted.push(record);
+        }
+    }
+    (accepted, errors)
+}
+
+/// Persist accepted payouts as a new batch and return the generated batch ID.
+async fn persist_batch(
+    pool: &sqlx::PgPool,
+    records: &[PayoutRecord],
+) -> Result<String, sqlx::Error> {
+    let total_amount: f64 = records
+        .iter()
+        .map(|r| r.amount.trim().replace(',', "").parse::<f64>().unwrap_or(0.0))
+        .sum();
+    let total_amount_i64 = (total_amount * 1_000_000.0).round() as i64;
+
+    let batch_row = sqlx::query(
+        r#"
+        INSERT INTO payout_batches
+            (currency, total_recipients, total_amount, status)
+        VALUES ('XLM', $1, $2, 'PENDING')
+        RETURNING id
+        "#,
+    )
+    .bind(records.len() as i32)
+    .bind(total_amount_i64)
+    .fetch_one(pool)
+    .await?;
+
+    let batch_id: uuid::Uuid = batch_row.get("id");
+
+    for record in records {
+        let amount_i64 =
+            (record.amount.trim().replace(',', "").parse::<f64>().unwrap_or(0.0) * 1_000_000.0)
+                .round() as i64;
+        sqlx::query(
+            r#"
+            INSERT INTO batch_recipients
+                (batch_id, destination_address, amount, status)
+            VALUES ($1, $2, $3, 'PENDING')
+            "#,
+        )
+        .bind(&batch_id)
+        .bind(&record.destination)
+        .bind(amount_i64)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(batch_id.to_string())
+}
+
+/// POST `/api/payouts/batch-upload`
+///
+/// Accepts disbursement parameters via:
+/// - **JSON body**: `{ "payouts": [{ "destination": "...", "amount": "...", "memo": "..." }] }`
+/// - **Multipart form**: field named `file` containing a CSV with columns `destination,amount,memo`
+///
+/// Validates every record. Rejects the entire batch if the format is wrong. If individual
+/// records are invalid, they are reported in the `errors` array while valid ones proceed.
+/// Returns 422 if the payload is empty after validation.
+pub async fn batch_upload(
+    State(state): State<BridgeState>,
+    content_type: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    // Determine payload format from Content-Type header.
+    let ct = content_type
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let raw_records: Result<Vec<PayoutRecord>, String> = if ct.contains("multipart/form-data") {
+        // Re-build a Multipart from raw bytes is non-trivial without the extractor.
+        // Instead, we handle this via the dedicated multipart handler below.
+        // This branch should not be reached when using `batch_upload_multipart`.
+        Err("Use the multipart endpoint for CSV uploads".to_string())
+    } else {
+        // Assume JSON body
+        match serde_json::from_slice::<BatchJsonPayload>(&body) {
+            Ok(payload) => {
+                if payload.payouts.is_empty() {
+                    Err("payouts array must not be empty".to_string())
+                } else {
+                    Ok(payload.payouts)
+                }
+            }
+            Err(e) => Err(format!("Invalid JSON payload: {}", e)),
+        }
+    };
+
+    let records = match raw_records {
+        Ok(r) => r,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+
+    let (accepted, errors) = split_valid(records);
+
+    if accepted.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(BatchUploadResponse {
+                accepted: 0,
+                rejected: errors.len(),
+                errors,
+                batch_id: None,
+            }),
+        )
+            .into_response();
+    }
+
+    match persist_batch(&state.pool, &accepted).await {
+        Ok(batch_id) => Json(BatchUploadResponse {
+            accepted: accepted.len(),
+            rejected: errors.len(),
+            errors,
+            batch_id: Some(batch_id),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to persist batch upload: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to store batch" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST `/api/payouts/batch-upload/csv`
+///
+/// Multipart form upload variant accepting a CSV file in a field named `file`.
+/// Columns required: `destination`, `amount`. Column `memo` is optional.
+pub async fn batch_upload_csv(
+    State(state): State<BridgeState>,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let mut csv_bytes: Option<Vec<u8>> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            match field.bytes().await {
+                Ok(bytes) => {
+                    csv_bytes = Some(bytes.to_vec());
+                    break;
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("Failed to read uploaded file: {}", e) })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    let csv_data = match csv_bytes {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Multipart field 'file' is required and must not be empty" })),
+            )
+                .into_response();
+        }
+    };
+
+    let records = match parse_csv(&csv_data) {
+        Ok(r) => r,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": msg })),
+            )
+                .into_response();
+        }
+    };
+
+    if records.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "CSV contains no data rows" })),
+        )
+            .into_response();
+    }
+
+    let (accepted, errors) = split_valid(records);
+
+    if accepted.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(BatchUploadResponse {
+                accepted: 0,
+                rejected: errors.len(),
+                errors,
+                batch_id: None,
+            }),
+        )
+            .into_response();
+    }
+
+    match persist_batch(&state.pool, &accepted).await {
+        Ok(batch_id) => Json(BatchUploadResponse {
+            accepted: accepted.len(),
+            rejected: errors.len(),
+            errors,
+            batch_id: Some(batch_id),
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to persist CSV batch upload: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to store batch" })),
+            )
+                .into_response()
         }
     }
 }
