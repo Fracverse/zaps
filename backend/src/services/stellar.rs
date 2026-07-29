@@ -13,6 +13,7 @@ use stellar_base::{
 // Stellar/Soroban Horizon & RPC operations client stub
 // This client interacts with Stellar RPC nodes and Horizon endpoints.
 
+#[derive(Clone)]
 pub struct StellarClient {
     pub rpc_url: String,
     pub http_client: reqwest::Client,

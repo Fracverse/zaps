@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -7,11 +8,13 @@ use crate::db::r#yield::{
     get_current_yield_rate, list_auto_sweep_candidates, log_yield_rate_update,
     process_internal_sweep_deposit, seconds_since_last_yield_rate,
 };
+use crate::db::models::UserYieldBalance;
 use crate::services::stellar::StellarClient;
 
 const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 300;
 const DEFAULT_MIN_IDLE_AMOUNT: i64 = 100_000;
 const BATCH_SIZE: i64 = 50;
+const MAX_CONCURRENT_SWEEPS: usize = 10;
 
 pub struct SweepWorkerConfig {
     pub poll_interval: Duration,
@@ -72,14 +75,13 @@ pub async fn run(pool: PgPool, config: SweepWorkerConfig) {
         }
     }
 }
-
 async fn sweep_once(
     pool: &PgPool,
     min_idle_amount: i64,
     stellar: &StellarClient,
     contract_id: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-   let candidates = list_auto_sweep_candidates(pool, min_idle_amount, BATCH_SIZE).await?;
+    let candidates = list_auto_sweep_candidates(pool, min_idle_amount, BATCH_SIZE).await?;
 
     if candidates.is_empty() {
         tracing::debug!("Auto-sweep: no eligible users this cycle");
@@ -102,69 +104,110 @@ async fn sweep_once(
         return Ok(());
     }
 
-    let mut swept = 0usize;
+    let stellar = Arc::new(stellar.clone());
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SWEEPS));
+    let mut handles = Vec::with_capacity(candidates.len());
+
     for balance in candidates {
-        let amount = balance.available_balance;
-        if amount < min_idle_amount {
-            continue;
-        }
+        let pool = pool.clone();
+        let stellar = stellar.clone();
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let contract_id = contract_id.map(|s| s.to_string());
 
-        // BE-051: Submit the on-chain deposit call when a contract ID is configured.
-        let tx_hash = if let Some(cid) = contract_id {
-            match submit_sweep_transaction(stellar, balance.user_id, amount, cid).await {
-                Ok(hash) => hash,
-               
-                 Err(err) => {
-                    tracing::debug!(
-                        user_id = %balance.user_id,
-                        error = ?err,
-                        "On-chain sweep transaction failed, registering backoff"
-                    );
-                    if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
-                        tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
-                    }
-                    continue;
-                }
-            }
-        } else {
-            // No contract configured – fall back to internal ledger-only sweep.
-            format!("zaps-auto-sweep-{}", Uuid::new_v4())
-        };
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            process_one_sweep(&pool, &stellar, balance, contract_id.as_deref(), min_idle_amount)
+                .await
+        }));
+    }
 
-       match process_internal_sweep_deposit(pool, balance.user_id, amount, &tx_hash).await {
-            Ok(()) => {
-                swept += 1;
-                tracing::info!(
-                    user_id = %balance.user_id,
-                    amount,
-                    tx_hash = %tx_hash,
-                    "Auto-swept idle balance into yield vault"
-                );
-                if let Err(db_err) = clear_sweep_failure(pool, balance.user_id).await {
-                    tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to clear sweep failure history");
-                }
-            }
-            Err(sqlx::Error::RowNotFound) => {
-                tracing::debug!(
-                    user_id = %balance.user_id,
-                    "Auto-sweep skipped: insufficient available balance"
-                );
+    let mut swept = 0usize;
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(true)) => swept += 1,
+            Ok(Ok(false)) => {}
+            Ok(Err(err)) => {
+                tracing::debug!("Auto-sweep error: {err:?}");
             }
             Err(err) => {
-                tracing::debug!(
-                    user_id = %balance.user_id,
-                    error = ?err,
-                    "Auto-sweep deposit failed, registering backoff"
-                );
-                if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
-                    tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
-                }
+                tracing::error!("Sweep task panicked: {err:?}");
             }
         }
     }
 
     tracing::debug!("Auto-sweep cycle complete: swept {} user(s)", swept);
     Ok(())
+}
+
+/// Process a single user's sweep: submit an on-chain transaction (or
+/// fall back to an internal ledger-only entry), then record the
+/// result. Returns `true` when the sweep was applied, `false` when it
+/// was skipped (insufficient balance, on-chain failure, or backoff).
+async fn process_one_sweep(
+    pool: &PgPool,
+    stellar: &StellarClient,
+    balance: UserYieldBalance,
+    contract_id: Option<&str>,
+    min_idle_amount: i64,
+) -> Result<bool, sqlx::Error> {
+    let amount = balance.available_balance;
+    if amount < min_idle_amount {
+        return Ok(false);
+    }
+
+    // BE-051: Submit the on-chain deposit call when a contract ID is configured.
+    let tx_hash = if let Some(cid) = contract_id {
+        match submit_sweep_transaction(stellar, balance.user_id, amount, cid).await {
+            Ok(hash) => hash,
+            Err(err) => {
+                tracing::debug!(
+                    user_id = %balance.user_id,
+                    error = ?err,
+                    "On-chain sweep transaction failed, registering backoff"
+                );
+                if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
+                    tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
+                }
+                return Ok(false);
+            }
+        }
+    } else {
+        // No contract configured – fall back to internal ledger-only sweep.
+        format!("zaps-auto-sweep-{}", Uuid::new_v4())
+    };
+
+    match process_internal_sweep_deposit(pool, balance.user_id, amount, &tx_hash).await {
+        Ok(()) => {
+            tracing::info!(
+                user_id = %balance.user_id,
+                amount,
+                tx_hash = %tx_hash,
+                "Auto-swept idle balance into yield vault"
+            );
+            if let Err(db_err) = clear_sweep_failure(pool, balance.user_id).await {
+                tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to clear sweep failure history");
+            }
+            Ok(true)
+        }
+        Err(sqlx::Error::RowNotFound) => {
+            tracing::debug!(
+                user_id = %balance.user_id,
+                "Auto-sweep skipped: insufficient available balance"
+            );
+            Ok(false)
+        }
+        Err(err) => {
+            tracing::debug!(
+                user_id = %balance.user_id,
+                error = ?err,
+                "Auto-sweep deposit failed, registering backoff"
+            );
+            if let Err(db_err) = record_sweep_failure(pool, balance.user_id, &err.to_string()).await {
+                tracing::warn!(user_id = %balance.user_id, error = ?db_err, "Failed to record sweep failure");
+            }
+            Ok(false)
+        }
+    }
 }
 
 /// BE-051: Build and submit a Soroban `invokeContract` transaction that calls
