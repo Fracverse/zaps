@@ -62,9 +62,105 @@ pub struct UserSearchItem {
     pub avatar_url: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct UserSuggestionsResponse {
+    pub query: String,
+    pub results: Vec<UserSearchItem>,
+    pub limit: i64,
+    pub offset: i64,
+    pub total: i64,
+    pub has_more: bool,
+}
+
 #[derive(Deserialize)]
 pub struct FriendRequest {
     pub friend_address: String,
+}
+
+// ── #545: username syntax validation ───────────────────────────────────────
+
+/// Shortest registerable username, in characters.
+pub const USERNAME_MIN_LEN: usize = 3;
+/// Longest registerable username, in characters.
+pub const USERNAME_MAX_LEN: usize = 15;
+
+/// Why a candidate username (or username prefix) was rejected.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UsernameError {
+    Empty,
+    TooShort,
+    TooLong,
+    InvalidCharacters,
+}
+
+impl UsernameError {
+    /// Client-facing reason, safe to return in an error body.
+    pub fn message(&self) -> String {
+        match self {
+            UsernameError::Empty => "username must not be empty".to_string(),
+            UsernameError::TooShort => {
+                format!("username must be at least {USERNAME_MIN_LEN} characters")
+            }
+            UsernameError::TooLong => {
+                format!("username must be at most {USERNAME_MAX_LEN} characters")
+            }
+            UsernameError::InvalidCharacters => {
+                "username may only contain lowercase letters and digits".to_string()
+            }
+        }
+    }
+}
+
+/// Validates a complete username against the registry's syntax rules:
+/// lowercase ASCII alphanumeric, 3-15 characters.
+pub fn validate_username(username: &str) -> Result<(), UsernameError> {
+    let len = username.chars().count();
+    if len < USERNAME_MIN_LEN {
+        return Err(UsernameError::TooShort);
+    }
+    if len > USERNAME_MAX_LEN {
+        return Err(UsernameError::TooLong);
+    }
+    validate_username_charset(username)
+}
+
+/// Validates a *partial* username as typed into an autocomplete box. Same
+/// charset as a full username but no minimum length, since a suggestion query
+/// is by definition shorter than the name it matches.
+pub fn validate_username_prefix(prefix: &str) -> Result<(), UsernameError> {
+    let len = prefix.chars().count();
+    if len == 0 {
+        return Err(UsernameError::Empty);
+    }
+    if len > USERNAME_MAX_LEN {
+        return Err(UsernameError::TooLong);
+    }
+    validate_username_charset(prefix)
+}
+
+fn validate_username_charset(value: &str) -> Result<(), UsernameError> {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        Ok(())
+    } else {
+        Err(UsernameError::InvalidCharacters)
+    }
+}
+
+/// Escapes the LIKE metacharacters so a caller-supplied term is matched
+/// literally. Pair with `ESCAPE '\'` in the query — without this, a `q` of `%`
+/// matches every row in the table.
+fn escape_like_pattern(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len());
+    for c in term.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
 }
 
 pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
@@ -143,24 +239,56 @@ pub async fn update_profile(
     .into_response()
 }
 
+/// Longest accepted `q` on /search. Sized for a Stellar address (56 chars),
+/// which the endpoint also matches against.
+const SEARCH_TERM_MAX_LEN: usize = 64;
+
+/// GET /api/users/search?q=&limit=&offset=
+///
+/// Prefix-matches `q` against registered usernames (case-insensitively, via the
+/// `LOWER(username)` index from #541) and against Stellar addresses. Returns a
+/// bare array for backwards compatibility with the dashboard and mobile app;
+/// `/api/users/suggestions` is the paginated form.
 pub async fn search_users(
     State(pool): State<sqlx::PgPool>,
     axum::extract::Query(params): axum::extract::Query<SearchQuery>,
 ) -> impl IntoResponse {
-    let limit = params.limit.unwrap_or(20);
-    let offset = params.offset.unwrap_or(0);
-    let query_pattern = format!("{}%", params.q);
+    let term = params.q.trim();
+    if term.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "q must not be empty" })),
+        )
+            .into_response();
+    }
+    if term.chars().count() > SEARCH_TERM_MAX_LEN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("q must be at most {SEARCH_TERM_MAX_LEN} characters")
+            })),
+        )
+            .into_response();
+    }
+
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let offset = params.offset.unwrap_or(0).max(0);
+    let escaped = escape_like_pattern(term);
+    let username_pattern = format!("{}%", escaped.to_lowercase());
+    let address_pattern = format!("{escaped}%");
 
     let rows = match sqlx::query(
         r#"
         SELECT username, address, avatar_url
         FROM users
-        WHERE username LIKE $1 OR address LIKE $1
+        WHERE LOWER(username) LIKE $1 ESCAPE '\'
+           OR address LIKE $2 ESCAPE '\'
         ORDER BY username ASC
-        LIMIT $2 OFFSET $3
+        LIMIT $3 OFFSET $4
         "#,
     )
-    .bind(&query_pattern)
+    .bind(&username_pattern)
+    .bind(&address_pattern)
     .bind(limit)
     .bind(offset)
     .fetch_all(&pool)
@@ -187,6 +315,96 @@ pub async fn search_users(
         .collect();
 
     Json(users).into_response()
+}
+
+/// GET /api/users/suggestions?q=&limit=&offset=
+///
+/// Username-only autocomplete. Unlike /search this validates `q` as a username
+/// prefix (#545) and returns a paginated envelope carrying the total match
+/// count alongside each profile's avatar.
+pub async fn suggest_usernames(
+    State(pool): State<sqlx::PgPool>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+) -> impl IntoResponse {
+    let term = params.q.trim().to_lowercase();
+    if let Err(e) = validate_username_prefix(&term) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.message() })),
+        )
+            .into_response();
+    }
+
+    let limit = params.limit.unwrap_or(10).clamp(1, 25);
+    let offset = params.offset.unwrap_or(0).max(0);
+    // `term` is already known to be lowercase alphanumeric, so it carries no
+    // LIKE metacharacters — but escape anyway so the two endpoints cannot drift.
+    let pattern = format!("{}%", escape_like_pattern(&term));
+
+    let total: i64 = match sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM users WHERE LOWER(username) LIKE $1 ESCAPE '\'"#,
+    )
+    .bind(&pattern)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!("Username suggestion count failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let rows = match sqlx::query(
+        r#"
+        SELECT username, address, avatar_url
+        FROM users
+        WHERE LOWER(username) LIKE $1 ESCAPE '\'
+        ORDER BY LOWER(username) ASC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(&pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Username suggestion query failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let results: Vec<UserSearchItem> = rows
+        .into_iter()
+        .map(|row| UserSearchItem {
+            username: row.get("username"),
+            address: row.get("address"),
+            avatar_url: row.get("avatar_url"),
+        })
+        .collect();
+
+    let has_more = offset + (results.len() as i64) < total;
+
+    Json(UserSuggestionsResponse {
+        query: term,
+        results,
+        limit,
+        offset,
+        total,
+        has_more,
+    })
+    .into_response()
 }
 
 pub async fn list_friends(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
@@ -415,6 +633,16 @@ pub async fn resolve_address(
     State(state): State<UserState>,
     Path(username): Path<String>,
 ) -> impl IntoResponse {
+    // #545: reject syntactically impossible usernames before touching Redis or
+    // Postgres — they can never resolve.
+    if let Err(e) = validate_username(&username) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.message() })),
+        )
+            .into_response();
+    }
+
     if let Some(cache) = &state.cache {
         if let Some(address) = cache.get_address(&username).await {
             return Json(ResolveAddressResponse { username, address }).into_response();
@@ -532,7 +760,7 @@ pub async fn get_registry_stats(
     };
 
     let weekly_growth: i64 = match sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM users WHERE created_at >= NOW() - INTERVAL '7 days'"
+        "SELECT COUNT(*) FROM users WHERE created_at >= NOW() - INTERVAL '7 days'",
     )
     .fetch_one(&pool)
     .await
@@ -554,4 +782,73 @@ pub async fn get_registry_stats(
         active_registrations: total_usernames,
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_lowercase_alphanumeric_usernames() {
+        assert_eq!(validate_username("ebube"), Ok(()));
+        assert_eq!(validate_username("zap"), Ok(()));
+        assert_eq!(validate_username("user123"), Ok(()));
+        assert_eq!(validate_username("123456789012345"), Ok(()));
+    }
+
+    #[test]
+    fn rejects_usernames_outside_length_bounds() {
+        assert_eq!(validate_username(""), Err(UsernameError::TooShort));
+        assert_eq!(validate_username("ab"), Err(UsernameError::TooShort));
+        assert_eq!(
+            validate_username("1234567890123456"),
+            Err(UsernameError::TooLong)
+        );
+    }
+
+    #[test]
+    fn rejects_uppercase_usernames() {
+        assert_eq!(
+            validate_username("Ebube"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("EBUBE"),
+            Err(UsernameError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn rejects_symbols_and_whitespace() {
+        for candidate in ["e-bube", "e_bube", "e.bube", "e bube", "ebube!", "ébube"] {
+            assert_eq!(
+                validate_username(candidate),
+                Err(UsernameError::InvalidCharacters),
+                "expected {candidate:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_validation_allows_short_terms_but_not_empty_or_invalid() {
+        assert_eq!(validate_username_prefix("e"), Ok(()));
+        assert_eq!(validate_username_prefix("eb"), Ok(()));
+        assert_eq!(validate_username_prefix(""), Err(UsernameError::Empty));
+        assert_eq!(
+            validate_username_prefix("1234567890123456"),
+            Err(UsernameError::TooLong)
+        );
+        assert_eq!(
+            validate_username_prefix("Eb"),
+            Err(UsernameError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn like_metacharacters_are_escaped() {
+        assert_eq!(escape_like_pattern("100%"), r"100\%");
+        assert_eq!(escape_like_pattern("a_b"), r"a\_b");
+        assert_eq!(escape_like_pattern(r"a\b"), r"a\\b");
+        assert_eq!(escape_like_pattern("ebube"), "ebube");
+    }
 }

@@ -71,6 +71,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
             get(user::get_profile).post(user::update_profile),
         )
         .route("/search", get(user::search_users))
+        .route("/suggestions", get(user::suggest_usernames))
         .route("/friends", get(user::list_friends))
         .route("/friends/request", post(user::send_friend_request))
         .route("/friends/:id/accept", post(user::accept_friend_request))
