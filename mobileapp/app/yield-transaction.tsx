@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,9 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  PanResponder,
+  GestureResponderEvent,
+  PanResponderGestureState,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -32,6 +35,206 @@ const NAIRA_KEYPAD_KEYS = [
   "0",
   "⌫",
 ];
+
+// ── Percentage Slider ─────────────────────────────────────────────────────────
+
+const SNAP_PERCENTAGES = [0, 25, 50, 75, 100];
+
+interface PercentageSliderProps {
+  /** Current selected percentage (0–100). */
+  value: number;
+  /** Called with the snapped percentage when the user slides or taps a tick. */
+  onChange: (pct: number) => void;
+}
+
+/**
+ * Horizontal slider that snaps to 0 / 25 / 50 / 75 / 100 %.
+ * Dragging the thumb or tapping a tick label both update the selection.
+ */
+function PercentageSlider({ value, onChange }: PercentageSliderProps) {
+  const trackWidth = useRef(0);
+
+  const snapToNearest = useCallback(
+    (rawPct: number) => {
+      const clamped = Math.max(0, Math.min(100, rawPct));
+      let closest = SNAP_PERCENTAGES[0];
+      let minDist = Math.abs(clamped - closest);
+      for (const snap of SNAP_PERCENTAGES) {
+        const dist = Math.abs(clamped - snap);
+        if (dist < minDist) {
+          minDist = dist;
+          closest = snap;
+        }
+      }
+      onChange(closest);
+    },
+    [onChange]
+  );
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (
+        evt: GestureResponderEvent,
+        _state: PanResponderGestureState
+      ) => {
+        if (trackWidth.current === 0) return;
+        const x = evt.nativeEvent.locationX;
+        const rawPct = (x / trackWidth.current) * 100;
+        snapToNearest(rawPct);
+      },
+      onPanResponderMove: (
+        evt: GestureResponderEvent,
+        _state: PanResponderGestureState
+      ) => {
+        if (trackWidth.current === 0) return;
+        const x = evt.nativeEvent.locationX;
+        const rawPct = (x / trackWidth.current) * 100;
+        snapToNearest(rawPct);
+      },
+    })
+  ).current;
+
+  const thumbPosition = `${value}%` as `${number}%`;
+
+  return (
+    <View style={sliderStyles.wrapper}>
+      {/* Track */}
+      <View
+        style={sliderStyles.trackContainer}
+        onLayout={(e) => {
+          trackWidth.current = e.nativeEvent.layout.width;
+        }}
+        {...panResponder.panHandlers}
+        accessible={false}
+      >
+        {/* Filled portion */}
+        <View style={[sliderStyles.trackFill, { width: thumbPosition }]} />
+        {/* Tick marks */}
+        {SNAP_PERCENTAGES.map((pct) => (
+          <View
+            key={pct}
+            style={[
+              sliderStyles.tick,
+              { left: `${pct}%` as `${number}%` },
+              pct === value && sliderStyles.tickActive,
+            ]}
+          />
+        ))}
+        {/* Thumb */}
+        <View
+          style={[sliderStyles.thumb, { left: thumbPosition }]}
+          accessibilityRole="adjustable"
+          accessibilityValue={{ min: 0, max: 100, now: value }}
+          accessibilityLabel={`Percentage slider, ${value}%`}
+        />
+      </View>
+
+      {/* Snap-point labels */}
+      <View style={sliderStyles.labelsRow}>
+        {SNAP_PERCENTAGES.filter((p) => p > 0).map((pct) => (
+          <TouchableOpacity
+            key={pct}
+            style={[
+              sliderStyles.labelBtn,
+              pct === value && sliderStyles.labelBtnActive,
+            ]}
+            onPress={() => onChange(pct)}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={`Set ${pct} percent`}
+          >
+            <Text
+              style={[
+                sliderStyles.labelText,
+                pct === value && sliderStyles.labelTextActive,
+              ]}
+            >
+              {pct}%
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const sliderStyles = StyleSheet.create({
+  wrapper: {
+    marginBottom: 20,
+  },
+  trackContainer: {
+    height: 28,
+    backgroundColor: "#E8E8E8",
+    borderRadius: 14,
+    marginHorizontal: 8,
+    justifyContent: "center",
+    overflow: "visible",
+    position: "relative",
+  },
+  trackFill: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
+  },
+  tick: {
+    position: "absolute",
+    width: 2,
+    height: 10,
+    backgroundColor: "#CCCCCC",
+    borderRadius: 1,
+    top: 9,
+    marginLeft: -1,
+  },
+  tickActive: {
+    backgroundColor: COLORS.secondary,
+  },
+  thumb: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: COLORS.white,
+    borderWidth: 2.5,
+    borderColor: COLORS.primary,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
+    marginLeft: -14,
+    top: 0,
+  },
+  labelsRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginTop: 10,
+    marginHorizontal: 8,
+  },
+  labelBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: "#F0F0F0",
+    minWidth: 52,
+    alignItems: "center",
+  },
+  labelBtnActive: {
+    backgroundColor: COLORS.primary,
+  },
+  labelText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.primary,
+  },
+  labelTextActive: {
+    color: COLORS.secondary,
+  },
+});
 
 // ── Naira Keypad ─────────────────────────────────────────────────────────────
 
@@ -60,6 +263,7 @@ export default function YieldTransactionScreen() {
   const [amount, setAmount] = useState("");
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [sliderPct, setSliderPct] = useState(0);
 
   // Simulated balances — replace with API/store values in production
   const availableBalance = 150_000;
@@ -74,6 +278,8 @@ export default function YieldTransactionScreen() {
   const isValid = numericAmount > 0 && !exceedsLimit;
 
   function handleKeyPress(key: string) {
+    // Manual keypad entry clears the slider selection
+    setSliderPct(0);
     if (key === "⌫") {
       setAmount((prev) => prev.slice(0, -1));
       return;
@@ -162,6 +368,7 @@ export default function YieldTransactionScreen() {
               onPress={() => {
                 setMode("deposit");
                 setAmount("");
+                setSliderPct(0);
               }}
             >
               <Ionicons
@@ -187,6 +394,7 @@ export default function YieldTransactionScreen() {
               onPress={() => {
                 setMode("withdraw");
                 setAmount("");
+                setSliderPct(0);
               }}
             >
               <Ionicons
@@ -242,20 +450,18 @@ export default function YieldTransactionScreen() {
             </Text>
           )}
 
-          {/* Quick-fill buttons */}
-          <View style={styles.quickFillRow}>
-            {[25, 50, 75, 100].map((pct) => (
-              <TouchableOpacity
-                key={pct}
-                style={styles.quickFillBtn}
-                onPress={() =>
-                  setAmount(((activeBalance * pct) / 100).toFixed(2))
-                }
-              >
-                <Text style={styles.quickFillText}>{pct}%</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          {/* Percentage slider */}
+          <PercentageSlider
+            value={sliderPct}
+            onChange={(pct) => {
+              setSliderPct(pct);
+              if (pct === 0) {
+                setAmount("");
+              } else {
+                setAmount(((activeBalance * pct) / 100).toFixed(2));
+              }
+            }}
+          />
 
           {/* Naira keypad */}
           <NairaKeypad onPress={handleKeyPress} />
