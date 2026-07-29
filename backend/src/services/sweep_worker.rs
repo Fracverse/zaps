@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -5,8 +6,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::db::r#yield::{
-    get_current_yield_rate, list_auto_sweep_candidates, log_yield_rate_update,
-    process_internal_sweep_deposit, seconds_since_last_yield_rate,
+    clear_sweep_failure, get_current_yield_rate, list_auto_sweep_candidates,
+    list_sweep_backoff_excluded_users, log_yield_rate_update, process_internal_sweep_deposit,
+    record_sweep_failure, seconds_since_last_yield_rate,
 };
 use crate::db::models::UserYieldBalance;
 use crate::services::stellar::StellarClient;
@@ -106,24 +108,33 @@ async fn sweep_once(
 
     let stellar = Arc::new(stellar.clone());
     let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SWEEPS));
-    let mut handles = Vec::with_capacity(candidates.len());
 
-    for balance in candidates {
-        let pool = pool.clone();
-        let stellar = stellar.clone();
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let contract_id = contract_id.map(|s| s.to_string());
+    // Spawn all candidate sweeps concurrently, but bound by the semaphore so
+    // at most MAX_CONCURRENT_SWEEPS tasks are executing at the same time.
+    let handles: Vec<_> = {
+        let mut v = Vec::with_capacity(candidates.len());
+        for balance in candidates {
+            let pool = pool.clone();
+            let stellar = stellar.clone();
+            // Acquire the permit before spawning; the task holds it for its
+            // entire execution and drops it on completion, freeing a slot.
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let contract_id = contract_id.map(|s| s.to_string());
 
-        handles.push(tokio::spawn(async move {
-            let _permit = permit;
-            process_one_sweep(&pool, &stellar, balance, contract_id.as_deref(), min_idle_amount)
-                .await
-        }));
-    }
+            v.push(tokio::spawn(async move {
+                let _permit = permit;
+                process_one_sweep(&pool, &stellar, balance, contract_id.as_deref(), min_idle_amount)
+                    .await
+            }));
+        }
+        v
+    };
 
+    // Await all spawned tasks in parallel and tally results.
+    let results = join_all(handles).await;
     let mut swept = 0usize;
-    for handle in handles {
-        match handle.await {
+    for result in results {
+        match result {
             Ok(Ok(true)) => swept += 1,
             Ok(Ok(false)) => {}
             Ok(Err(err)) => {
