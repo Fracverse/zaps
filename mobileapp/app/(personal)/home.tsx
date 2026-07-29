@@ -1203,6 +1203,71 @@ export default function HomeScreen() {
                   />
                 </View>
 
+                {/* Compounding Growth Projection */}
+                <View style={styles.compoundingSection}>
+                  <Text style={styles.compoundingTitle}>
+                    Compounding growth projection
+                  </Text>
+                  <Text style={styles.compoundingSubtitle}>
+                    See how your earning balance could grow over time with compound interest at current APY
+                  </Text>
+                  
+                  <View style={styles.compoundingGraph}>
+                    {(() => {
+                      const currentBalance = parseCurrencyAmount(yieldData?.totalYieldEarned ?? "₦0");
+                      const apyValue = parseFloat(yieldData?.apy.replace("%", "") ?? "0") / 100;
+                      const monthlyRate = apyValue / 12;
+                      
+                      const projectionMonths = [
+                        { label: "3m", months: 3 },
+                        { label: "6m", months: 6 },
+                        { label: "9m", months: 9 },
+                        { label: "12m", months: 12 },
+                      ];
+                      
+                      const projections = projectionMonths.map((p) => {
+                        const futureValue = currentBalance * Math.pow(1 + monthlyRate, p.months);
+                        return { ...p, value: futureValue };
+                      });
+                      
+                      const maxValue = Math.max(...projections.map((p) => p.value)) || 1;
+                      
+                      return (
+                        <>
+                          {projections.map((proj, idx) => {
+                            const barHeight = (proj.value / maxValue) * 110;
+                            return (
+                              <View key={proj.label} style={styles.compoundingBar}>
+                                <View style={styles.compoundingBarContainer}>
+                                  <View
+                                    style={[
+                                      styles.compoundingBarFill,
+                                      { height: barHeight },
+                                    ]}
+                                  />
+                                </View>
+                                <Text style={styles.compoundingBarLabel}>{proj.label}</Text>
+                                <Text style={styles.compoundingBarValue}>
+                                  {formatCurrency(proj.value)}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </>
+                      );
+                    })()}
+                  </View>
+                  
+                  <View style={styles.compoundingMeta}>
+                    <View style={styles.compoundingMetaRow}>
+                      <Ionicons name="information-circle-outline" size={14} color="#6B7280" />
+                      <Text style={styles.compoundingMetaText}>
+                        Assuming current APY of {yieldData?.apy ?? "0%"} remains constant
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
                 <Text style={styles.earningsInfoCopy}>
                   {yieldData?.explanation}
                 </Text>
@@ -2343,5 +2408,80 @@ const styles = StyleSheet.create({
   },
   sendBtn: {
     padding: 8,
+  },
+  // Compounding graph section
+  compoundingSection: {
+    marginTop: 20,
+    marginBottom: 4,
+    backgroundColor: "#F8FFF8",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#E4F2E5",
+  },
+  compoundingTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+    color: "#111827",
+    marginBottom: 4,
+  },
+  compoundingSubtitle: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    marginBottom: 16,
+    lineHeight: 17,
+  },
+  compoundingGraph: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-around",
+    height: 140,
+    paddingTop: 8,
+  },
+  compoundingBar: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 4,
+  },
+  compoundingBarContainer: {
+    width: 36,
+    height: 110,
+    justifyContent: "flex-end",
+    borderRadius: 6,
+    overflow: "hidden",
+    backgroundColor: "#E8F5E9",
+  },
+  compoundingBarFill: {
+    width: "100%",
+    backgroundColor: "#2E7D32",
+    borderRadius: 6,
+  },
+  compoundingBarLabel: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#374151",
+    marginTop: 2,
+  },
+  compoundingBarValue: {
+    fontSize: 9,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    textAlign: "center",
+  },
+  compoundingMeta: {
+    marginTop: 12,
+  },
+  compoundingMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  compoundingMetaText: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    flex: 1,
   },
 });

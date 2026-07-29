@@ -122,6 +122,17 @@ pub fn bridge_routes(state: bridge::BridgeState) -> Router {
         .with_state(state)
 }
 
+/// #553 — Batch payout upload routes (JSON body + CSV multipart).
+///
+/// - POST `/api/payouts/batch-upload`      → JSON `{ "payouts": [...] }`
+/// - POST `/api/payouts/batch-upload/csv`  → multipart/form-data with `file` field
+pub fn batch_upload_routes(state: bridge::BridgeState) -> Router {
+    Router::new()
+        .route("/batch-upload", post(bridge::batch_upload))
+        .route("/batch-upload/csv", post(bridge::batch_upload_csv))
+        .with_state(state)
+}
+
 /// Yield routes without a Redis cache; reads fall through to Postgres.
 pub fn yield_routes(pool: sqlx::PgPool) -> Router {
     yield_routes_with_state(r#yield::YieldState::new(pool, None))
