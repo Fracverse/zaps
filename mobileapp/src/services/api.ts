@@ -195,3 +195,172 @@ export async function updateAutoEarn(enabled: boolean): Promise<void> {
     // Non-fatal — local state already reflects the toggle
   }
 }
+
+// ── Username Resolution ──────────────────────────────────────────────────────
+
+export interface ReceiverDetails {
+  username: string;
+  address: string;
+}
+
+export interface UsernameLookupError extends Error {
+  code: "NOT_FOUND" | "INVALID_USERNAME" | "NETWORK_ERROR" | "UNKNOWN_ERROR";
+  statusCode?: number;
+}
+
+/**
+ * Resolves a username to its registered Stellar address for transaction flows.
+ * Uses the cached backend endpoint that checks Redis before falling back to Postgres.
+ * Automatically saves successful lookups to recent recipients.
+ * 
+ * @param username - The username to resolve (must be 3-15 chars, lowercase alphanumeric)
+ * @returns Promise resolving to receiver details with username and address
+ * @throws UsernameLookupError with specific error codes for different failure scenarios
+ */
+export async function resolveUsername(username: string): Promise<ReceiverDetails> {
+  if (!username || typeof username !== "string") {
+    const error = new Error("Username is required and must be a string") as UsernameLookupError;
+    error.code = "INVALID_USERNAME";
+    throw error;
+  }
+
+  const trimmedUsername = username.trim().toLowerCase();
+  if (!trimmedUsername) {
+    const error = new Error("Username cannot be empty") as UsernameLookupError;
+    error.code = "INVALID_USERNAME";
+    throw error;
+  }
+
+  try {
+    const response = await apiFetch(`${API_BASE}/api/users/resolve/${encodeURIComponent(trimmedUsername)}`);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const error = new Error(
+        errorData.error || `HTTP ${response.status}: ${response.statusText}`
+      ) as UsernameLookupError;
+      error.statusCode = response.status;
+      
+      if (response.status === 404) {
+        error.code = "NOT_FOUND";
+      } else if (response.status === 400) {
+        error.code = "INVALID_USERNAME";
+      } else {
+        error.code = "NETWORK_ERROR";
+      }
+      
+      throw error;
+    }
+
+    const data = await response.json();
+    
+    // Validate the response structure
+    if (!data || typeof data !== "object" || !data.username || !data.address) {
+      const error = new Error("Invalid response format from server") as UsernameLookupError;
+      error.code = "UNKNOWN_ERROR";
+      throw error;
+    }
+
+    const receiverDetails: ReceiverDetails = {
+      username: data.username,
+      address: data.address,
+    };
+
+    // Save to recent recipients on successful lookup
+    await saveRecentRecipient(receiverDetails.username).catch(() => {
+      // Ignore cache save failures - don't let them break the main flow
+    });
+
+    return receiverDetails;
+  } catch (err) {
+    // Re-throw UsernameLookupError instances as-is
+    if (err && typeof err === "object" && "code" in err) {
+      throw err;
+    }
+
+    // Handle network errors and other unexpected failures
+    const error = new Error(
+      err instanceof Error ? err.message : "Unknown error occurred during username lookup"
+    ) as UsernameLookupError;
+    error.code = "NETWORK_ERROR";
+    throw error;
+  }
+}
+
+/**
+ * Safely resolves a username with automatic error handling and user-friendly messages.
+ * Returns null on any error instead of throwing, making it suitable for UI flows
+ * where you want to handle errors gracefully.
+ * 
+ * @param username - The username to resolve
+ * @returns Promise resolving to receiver details or null on any error
+ */
+export async function safeResolveUsername(username: string): Promise<ReceiverDetails | null> {
+  try {
+    return await resolveUsername(username);
+  } catch (error) {
+    console.warn("Username resolution failed:", error);
+    return null;
+  }
+}
+
+/**
+ * Batch resolve multiple usernames efficiently.
+ * Note: Currently calls the single endpoint multiple times. Could be optimized
+ * with a dedicated batch endpoint in the future.
+ * 
+ * @param usernames - Array of usernames to resolve
+ * @returns Promise resolving to map of username -> ReceiverDetails (successful lookups only)
+ */
+export async function batchResolveUsernames(
+  usernames: string[]
+): Promise<Record<string, ReceiverDetails>> {
+  if (!Array.isArray(usernames) || usernames.length === 0) {
+    return {};
+  }
+
+  const results: Record<string, ReceiverDetails> = {};
+  
+  // Use Promise.allSettled to handle partial failures gracefully
+  const promises = usernames.map(async (username) => {
+    try {
+      const result = await resolveUsername(username);
+      return { username: username.trim().toLowerCase(), result };
+    } catch {
+      return { username: username.trim().toLowerCase(), result: null };
+    }
+  });
+
+  const settled = await Promise.allSettled(promises);
+  
+  settled.forEach((outcome) => {
+    if (outcome.status === "fulfilled" && outcome.value.result) {
+      results[outcome.value.username] = outcome.value.result;
+    }
+  });
+
+  return results;
+}
+
+/**
+ * Resolves a username and returns the result in ZapsUser format for compatibility
+ * with existing UI components that expect the full user interface.
+ * 
+ * @param username - The username to resolve
+ * @returns Promise resolving to a partial ZapsUser with username and address
+ * @throws UsernameLookupError with specific error codes for different failure scenarios
+ */
+export async function resolveUsernameAsZapsUser(username: string): Promise<{
+  username: string;
+  address: string;
+  avatar_url: null;
+  isVerified?: boolean;
+}> {
+  const receiverDetails = await resolveUsername(username);
+  return {
+    username: receiverDetails.username,
+    address: receiverDetails.address,
+    avatar_url: null, // resolve endpoint doesn't include avatar
+    isVerified: false, // placeholder as noted in ZapsUser interface
+  };
+}
