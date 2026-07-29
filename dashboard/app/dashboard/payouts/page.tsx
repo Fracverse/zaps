@@ -30,6 +30,7 @@ export default function PayoutsPage() {
     hasInvalidAddresses: boolean 
   } | null>(null);
   const [validating, setValidating] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   interface PayoutRecipient {
     id: string;
@@ -41,7 +42,16 @@ export default function PayoutsPage() {
     isInRegistry?: boolean;
     addressError?: string;
     registryError?: string;
+    status?: "pending" | "dispatched" | "failed" | "completed";
   }
+
+  // Batch tracking state for submitted payouts
+  const [batchStatuses, setBatchStatuses] = useState<{
+    [batchId: string]: {
+      status: "pending" | "dispatched" | "failed" | "completed";
+      updatedAt: string;
+    }
+  }>({});
 
   // Validate Stellar address format
   const validateStellarAddress = useCallback((address: string): { valid: boolean; error?: string } => {
@@ -248,14 +258,189 @@ export default function PayoutsPage() {
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
     const file = e.dataTransfer.files?.[0];
     if (file) {
-      parseAndValidateCSV(file);
+      if (file.type === "text/csv" || file.name.endsWith(".csv")) {
+        parseAndValidateCSV(file);
+      } else {
+        setMsg({ type: "err", text: "Please upload a valid CSV file (.csv)" });
+      }
     }
   };
 
   const handleFileDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
+  };
+
+  const handleFileDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  };
+
+  // Auto-refresh batch statuses for active disbursements
+  const { data: batchData, loading: batchLoading } = usePolling(
+    useCallback(async () => {
+      const activeBatchIds = Object.keys(batchStatuses).filter(
+        (id) => !["completed", "failed"].includes(batchStatuses[id]?.status ?? "")
+      );
+      if (activeBatchIds.length === 0) return null;
+
+      // Fetch status for active batches
+      const statuses: {
+        [batchId: string]: {
+          status: "pending" | "dispatched" | "failed" | "completed";
+          updatedAt: string;
+        }
+      } = {};
+
+      for (const batchId of activeBatchIds) {
+        try {
+          const payout = payouts.find((p) => p.id === batchId);
+          if (payout) {
+            statuses[batchId] = {
+              status: mapPayoutStatus(payout.status),
+              updatedAt: payout.createdAt,
+            };
+          }
+        } catch {
+          // Continue on error
+        }
+      }
+      return statuses;
+    }, [batchStatuses, payouts]),
+    10000 // Poll every 10 seconds
+  );
+
+  // Update batch statuses when new data arrives
+  useMemo(() => {
+    if (batchData) {
+      setBatchStatuses((prev) => ({ ...prev, ...batchData }));
+    }
+  }, [batchData]);
+
+  // Map API status to our tracking status
+  const mapPayoutStatus = (status: string): "pending" | "dispatched" | "failed" | "completed" => {
+    switch (status.toLowerCase()) {
+      case "pending":
+      case "processing":
+        return "pending";
+      case "dispatched":
+      case "sent":
+      case "completed":
+        return "dispatched";
+      case "failed":
+      case "error":
+        return "failed";
+      default:
+        return "pending";
+    }
+  };
+
+  // Status badge component for batch rows
+  const StatusIndicator = ({ status }: { status?: string }) => {
+    if (!status) return null;
+    
+    const statusConfig = {
+      pending: { color: "bg-yellow-100 text-yellow-800", icon: "⏳", label: "Pending" },
+      dispatched: { color: "bg-indigo-100 text-indigo-800", icon: "📤", label: "Dispatched" },
+      failed: { color: "bg-red-100 text-red-800", icon: "❌", label: "Failed" },
+      completed: { color: "bg-green-100 text-green-800", icon: "✅", label: "Completed" },
+    };
+    
+    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
+    
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
+        <span className="mr-1">{config.icon}</span>
+        {config.label}
+      </span>
+    );
+  };
+
+  // Auto-refresh batch statuses for active disbursements
+  const { data: batchData, loading: batchLoading } = usePolling(
+    useCallback(async () => {
+      const activeBatchIds = Object.keys(batchStatuses).filter(
+        (id) => !["completed", "failed"].includes(batchStatuses[id]?.status ?? "")
+      );
+      if (activeBatchIds.length === 0) return null;
+
+      // Fetch status for active batches
+      const statuses: {
+        [batchId: string]: {
+          status: "pending" | "dispatched" | "failed" | "completed";
+          updatedAt: string;
+        }
+      } = {};
+
+      for (const batchId of activeBatchIds) {
+        try {
+          const payout = payouts.find((p) => p.id === batchId);
+          if (payout) {
+            statuses[batchId] = {
+              status: mapPayoutStatus(payout.status),
+              updatedAt: payout.createdAt,
+            };
+          }
+        } catch {
+          // Continue on error
+        }
+      }
+      return statuses;
+    }, [batchStatuses, payouts]),
+    10000 // Poll every 10 seconds
+  );
+
+  // Update batch statuses when new data arrives
+  useMemo(() => {
+    if (batchData) {
+      setBatchStatuses((prev) => ({ ...prev, ...batchData }));
+    }
+  }, [batchData]);
+
+  // Map API status to our tracking status
+  const mapPayoutStatus = (status: string): "pending" | "dispatched" | "failed" | "completed" => {
+    switch (status.toLowerCase()) {
+      case "pending":
+      case "processing":
+        return "pending";
+      case "dispatched":
+      case "sent":
+      case "completed":
+        return "dispatched";
+      case "failed":
+      case "error":
+        return "failed";
+      default:
+        return "pending";
+    }
+  };
+
+  // Status badge component for batch rows
+  const StatusIndicator = ({ status }: { status?: string }) => {
+    if (!status) return null;
+    
+    const statusConfig = {
+      pending: { color: "bg-yellow-100 text-yellow-800", icon: "⏳", label: "Pending" },
+      dispatched: { color: "bg-indigo-100 text-indigo-800", icon: "📤", label: "Dispatched" },
+      failed: { color: "bg-red-100 text-red-800", icon: "❌", label: "Failed" },
+      completed: { color: "bg-green-100 text-green-800", icon: "✅", label: "Completed" },
+    };
+    
+    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
+    
+    return (
+      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
+        <span className="mr-1">{config.icon}</span>
+        {config.label}
+      </span>
+    );
   };
 
   return (
@@ -421,8 +606,24 @@ export default function PayoutsPage() {
           <div
             onDrop={handleFileDrop}
             onDragOver={handleFileDragOver}
-            className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-indigo-500 hover:bg-slate-50 transition-colors cursor-pointer"
+            onDragLeave={handleFileDragLeave}
+            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-all duration-200 cursor-pointer ${
+              dragActive
+                ? "border-indigo-500 bg-indigo-50"
+                : "border-slate-300 hover:border-indigo-500 hover:bg-slate-50"
+            }`}
           >
+            {/* Drag overlay indicator */}
+            {dragActive && (
+              <div className="absolute inset-0 bg-indigo-500/10 rounded-lg flex items-center justify-center">
+                <div className="bg-white rounded-full p-3 shadow-lg">
+                  <svg className="h-8 w-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                  </svg>
+                </div>
+              </div>
+            )}
+            
             <input
               type="file"
               accept=".csv"
@@ -430,17 +631,30 @@ export default function PayoutsPage() {
               className="hidden"
               id="csv-upload"
             />
-            <label htmlFor="csv-upload" className="cursor-pointer">
-              <div className="space-y-2">
-                <svg className="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <p className="text-sm text-slate-600">
-                  Drag & drop a CSV file here, or <span className="font-medium text-indigo-600">click to select</span>
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  CSV must have columns: recipient_name, recipient_address, amount, currency
-                </p>
+            <label htmlFor="csv-upload" className="cursor-pointer relative z-10">
+              <div className="space-y-3">
+                <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center ${
+                  dragActive ? "bg-indigo-100" : "bg-slate-100"
+                }`}>
+                  <svg 
+                    className={`h-10 w-10 transition-colors ${
+                      dragActive ? "text-indigo-600" : "text-slate-400"
+                    }`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-600">
+                    <span className="font-semibold text-indigo-600">Click to upload</span> or drag and drop
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    CSV file with columns: recipient_name, recipient_address, amount, currency
+                  </p>
+                </div>
               </div>
             </label>
           </div>
@@ -472,13 +686,32 @@ export default function PayoutsPage() {
         {/* Validation Results Grid */}
         {csvPreview && (
           <div className="space-y-4">
+            {/* Parse Error Logs */}
+            {csvPreview.errors.length > 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-lg overflow-hidden">
+                <div className="bg-red-100 px-4 py-2 border-b border-red-200 flex items-center gap-2">
+                  <svg className="h-4 w-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span className="text-sm font-semibold text-red-800">CSV Parse Errors</span>
+                </div>
+                <div className="p-4">
+                  <ul className="space-y-2">
+                    {csvPreview.errors.map((error, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm text-red-700">
+                        <svg className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        <span>{error}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {/* Summary */}
             <div className="flex items-center gap-4 text-sm">
-              {csvPreview.errors.length > 0 && (
-                <div className="bg-red-50 text-red-700 px-3 py-2 rounded-lg flex-1">
-                  {csvPreview.errors.join(" ")}
-                </div>
-              )}
               {csvPreview.rows.length > 0 && (
                 <div className="flex-1 flex justify-between gap-4">
                   <span className="text-slate-700">
@@ -582,70 +815,51 @@ export default function PayoutsPage() {
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              {["Name", "Created", "Asset", "Payments", "Disbursed", "Status", "Logs"].map((h) => (
-                <th
-                  key={h}
-                  className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide"
-                >
-                  {h}
-                </th>
+              {["ID", "Date", "Amount", "Asset", "Status", "Anchor", "Progress"].map((h) => (
+                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {sdpLoading && disbursements.length === 0 ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i}>
-                  {Array.from({ length: 7 }).map((_, j) => (
-                    <td key={j} className="px-6 py-3">
-                      <div className="h-4 bg-slate-100 rounded animate-pulse" />
-                    </td>
-                  ))}
-                </tr>
+            {loading && payouts.length === 0 ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>{Array.from({ length: 7 }).map((_, j) => (
+                  <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-100 rounded animate-pulse" /></td>
+                ))}</tr>
               ))
-            ) : disbursements.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
-                  No SDP disbursements yet — upload a CSV above to get started
-                </td>
-              </tr>
+            ) : payouts.length === 0 ? (
+              <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">No payouts yet</td></tr>
             ) : (
-              disbursements.map((d) => (
-                <tr key={d.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-3 font-medium text-slate-900 max-w-[180px] truncate">
-                    {d.name}
-                  </td>
-                  <td className="px-6 py-3 text-slate-500 whitespace-nowrap">
-                    {format(new Date(d.created_at), "MMM d, yyyy")}
-                  </td>
-                  <td className="px-6 py-3 text-slate-700">{d.asset_code}</td>
-                  <td className="px-6 py-3 text-slate-600">
-                    <span className="text-emerald-700">{d.successful_payments}✓</span>
-                    {d.failed_payments > 0 && (
-                      <span className="ml-2 text-red-600">{d.failed_payments}✗</span>
-                    )}
-                    <span className="ml-2 text-slate-400">/ {d.total_payments}</span>
-                  </td>
-                  <td className="px-6 py-3 font-medium text-slate-800">
-                    {Number(d.disbursed_amount).toLocaleString()} {d.asset_code}
-                  </td>
-                  <td className="px-6 py-3">
-                    <span
-                      className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${sdpStatusClass(d.status)}`}
-                    >
-                      {d.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3">
-                    <button
-                      onClick={() => setLogsForId(d.id)}
-                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium transition-colors"
-                    >
-                      View logs
-                    </button>
-                  </td>
-                </tr>
-              ))
+              payouts.map((p) => {
+                const batchStatus = batchStatuses[p.id];
+                const isActive = batchStatus && !["completed", "failed"].includes(batchStatus.status);
+                
+                return (
+                  <tr 
+                    key={p.id} 
+                    className={`hover:bg-slate-50 transition-colors ${
+                      isActive ? "bg-blue-50/50" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.id.slice(0, 8)}…</td>
+                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{format(new Date(p.createdAt), "MMM d, yyyy HH:mm")}</td>
+                    <td className="px-4 py-3 font-medium">{(Number(p.amount) / 1_000_000).toFixed(2)}</td>
+                    <td className="px-4 py-3">{p.asset}</td>
+                    <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                    <td className="px-4 py-3 text-slate-400 text-xs">{p.anchorId}</td>
+                    <td className="px-4 py-3">
+                      {isActive ? (
+                        <div className="flex items-center gap-2">
+                          <StatusIndicator status={batchStatus.status} />
+                          <span className="text-xs text-blue-600 animate-pulse">Auto-refreshing...</span>
+                        </div>
+                      ) : (
+                        <StatusIndicator status={mapPayoutStatus(p.status)} />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
