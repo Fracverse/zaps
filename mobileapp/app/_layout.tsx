@@ -4,6 +4,7 @@ import React from "react";
 import { Stack, useRouter, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { View } from "react-native";
+import { PrivyProvider } from "@privy-io/expo-sdk";
 import { COLORS } from "../src/constants/colors";
 import { useFonts } from "expo-font";
 import { Anton_400Regular } from "@expo-google-fonts/anton";
@@ -177,8 +178,16 @@ export default function Layout() {
   }
 
   return (
-    <ErrorBoundary>
-      <LayoutContent />
-    </ErrorBoundary>
+    <PrivyProvider
+      appId={process.env.EXPO_PUBLIC_PRIVY_APP_ID || ""}
+      config={{
+        loginMethods: ["google", "apple", "email"],
+        appearance: { theme: "light" },
+      }}
+    >
+      <ErrorBoundary>
+        <LayoutContent />
+      </ErrorBoundary>
+    </PrivyProvider>
   );
 }

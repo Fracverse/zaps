@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { AuthProvider } from "@/lib/auth-context";
+import { PrivyProvider } from "@privy-io/react-auth";
 
 export const metadata: Metadata = {
   title: "Zaps Merchant Dashboard",
@@ -11,7 +11,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <PrivyProvider
+          appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || ""}
+          config={{
+            loginMethods: ["google", "apple", "email"],
+            appearance: { theme: "light" },
+          }}
+        >
+          {children}
+        </PrivyProvider>
       </body>
     </html>
   );

@@ -12,6 +12,7 @@
     "e2e:report": "playwright show-report"
   },
   "dependencies": {
+    "@privy-io/react-auth": "^1.14.0",
     "@stellar/freighter-api": "6.0.1",
     "@stellar/stellar-sdk": "^15.1.0",
     "@types/qrcode": "^1.5.6",
