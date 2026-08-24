@@ -1,467 +1,505 @@
 "use client";
-import { useState, useMemo, useCallback } from "react";
+
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useDropzone } from "react-dropzone";
+import Papa from "papaparse";
+import { format } from "date-fns";
+import {
+  Upload,
+  FileText,
+  X,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+} from "lucide-react";
 import { usePolling } from "@/lib/use-polling";
 import {
   api,
-  BatchPayout,
-  SdpDisbursement,
-  SdpExecutionLog,
+  type BatchPayout,
+  type BatchRecipient,
+  type Payout,
+  type SdpDisbursement,
 } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
-import { format } from "date-fns";
-import { Upload, FileText, X, RefreshCw, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
 
-// Stellar address validation pattern (starts with G, 56 chars, valid base32)
+// ──────────────────────────────────────────────────────────────────────────────
+// Constants
+// ──────────────────────────────────────────────────────────────────────────────
+
 const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 
-export default function PayoutsPage() {
-  const { data, loading, error, refresh } = usePolling(() => api.payoutHistory(20, 0), 30000);
-  const payouts: Payout[] = data?.payouts ?? [];
+// SDP accepts flexible column sets. We validate against known accepted headers
+// so admins don't have to guess.
+const SDP_HEADER_ALIASES: { canonical: string; accepted: string[] }[] = [
+  { canonical: "phone", accepted: ["phone", "phone_number", "msisdn"] },
+  { canonical: "id", accepted: ["id", "user_id", "identifier"] },
+  { canonical: "amount", accepted: ["amount"] },
+  { canonical: "verification", accepted: ["verification", "verification_code", "code"] },
+  { canonical: "stellar_address", accepted: ["stellar_address", "recipient_address", "destination", "destination_address"] },
+  { canonical: "currency", accepted: ["currency", "asset", "asset_code"] },
+  { canonical: "recipient_name", accepted: ["recipient_name", "name", "recipient"] },
+];
 
-      // Check required headers (flexible — SDP also accepts stellar_address)
-      const hasRequired = REQUIRED_CSV_HEADERS.every((h) => headers.includes(h)) ||
-        (headers.includes("stellar_address") && headers.includes("amount"));
+const REQUIRED_CSV_HEADER_GROUPS: { label: string; required: string[] }[] = [
+  { label: "phone + id + amount + verification", required: ["phone", "id", "amount", "verification"] },
+  { label: "stellar_address + amount", required: ["stellar_address", "amount"] },
+];
 
-  // CSV upload state
-  const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [csvPreview, setCsvPreview] = useState<{ 
-    rows: PayoutRecipient[]; 
-    errors: string[]; 
-    hasInvalidAddresses: boolean 
-  } | null>(null);
-  const [validating, setValidating] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
+// ──────────────────────────────────────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────────────────────────────────────
 
-  interface PayoutRecipient {
-    id: string;
-    recipientName: string;
-    recipientAddress: string;
-    amount: string;
-    currency: string;
-    isValidAddress: boolean;
-    isInRegistry?: boolean;
-    addressError?: string;
-    registryError?: string;
-    status?: "pending" | "dispatched" | "failed" | "completed";
+type PayoutTab = "history" | "batch" | "sdp";
+
+interface ParsedCsvRow {
+  __rowNumber: number;
+  [key: string]: unknown;
+}
+
+interface ValidatedRow {
+  rowNumber: number;
+  raw: ParsedCsvRow;
+  valid: boolean;
+  errors: string[];
+  stellarAddress?: string;
+  amount?: number;
+  currency?: string;
+}
+
+interface ParsedCsvSummary {
+  fileName: string;
+  fileSizeKb: number;
+  headers: string[];
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  headerErrors: string[];
+  amountTotal?: number;
+  currencyCounts: Record<string, number>;
+  addressFoundCount: number;
+  rows: ValidatedRow[];
+}
+
+type ValidationStatus =
+  | { kind: "idle" }
+  | { kind: "parsing" }
+  | { kind: "ok"; summary: ParsedCsvSummary }
+  | { kind: "error"; message: string };
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+function normalizeHeader(raw: string): string {
+  const clean = raw.trim().toLowerCase();
+  for (const group of SDP_HEADER_ALIASES) {
+    if (group.accepted.includes(clean)) return group.canonical;
   }
+  return clean;
+}
 
-  // Batch tracking state for submitted payouts
-  const [batchStatuses, setBatchStatuses] = useState<{
-    [batchId: string]: {
-      status: "pending" | "dispatched" | "failed" | "completed";
-      updatedAt: string;
-    }
-  }>({});
+function buildHeaderMap(rawHeaders: string[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (let i = 0; i < rawHeaders.length; i++) {
+    map.set(normalizeHeader(rawHeaders[i]), i);
+  }
+  return map;
+}
 
-  // Validate Stellar address format
-  const validateStellarAddress = useCallback((address: string): { valid: boolean; error?: string } => {
-    if (!address) {
-      return { valid: false, error: "Address is required" };
+function getCell(row: ParsedCsvRow, column: string): string {
+  const raw = row[column];
+  if (raw === null || raw === undefined) return "";
+  return String(raw).trim();
+}
+
+function detectHeaderErrors(headers: string[]): string[] {
+  const normalized = headers.map(normalizeHeader);
+  const matched = REQUIRED_CSV_HEADER_GROUPS.find((g) =>
+    g.required.every((h) => normalized.includes(h)),
+  );
+  if (matched) return [];
+  const groupStr = REQUIRED_CSV_HEADER_GROUPS.map(
+    (g) => "[" + g.required.join(", ") + "] (" + g.label + ")",
+  ).join(" OR ");
+  return [
+    `Missing required column group. SDP expects any of: ${groupStr}.`,
+    `Headers found: ${headers.join(", ") || "(none)"}`,
+  ];
+}
+
+function validateRows(
+  rows: ParsedCsvRow[],
+  headers: string[],
+): ValidatedRow[] {
+  const headerMap = buildHeaderMap(headers);
+  return rows.map((row) => {
+    const errors: string[] = [];
+    const rowNumber = row.__rowNumber;
+
+    // Figure out which cells are provided
+    const stellarAddress = headerMap.has("stellar_address")
+      ? getCell(row, headers[headerMap.get("stellar_address")!])
+      : "";
+    const phone = headerMap.has("phone")
+      ? getCell(row, headers[headerMap.get("phone")!])
+      : "";
+    const id = headerMap.has("id")
+      ? getCell(row, headers[headerMap.get("id")!])
+      : "";
+    const verification = headerMap.has("verification")
+      ? getCell(row, headers[headerMap.get("verification")!])
+      : "";
+    const amountRaw = headerMap.has("amount")
+      ? getCell(row, headers[headerMap.get("amount")!])
+      : "";
+    const currency = headerMap.has("currency")
+      ? getCell(row, headers[headerMap.get("currency")!]).toUpperCase()
+      : undefined;
+
+    // Mode 1: stellar_address route
+    const hasStellar = !!stellarAddress;
+    // Mode 2: phone/id route
+    const hasPhoneId = !!(phone && id && verification);
+
+    if (!hasStellar && !hasPhoneId) {
+      errors.push(
+        "Row must provide either stellar_address OR (phone + id + verification).",
+      );
     }
-    if (!STELLAR_ADDRESS_REGEX.test(address.trim())) {
-      return { valid: false, error: "Invalid Stellar address format" };
+
+    if (hasStellar && !STELLAR_ADDRESS_REGEX.test(stellarAddress)) {
+      errors.push("stellar_address is not a valid G-address.");
     }
-    return { valid: true };
+
+    const num = Number(amountRaw);
+    if (!amountRaw) {
+      errors.push("amount is required.");
+    } else if (!Number.isFinite(num) || num <= 0) {
+      errors.push("amount must be a positive number.");
+    }
+
+    return {
+      rowNumber,
+      raw: row,
+      valid: errors.length === 0,
+      errors,
+      stellarAddress: stellarAddress || undefined,
+      amount: Number.isFinite(num) && num > 0 ? num : undefined,
+      currency: currency || undefined,
+    };
+  });
+}
+
+function parseCsvFile(file: File): Promise<Papa.ParseResult<ParsedCsvRow>> {
+  return new Promise((resolve, reject) => {
+    Papa.parse<ParsedCsvRow>(file, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (h) => h,
+      complete: (results) => resolve(results),
+      error: (err) => reject(err),
+    });
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sub-components
+// ──────────────────────────────────────────────────────────────────────────────
+
+function LogModal({
+  disbursementId,
+  onClose,
+}: {
+  disbursementId: string;
+  onClose: () => void;
+}) {
+  const { data, loading, error } = usePolling(
+    () => api.sdp.getDisbursementLogs(disbursementId),
+    10000,
+  );
+  const logs = data?.logs ?? [];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Disbursement Logs
+            </h3>
+            <p className="mt-0.5 font-mono text-xs text-slate-500">
+              {disbursementId}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {loading && logs.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400">
+              Loading logs…
+            </div>
+          ) : error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+              {error}
+            </div>
+          ) : logs.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400">
+              No logs recorded yet.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {logs.map((l) => {
+                const tone =
+                  l.level === "error"
+                    ? "border-red-200 bg-red-50"
+                    : l.level === "warning"
+                      ? "border-amber-200 bg-amber-50"
+                      : "border-slate-200 bg-white";
+                return (
+                  <li
+                    key={l.id}
+                    className={`rounded-lg border p-3 text-sm ${tone}`}
+                  >
+                    <div className="mb-1 flex items-center justify-between text-xs">
+                      <span
+                        className={`rounded-full px-2 py-0.5 font-semibold uppercase ${
+                          l.level === "error"
+                            ? "bg-red-200 text-red-900"
+                            : l.level === "warning"
+                              ? "bg-amber-200 text-amber-900"
+                              : "bg-slate-200 text-slate-800"
+                        }`}
+                      >
+                        {l.level}
+                      </span>
+                      <span className="text-slate-500">
+                        {format(new Date(l.created_at), "MMM d, HH:mm:ss")}
+                      </span>
+                    </div>
+                    <p className="text-slate-800">{l.message}</p>
+                    {l.metadata &&
+                      Object.keys(l.metadata as object).length > 0 && (
+                        <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-900 p-2 text-[11px] leading-relaxed text-slate-100">
+                          {JSON.stringify(l.metadata, null, 2)}
+                        </pre>
+                      )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SDP CSV Upload Tab — the focus of this task
+// ──────────────────────────────────────────────────────────────────────────────
+
+function SdpDisbursementTab() {
+  const [
+    disbursements,
+    setDisbursements,
+  ] = useState<SdpDisbursement[] | null>(null);
+  const [disbursementName, setDisbursementName] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [validation, setValidation] = useState<ValidationStatus>({
+    kind: "idle",
+  });
+  const [uploading, setUploading] = useState(false);
+  const [
+    uploadResult,
+    setUploadResult,
+  ] = useState<null | { kind: "success"; disbursement: SdpDisbursement } | {
+    kind: "error";
+    message: string;
+  }>(null);
+  const [logsForId, setLogsForId] = useState<string | null>(null);
+
+  const onDrop = useCallback(
+    async (acceptedFiles: File[]) => {
+      setUploadResult(null);
+      const file = acceptedFiles[0];
+      if (!file) return;
+      setSelectedFile(file);
+      setValidation({ kind: "parsing" });
+
+      try {
+        const parseResult = await parseCsvFile(file);
+        const rawHeaders = (parseResult.meta.fields ?? []) as string[];
+        const headerErrors = detectHeaderErrors(rawHeaders);
+
+        const dataRows: ParsedCsvRow[] = (parseResult.data ?? []).map(
+          (row, idx) => ({
+            ...row,
+            __rowNumber: idx + 2, // +1 for header, +1 for 1-indexed
+          }),
+        );
+
+        const parseErrors: string[] = [
+          ...headerErrors,
+          ...(parseResult.errors ?? []).map(
+            (e) =>
+              `Parse${e.row !== undefined ? ` (row ${e.row + 1})` : ""}: ${e.message}`,
+          ),
+        ];
+
+        const validatedRows =
+          headerErrors.length === 0 ? validateRows(dataRows, rawHeaders) : [];
+
+        const validCount = validatedRows.filter((r) => r.valid).length;
+        const invalidCount = validatedRows.length - validCount;
+
+        const currencyCounts: Record<string, number> = {};
+        let amountTotal = 0;
+        let addressFoundCount = 0;
+        for (const r of validatedRows) {
+          if (!r.valid) continue;
+          if (r.currency) {
+            currencyCounts[r.currency] = (currencyCounts[r.currency] ?? 0) + 1;
+          } else {
+            currencyCounts["(default)"] =
+              (currencyCounts["(default)"] ?? 0) + 1;
+          }
+          if (r.amount !== undefined) amountTotal += r.amount;
+          if (r.stellarAddress) addressFoundCount += 1;
+        }
+
+        const summary: ParsedCsvSummary = {
+          fileName: file.name,
+          fileSizeKb: file.size / 1024,
+          headers: rawHeaders,
+          totalRows: dataRows.length,
+          validRows: validCount,
+          invalidRows: invalidCount,
+          headerErrors: parseErrors,
+          amountTotal: amountTotal > 0 ? amountTotal : undefined,
+          currencyCounts,
+          addressFoundCount,
+          rows: validatedRows,
+        };
+
+        setValidation({ kind: "ok", summary });
+      } catch (err) {
+        setValidation({
+          kind: "error",
+          message:
+            err instanceof Error ? err.message : "Failed to parse CSV file.",
+        });
+      }
+    },
+    [],
+  );
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      "text/csv": [".csv"],
+      "application/vnd.ms-excel": [".csv"],
+    },
+    multiple: false,
+    maxFiles: 1,
+  });
+
+  const clearFile = () => {
+    setSelectedFile(null);
+    setValidation({ kind: "idle" });
+    setUploadResult(null);
+  };
+
+  const refreshSdp = useCallback(async () => {
+    try {
+      const res = await api.sdp.listDisbursements(20, 0);
+      setDisbursements(res.disbursements);
+    } catch {
+      /* silently ignore — stale state is fine */
+    }
   }, []);
 
-  // Parse CSV and validate recipients
-  const parseAndValidateCSV = useCallback(async (file: File) => {
-    setValidating(true);
+  // Initial + periodic SDP listing
+  usePolling(
+    () =>
+      api.sdp.listDisbursements(20, 0).then((res) => {
+        setDisbursements(res.disbursements);
+        return res;
+      }),
+    20000,
+  );
+
+  const summary = validation.kind === "ok" ? validation.summary : null;
+  const submissionAllowed =
+    !!selectedFile &&
+    validation.kind === "ok" &&
+    summary &&
+    summary.headerErrors.length === 0 &&
+    summary.invalidRows === 0;
+
+  const handleUpload = async () => {
+    if (!selectedFile || !submissionAllowed) return;
+    setUploading(true);
+    setUploadResult(null);
+    const name =
+      disbursementName.trim() ||
+      `${fileBasename(selectedFile.name)}-${Date.now()}`;
     try {
-      const text = await file.text();
-      const lines = text.trim().split(/\r?\n/);
-      const errors: string[] = [];
-      const rows: PayoutRecipient[] = [];
-
-      if (lines.length < 2) {
-        errors.push("CSV must contain a header row and at least one data row.");
-        setCsvPreview({ rows: [], errors, hasInvalidAddresses: false });
-        setValidating(false);
-        return;
-      }
-
-      // Check headers
-      const headerLine = lines[0].toLowerCase().trim();
-      const headers = headerLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
-      
-      const expectedHeaders = ["recipient_name", "recipient_address", "amount", "currency"];
-      const missingHeaders = expectedHeaders.filter(h => !headers.includes(h));
-      
-      if (missingHeaders.length > 0) {
-        errors.push(`Missing required columns: ${missingHeaders.join(", ")}`);
-        setCsvPreview({ rows: [], errors, hasInvalidAddresses: false });
-        setValidating(false);
-        return;
-      }
-
-      const nameIdx = headers.indexOf("recipient_name");
-      const addrIdx = headers.indexOf("recipient_address");
-      const amtIdx = headers.indexOf("amount");
-      const curIdx = headers.indexOf("currency");
-
-      // Collect all addresses for registry lookup
-      const addressesToCheck: string[] = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const row = lines[i].trim();
-        if (!row) continue;
-
-        const cols = row.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-        const name = cols[nameIdx] || "";
-        const address = (cols[addrIdx] || "").trim();
-        const amount = cols[amtIdx] || "";
-        const currency = (cols[curIdx] || "").toUpperCase();
-
-        const rowErrors: string[] = [];
-        const isValidAddress = validateStellarAddress(address);
-
-        let isInRegistry = undefined;
-        let registryError = undefined;
-
-        if (isValidAddress.valid) {
-          addressesToCheck.push(address);
-        }
-
-        if (!name) rowErrors.push("Name is required");
-        if (!amount) rowErrors.push("Amount is required");
-        else if (isNaN(Number(amount)) || Number(amount) <= 0) rowErrors.push("Amount must be a positive number");
-        if (!currency) rowErrors.push("Currency is required");
-
-        rows.push({
-          id: `item-${i}`,
-          recipientName: name,
-          recipientAddress: address,
-          amount,
-          currency,
-          isValidAddress: isValidAddress.valid,
-          addressError: isValidAddress.error,
-          registryError,
-          isInRegistry
-        });
-      }
-
-      // Batch check registry for valid addresses
-      if (addressesToCheck.length > 0) {
-        try {
-          const uniqueAddresses = [...new Set(addressesToCheck)];
-          const registryChecks = await Promise.all(
-            uniqueAddresses.map(async (addr) => {
-              try {
-                const results = await api.searchUsers("");
-                // Check if any user has this address (we'll do a simpler check)
-                return { address: addr, found: false };
-              } catch {
-                return { address: addr, found: false };
-              }
-            })
-          );
-          
-          // Update rows with registry status
-          rows.forEach(row => {
-            if (row.isValidAddress) {
-              const check = registryChecks.find(c => c.address === row.recipientAddress);
-              row.isInRegistry = check?.found ?? false;
-            }
-          });
-        } catch (registryError) {
-          console.warn("Registry check failed:", registryError);
-          // Continue without registry validation
-        }
-      }
-
-      const hasInvalidAddresses = rows.some(r => !r.isValidAddress || !r.isInRegistry);
-      
-      setCsvPreview({ rows, errors, hasInvalidAddresses });
-      setCsvFile(file);
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : "Failed to parse CSV");
-      setCsvPreview({ rows: [], errors, hasInvalidAddresses: false });
-    }
-    setValidating(false);
-  }, [validateStellarAddress]);
-
-  // Handle file selection
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type === "text/csv") {
-      parseAndValidateCSV(file);
-    } else if (file) {
-      setMsg({ type: "err", text: "Please select a valid CSV file" });
-    }
-  };
-
-  // Remove file
-  const handleRemoveFile = () => {
-    setCsvFile(null);
-    setCsvPreview(null);
-    setMsg(null);
-  };
-
-  // Check registry for all addresses in preview
-  const checkRegistry = async () => {
-    if (!csvPreview || csvPreview.rows.length === 0) return;
-    
-    setValidating(true);
-    try {
-      const validAddresses = csvPreview.rows
-        .filter(r => r.isValidAddress && !r.isInRegistry)
-        .map(r => r.recipientAddress);
-      
-      if (validAddresses.length > 0) {
-        // For each valid address, check registry
-        const updatedRows = [...csvPreview.rows];
-        for (const row of updatedRows) {
-          if (row.isValidAddress && !row.isInRegistry) {
-            try {
-              // Use searchUsers API with empty query to get users
-              // In practice, we'd want a bulk lookup endpoint
-              // For now, we'll mark as "to be verified"
-              row.isInRegistry = true; // Assume valid if address format is correct
-            } catch {
-              row.isInRegistry = false;
-              row.registryError = "Address not found in registry";
-            }
-          }
-        }
-        setCsvPreview({
-          rows: updatedRows,
-          errors: csvPreview.errors,
-          hasInvalidAddresses: updatedRows.some(r => !r.isValidAddress || !r.isInRegistry)
-        });
-      }
-    } finally {
-      setValidating(false);
-    }
-  };
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setMsg(null);
-    
-    try {
-      const disbursement = await api.sdp.uploadDisbursementCSV(selectedFile, name);
+      const disbursement = await api.sdp.uploadDisbursementCSV(
+        selectedFile,
+        name,
+      );
       setUploadResult({ kind: "success", disbursement });
-      setSelectedFile(null);
-      setValidation(null);
+      clearFile();
       setDisbursementName("");
-      refreshSdp();
+      await refreshSdp();
     } catch (err) {
       setUploadResult({
         kind: "error",
-        message: err instanceof Error ? err.message : "Upload failed",
+        message: err instanceof Error ? err.message : "Upload failed.",
       });
     } finally {
       setUploading(false);
     }
   };
 
-  const handleFileDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      if (file.type === "text/csv" || file.name.endsWith(".csv")) {
-        parseAndValidateCSV(file);
-      } else {
-        setMsg({ type: "err", text: "Please upload a valid CSV file (.csv)" });
-      }
-    }
-  };
-
-  const handleFileDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(true);
-  };
-
-  const handleFileDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-  };
-
-  // Auto-refresh batch statuses for active disbursements
-  const { data: batchData, loading: batchLoading } = usePolling(
-    useCallback(async () => {
-      const activeBatchIds = Object.keys(batchStatuses).filter(
-        (id) => !["completed", "failed"].includes(batchStatuses[id]?.status ?? "")
-      );
-      if (activeBatchIds.length === 0) return null;
-
-      // Fetch status for active batches
-      const statuses: {
-        [batchId: string]: {
-          status: "pending" | "dispatched" | "failed" | "completed";
-          updatedAt: string;
-        }
-      } = {};
-
-      for (const batchId of activeBatchIds) {
-        try {
-          const payout = payouts.find((p) => p.id === batchId);
-          if (payout) {
-            statuses[batchId] = {
-              status: mapPayoutStatus(payout.status),
-              updatedAt: payout.createdAt,
-            };
-          }
-        } catch {
-          // Continue on error
-        }
-      }
-      return statuses;
-    }, [batchStatuses, payouts]),
-    10000 // Poll every 10 seconds
-  );
-
-  // Update batch statuses when new data arrives
-  useMemo(() => {
-    if (batchData) {
-      setBatchStatuses((prev) => ({ ...prev, ...batchData }));
-    }
-  }, [batchData]);
-
-  // Map API status to our tracking status
-  const mapPayoutStatus = (status: string): "pending" | "dispatched" | "failed" | "completed" => {
-    switch (status.toLowerCase()) {
-      case "pending":
-      case "processing":
-        return "pending";
-      case "dispatched":
-      case "sent":
-      case "completed":
-        return "dispatched";
-      case "failed":
-      case "error":
-        return "failed";
-      default:
-        return "pending";
-    }
-  };
-
-  // Status badge component for batch rows
-  const StatusIndicator = ({ status }: { status?: string }) => {
-    if (!status) return null;
-    
-    const statusConfig = {
-      pending: { color: "bg-yellow-100 text-yellow-800", icon: "⏳", label: "Pending" },
-      dispatched: { color: "bg-indigo-100 text-indigo-800", icon: "📤", label: "Dispatched" },
-      failed: { color: "bg-red-100 text-red-800", icon: "❌", label: "Failed" },
-      completed: { color: "bg-green-100 text-green-800", icon: "✅", label: "Completed" },
-    };
-    
-    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
-    
-    return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
-        <span className="mr-1">{config.icon}</span>
-        {config.label}
-      </span>
-    );
-  };
-
-  // Auto-refresh batch statuses for active disbursements
-  const { data: batchData, loading: batchLoading } = usePolling(
-    useCallback(async () => {
-      const activeBatchIds = Object.keys(batchStatuses).filter(
-        (id) => !["completed", "failed"].includes(batchStatuses[id]?.status ?? "")
-      );
-      if (activeBatchIds.length === 0) return null;
-
-      // Fetch status for active batches
-      const statuses: {
-        [batchId: string]: {
-          status: "pending" | "dispatched" | "failed" | "completed";
-          updatedAt: string;
-        }
-      } = {};
-
-      for (const batchId of activeBatchIds) {
-        try {
-          const payout = payouts.find((p) => p.id === batchId);
-          if (payout) {
-            statuses[batchId] = {
-              status: mapPayoutStatus(payout.status),
-              updatedAt: payout.createdAt,
-            };
-          }
-        } catch {
-          // Continue on error
-        }
-      }
-      return statuses;
-    }, [batchStatuses, payouts]),
-    10000 // Poll every 10 seconds
-  );
-
-  // Update batch statuses when new data arrives
-  useMemo(() => {
-    if (batchData) {
-      setBatchStatuses((prev) => ({ ...prev, ...batchData }));
-    }
-  }, [batchData]);
-
-  // Map API status to our tracking status
-  const mapPayoutStatus = (status: string): "pending" | "dispatched" | "failed" | "completed" => {
-    switch (status.toLowerCase()) {
-      case "pending":
-      case "processing":
-        return "pending";
-      case "dispatched":
-      case "sent":
-      case "completed":
-        return "dispatched";
-      case "failed":
-      case "error":
-        return "failed";
-      default:
-        return "pending";
-    }
-  };
-
-  // Status badge component for batch rows
-  const StatusIndicator = ({ status }: { status?: string }) => {
-    if (!status) return null;
-    
-    const statusConfig = {
-      pending: { color: "bg-yellow-100 text-yellow-800", icon: "⏳", label: "Pending" },
-      dispatched: { color: "bg-indigo-100 text-indigo-800", icon: "📤", label: "Dispatched" },
-      failed: { color: "bg-red-100 text-red-800", icon: "❌", label: "Failed" },
-      completed: { color: "bg-green-100 text-green-800", icon: "✅", label: "Completed" },
-    };
-    
-    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.pending;
-    
-    return (
-      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
-        <span className="mr-1">{config.icon}</span>
-        {config.label}
-      </span>
-    );
-  };
-
   return (
-    <div className="space-y-6">
-      {/* CSV Upload Card */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-6">
-        <div className="flex items-center gap-2 mb-1">
+    <div className="space-y-8">
+      {/* ── Upload Card ───────────────────────────────────────────────────── */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mb-1 flex items-center gap-2">
           <Upload size={18} className="text-indigo-600" />
-          <h2 className="font-semibold text-slate-800">Upload SDP Disbursement CSV</h2>
+          <h2 className="font-semibold text-slate-800">
+            Upload SDP Disbursement CSV
+          </h2>
         </div>
-        <p className="text-xs text-slate-500 mb-5">
-          Transmit a batch CSV to the Stellar Disbursement Platform backend. The
-          request is authorised using your admin Bearer token and the
-          <code className="mx-1 px-1 bg-slate-100 rounded text-slate-700">SDP-Admin-Token</code>
-          credential.
+        <p className="mb-5 text-xs text-slate-500">
+          Drop a CSV file to validate recipients, amounts, and addresses before
+          sending to the Stellar Disbursement Platform.
+          <code className="mx-1 rounded bg-slate-100 px-1 text-slate-700">
+            SDP-Admin-Token
+          </code>
+          and admin Bearer auth are applied automatically.
         </p>
 
-        {/* Disbursement name */}
         <div className="mb-4">
-          <label htmlFor="sdp-disbursement-name" className="block text-xs font-medium text-slate-600 mb-1">
-            Disbursement name (optional)
+          <label
+            htmlFor="sdp-disbursement-name"
+            className="mb-1 block text-xs font-medium text-slate-600"
+          >
+            Disbursement name{" "}
+            <span className="text-slate-400">(optional)</span>
           </label>
           <input
             id="sdp-disbursement-name"
@@ -469,114 +507,284 @@ export default function PayoutsPage() {
             placeholder={`Batch-${new Date().toISOString().slice(0, 10)}`}
             value={disbursementName}
             onChange={(e) => setDisbursementName(e.target.value)}
-            className="w-full max-w-xs border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
         </div>
 
-        {/* Drop Zone */}
+        {/* react-dropzone drop zone */}
         <div
-          onDrop={handleDrop}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onClick={() => fileInputRef.current?.click()}
-          className={`cursor-pointer border-2 border-dashed rounded-xl p-8 text-center transition-all ${
-            dragOver
+          {...getRootProps()}
+          className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${
+            isDragActive
               ? "border-indigo-500 bg-indigo-50"
               : selectedFile
-              ? "border-emerald-400 bg-emerald-50"
-              : "border-slate-300 hover:border-indigo-400 hover:bg-slate-50"
+                ? "border-emerald-400 bg-emerald-50"
+                : "border-slate-300 hover:border-indigo-400 hover:bg-slate-50"
           }`}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv"
-            className="hidden"
-            onChange={handleFileInput}
-            id="sdp-csv-file-input"
-          />
+          <input {...getInputProps()} />
           {selectedFile ? (
             <div className="flex flex-col items-center gap-2">
               <FileText size={32} className="text-emerald-600" />
-              <p className="text-sm font-medium text-slate-700">{selectedFile.name}</p>
+              <p className="text-sm font-medium text-slate-700">
+                {selectedFile.name}
+              </p>
               <p className="text-xs text-slate-500">
                 {(selectedFile.size / 1024).toFixed(1)} KB
               </p>
+              {isDragActive && (
+                <p className="text-xs text-indigo-700 font-medium">
+                  Drop to replace…
+                </p>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center gap-2">
               <Upload size={32} className="text-slate-400" />
               <p className="text-sm text-slate-600">
-                <span className="font-medium text-indigo-600">Browse</span> or drag &amp; drop a CSV file
+                <span className="font-medium text-indigo-600">Browse</span> or
+                drag &amp; drop a CSV file
               </p>
               <p className="text-xs text-slate-400">
-                Expected columns: phone, id, amount, verification — or stellar_address + amount
+                Required columns:
+                <span className="mx-1 font-mono">
+                  stellar_address, amount
+                </span>
+                OR
+                <span className="mx-1 font-mono">
+                  phone, id, amount, verification
+                </span>
               </p>
             </div>
           )}
         </div>
 
-        {/* Validation feedback */}
-        {validation && (
-          <div
-            className={`mt-3 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${
-              validation.ok
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-red-200 bg-red-50 text-red-700"
-            }`}
-          >
-            {validation.ok ? (
-              <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+        {/* ── Validation summary (parsing state, error, or detail) ──────── */}
+        {validation.kind === "parsing" && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
+            <RefreshCw size={16} className="mt-0.5 shrink-0 animate-spin" />
+            <span>Parsing CSV with PapaParse…</span>
+          </div>
+        )}
+
+        {validation.kind === "error" && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <span>{validation.message}</span>
+          </div>
+        )}
+
+        {validation.kind === "ok" && summary && (
+          <div className="mt-4 space-y-4">
+            {/* ── Stat cards ──────────────────────────────────────────── */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatTile label="Rows parsed" value={summary.totalRows.toString()} tone="slate" />
+              <StatTile
+                label="Valid"
+                value={summary.validRows.toString()}
+                tone={summary.invalidRows === 0 ? "emerald" : "slate"}
+              />
+              <StatTile
+                label="Invalid"
+                value={summary.invalidRows.toString()}
+                tone={summary.invalidRows > 0 ? "red" : "slate"}
+              />
+              <StatTile
+                label="Currency groups"
+                value={Object.keys(summary.currencyCounts).length.toString()}
+                tone="indigo"
+              />
+            </div>
+
+            {/* ── Header validation banner ───────────────────────────── */}
+            {summary.headerErrors.length > 0 ? (
+              <Banner
+                tone="error"
+                icon={<AlertTriangle size={16} />}
+                title="CSV header validation failed"
+                lines={summary.headerErrors}
+              />
+            ) : summary.invalidRows > 0 ? (
+              <Banner
+                tone="warning"
+                icon={<AlertTriangle size={16} />}
+                title={`${summary.invalidRows} row(s) have validation issues — fix before submitting`}
+                lines={[
+                  `Review the rows table below. ${summary.validRows} of ${summary.totalRows} rows are valid.`,
+                ]}
+              />
             ) : (
-              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <Banner
+                tone="success"
+                icon={<CheckCircle2 size={16} />}
+                title={`${summary.validRows} recipient row(s) ready for upload`}
+                lines={[
+                  summary.amountTotal !== undefined
+                    ? `Total amount across valid rows: ${summary.amountTotal.toLocaleString()} (currency counts: ${Object.entries(summary.currencyCounts).map(([k, v]) => `${k} × ${v}`).join(", ")})`
+                    : "Amounts parsed successfully.",
+                  summary.addressFoundCount > 0
+                    ? `${summary.addressFoundCount} row(s) target Stellar addresses directly.`
+                    : "Rows target phone/id route (phone + id + verification).",
+                ]}
+              />
             )}
-            <span>
-              {validation.ok
-                ? `CSV validated — ${validation.rowCount} recipient row(s) ready for upload`
-                : validation.error}
-            </span>
+
+            {/* ── Invalid preview (if any) ───────────────────────────── */}
+            {summary.rows.some((r) => !r.valid) && (
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Validation issues ({summary.invalidRows} rows)
+                  </h3>
+                </div>
+                <div className="max-h-72 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Row
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Target
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Amount
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Errors
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {summary.rows
+                        .filter((r) => !r.valid)
+                        .slice(0, 100)
+                        .map((r) => (
+                          <tr key={r.rowNumber} className="bg-red-50/40">
+                            <td className="px-3 py-2 font-mono text-slate-500">
+                              #{r.rowNumber}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
+                              {r.stellarAddress ??
+                                (r.raw as any).phone ??
+                                (r.raw as any).id ??
+                                "—"}
+                            </td>
+                            <td className="px-3 py-2 text-slate-700">
+                              {r.amount !== undefined
+                                ? r.amount.toString()
+                                : (r.raw as any).amount ?? "—"}
+                            </td>
+                            <td className="px-3 py-2">
+                              <ul className="list-disc pl-4 space-y-0.5 text-red-700">
+                                {r.errors.map((e, idx) => (
+                                  <li key={idx}>{e}</li>
+                                ))}
+                              </ul>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* ── Valid rows summary table ───────────────────────────── */}
+            {summary.rows.some((r) => r.valid) && (
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Valid rows ({summary.validRows})
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    Showing first{" "}
+                    {Math.min(summary.validRows, 50).toString()}
+                  </span>
+                </div>
+                <div className="max-h-64 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Row
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Destination
+                        </th>
+                        <th className="px-3 py-2 text-right font-semibold">
+                          Amount
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Currency
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {summary.rows
+                        .filter((r) => r.valid)
+                        .slice(0, 50)
+                        .map((r) => (
+                          <tr key={r.rowNumber}>
+                            <td className="px-3 py-2 font-mono text-slate-500">
+                              #{r.rowNumber}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
+                              {r.stellarAddress ??
+                                (r.raw as any).phone ??
+                                (r.raw as any).id ??
+                                "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right font-medium text-slate-800">
+                              {r.amount?.toLocaleString() ?? "—"}
+                            </td>
+                            <td className="px-3 py-2 text-slate-700">
+                              {r.currency ?? "—"}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {/* Upload result */}
-        {uploadResult && (
-          <div
-            className={`mt-3 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${
-              uploadResult.kind === "success"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-red-200 bg-red-50 text-red-700"
-            }`}
-          >
-            {uploadResult.kind === "success" ? (
-              <>
-                <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-                <span>
-                  Disbursement <strong>{uploadResult.disbursement.name}</strong> created
-                  (ID: {uploadResult.disbursement.id.slice(0, 8)}…) with status{" "}
-                  <strong>{uploadResult.disbursement.status}</strong>
-                </span>
-              </>
-            ) : (
-              <>
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                <span>{uploadResult.message}</span>
-              </>
-            )}
+        {uploadResult?.kind === "success" && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <p className="font-semibold">Disbursement created</p>
+              <p>
+                <strong>{uploadResult.disbursement.name}</strong> ·{" "}
+                <code>{uploadResult.disbursement.id.slice(0, 12)}…</code> ·
+                status:{" "}
+                <strong>{uploadResult.disbursement.status}</strong>
+              </p>
+            </div>
+          </div>
+        )}
+        {uploadResult?.kind === "error" && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <span>{uploadResult.message}</span>
           </div>
         )}
 
         {/* Actions */}
-        <div className="mt-4 flex gap-3">
+        <div className="mt-5 flex flex-wrap items-center gap-3">
           <button
             id="sdp-upload-submit"
             onClick={handleUpload}
-            disabled={!selectedFile || !validation?.ok || uploading}
-            className="flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            disabled={!submissionAllowed || uploading}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {uploading ? (
               <>
                 <RefreshCw size={14} className="animate-spin" />
-                Uploading…
+                Submitting to SDP…
               </>
             ) : (
               <>
@@ -588,294 +796,224 @@ export default function PayoutsPage() {
           {selectedFile && (
             <button
               onClick={clearFile}
-              className="flex items-center gap-2 px-4 py-2 border border-slate-300 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
             >
               <X size={14} />
               Clear
             </button>
           )}
+          {!submissionAllowed &&
+            validation.kind === "ok" &&
+            summary &&
+            (summary.headerErrors.length > 0 || summary.invalidRows > 0) && (
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                <Info size={12} />
+                Fix validation issues before submission
+              </span>
+            )}
         </div>
-      </div>
+      </section>
 
-      {/* CSV Upload and Validation Grid */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 mb-6 shadow-sm">
-        <h2 className="font-semibold text-slate-800 mb-4">Batch Recipient Validation</h2>
-        
-        {/* File Upload Area */}
-        {!csvFile ? (
-          <div
-            onDrop={handleFileDrop}
-            onDragOver={handleFileDragOver}
-            onDragLeave={handleFileDragLeave}
-            className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-all duration-200 cursor-pointer ${
-              dragActive
-                ? "border-indigo-500 bg-indigo-50"
-                : "border-slate-300 hover:border-indigo-500 hover:bg-slate-50"
-            }`}
+      {/* ── Recent SDP Disbursements ─────────────────────────────────────── */}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="font-semibold text-slate-800">
+            Recent SDP Disbursements
+          </h2>
+          <button
+            onClick={refreshSdp}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
           >
-            {/* Drag overlay indicator */}
-            {dragActive && (
-              <div className="absolute inset-0 bg-indigo-500/10 rounded-lg flex items-center justify-center">
-                <div className="bg-white rounded-full p-3 shadow-lg">
-                  <svg className="h-8 w-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                </div>
-              </div>
-            )}
-            
-            <input
-              type="file"
-              accept=".csv"
-              onChange={handleFileChange}
-              className="hidden"
-              id="csv-upload"
-            />
-            <label htmlFor="csv-upload" className="cursor-pointer relative z-10">
-              <div className="space-y-3">
-                <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center ${
-                  dragActive ? "bg-indigo-100" : "bg-slate-100"
-                }`}>
-                  <svg 
-                    className={`h-10 w-10 transition-colors ${
-                      dragActive ? "text-indigo-600" : "text-slate-400"
-                    }`} 
-                    fill="none" 
-                    stroke="currentColor" 
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-sm text-slate-600">
-                    <span className="font-semibold text-indigo-600">Click to upload</span> or drag and drop
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    CSV file with columns: recipient_name, recipient_address, amount, currency
-                  </p>
-                </div>
-              </div>
-            </label>
-          </div>
-        ) : (
-          <div className="bg-slate-50 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <svg className="h-8 w-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <div>
-                  <p className="font-medium text-slate-900">{csvFile.name}</p>
-                  <p className="text-sm text-slate-500">{(csvFile.size / 1024).toFixed(2)} KB</p>
-                </div>
-              </div>
-              <button
-                onClick={handleRemoveFile}
-                className="text-red-600 hover:text-red-800 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                title="Remove file"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Validation Results Grid */}
-        {csvPreview && (
-          <div className="space-y-4">
-            {/* Parse Error Logs */}
-            {csvPreview.errors.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg overflow-hidden">
-                <div className="bg-red-100 px-4 py-2 border-b border-red-200 flex items-center gap-2">
-                  <svg className="h-4 w-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <span className="text-sm font-semibold text-red-800">CSV Parse Errors</span>
-                </div>
-                <div className="p-4">
-                  <ul className="space-y-2">
-                    {csvPreview.errors.map((error, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-sm text-red-700">
-                        <svg className="h-4 w-4 mt-0.5 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                        <span>{error}</span>
-                      </li>
+            <RefreshCw size={12} />
+            Refresh
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                {["Name", "Status", "Asset", "Payments", "Amount", "Created"].map(
+                  (h) => (
+                    <th
+                      key={h}
+                      className="px-6 py-3 text-left font-semibold"
+                    >
+                      {h}
+                    </th>
+                  ),
+                )}
+                <th className="px-6 py-3 text-right font-semibold">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {!disbursements ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 7 }).map((_, j) => (
+                      <td key={j} className="px-6 py-3">
+                        <div className="h-4 animate-pulse rounded bg-slate-100" />
+                      </td>
                     ))}
-                  </ul>
-                </div>
-              </div>
-            )}
-
-            {/* Summary */}
-            <div className="flex items-center gap-4 text-sm">
-              {csvPreview.rows.length > 0 && (
-                <div className="flex-1 flex justify-between gap-4">
-                  <span className="text-slate-700">
-                    <strong className="font-semibold">{csvPreview.rows.length}</strong> recipients found
-                  </span>
-                  <span className="text-slate-700">
-                    <strong className={csvPreview.hasInvalidAddresses ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
-                      {csvPreview.rows.filter(r => r.isValidAddress && r.isInRegistry).length}
-                    </strong> valid
-                  </span>
-                  <span className="text-slate-700">
-                    <strong className={csvPreview.hasInvalidAddresses ? "text-red-600 font-semibold" : "text-green-600 font-semibold"}>
-                      {csvPreview.rows.filter(r => !r.isValidAddress || !r.isInRegistry).length}
-                    </strong> issues
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {/* Validation Warning */}
-            {csvPreview.hasInvalidAddresses && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
-                <p className="font-semibold mb-1">⚠️ Validation issues found</p>
-                <p>Some addresses are invalid or not registered. Please review and fix before submitting.</p>
-                {csvPreview.rows.some(r => !r.isValidAddress) && (
-                  <p className="mt-1">• Invalid Stellar address format</p>
-                )}
-                {csvPreview.rows.some(r => !r.isInRegistry) && (
-                  <p className="mt-1">• Addresses not found in registry</p>
-                )}
-                <button
-                  onClick={checkRegistry}
-                  disabled={validating}
-                  className="mt-2 text-amber-700 hover:text-amber-900 font-medium text-xs"
-                >
-                  {validating ? "Checking registry…" : "Check registry for all addresses"}
-                </button>
-              </div>
-            )}
-
-            {/* Recipients Table */}
-            {csvPreview.rows.length > 0 && (
-              <div className="border border-slate-200 rounded-lg overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Name</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Address</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Amount</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Currency</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                      {csvPreview.rows.map((row, idx) => (
-                        <tr 
-                          key={row.id} 
-                          className={`
-                            ${!row.isValidAddress ? "bg-red-50" : ""} 
-                            ${!row.isInRegistry && row.isValidAddress ? "bg-amber-50" : ""}
-                            hover:bg-slate-50 transition-colors
-                          `}
-                        >
-                          <td className="px-4 py-3 text-slate-700">{row.recipientName}</td>
-                          <td className={`px-4 py-3 font-mono text-xs ${!row.isValidAddress ? "text-red-700" : !row.isInRegistry ? "text-amber-700" : "text-slate-700"}`}>
-                            {row.recipientAddress}
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">{row.amount}</td>
-                          <td className="px-4 py-3 text-slate-700">{row.currency}</td>
-                          <td className="px-4 py-3">
-                            {!row.isValidAddress ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                Invalid address
-                              </span>
-                            ) : !row.isInRegistry ? (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                                Not in registry
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                Valid
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* History */}
-      <h2 className="font-semibold text-slate-800 mb-3">Payout History</h2>
-      {error && <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b border-slate-200">
-            <tr>
-              {["ID", "Date", "Amount", "Asset", "Status", "Anchor", "Progress"].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {loading && payouts.length === 0 ? (
-              Array.from({ length: 5 }).map((_, i) => (
-                <tr key={i}>{Array.from({ length: 7 }).map((_, j) => (
-                  <td key={j} className="px-4 py-3"><div className="h-4 bg-slate-100 rounded animate-pulse" /></td>
-                ))}</tr>
-              ))
-            ) : payouts.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">No payouts yet</td></tr>
-            ) : (
-              payouts.map((p) => {
-                const batchStatus = batchStatuses[p.id];
-                const isActive = batchStatus && !["completed", "failed"].includes(batchStatus.status);
-                
-                return (
-                  <tr 
-                    key={p.id} 
-                    className={`hover:bg-slate-50 transition-colors ${
-                      isActive ? "bg-blue-50/50" : ""
-                    }`}
+                  </tr>
+                ))
+              ) : disbursements.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-6 py-10 text-center text-slate-400"
                   >
-                    <td className="px-4 py-3 font-mono text-xs text-slate-500">{p.id.slice(0, 8)}…</td>
-                    <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{format(new Date(p.createdAt), "MMM d, yyyy HH:mm")}</td>
-                    <td className="px-4 py-3 font-medium">{(Number(p.amount) / 1_000_000).toFixed(2)}</td>
-                    <td className="px-4 py-3">{p.asset}</td>
-                    <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
-                    <td className="px-4 py-3 text-slate-400 text-xs">{p.anchorId}</td>
-                    <td className="px-4 py-3">
-                      {isActive ? (
-                        <div className="flex items-center gap-2">
-                          <StatusIndicator status={batchStatus.status} />
-                          <span className="text-xs text-blue-600 animate-pulse">Auto-refreshing...</span>
-                        </div>
-                      ) : (
-                        <StatusIndicator status={mapPayoutStatus(p.status)} />
+                    No SDP disbursements yet — upload a CSV above to create one.
+                  </td>
+                </tr>
+              ) : (
+                disbursements.map((d) => (
+                  <tr key={d.id} className="hover:bg-slate-50">
+                    <td className="px-6 py-3">
+                      <div className="font-medium text-slate-800">{d.name}</div>
+                      <div className="font-mono text-[11px] text-slate-500">
+                        {d.id.slice(0, 12)}…
+                      </div>
+                    </td>
+                    <td className="px-6 py-3">
+                      <StatusBadge status={d.status.toLowerCase()} />
+                    </td>
+                    <td className="px-6 py-3 text-slate-700">
+                      {d.asset_code}
+                      {d.asset_issuer && (
+                        <span className="ml-1 font-mono text-[11px] text-slate-400">
+                          {d.asset_issuer.slice(0, 6)}…
+                        </span>
                       )}
                     </td>
+                    <td className="px-6 py-3 text-slate-700">
+                      <div>
+                        <span className="font-medium">
+                          {d.successful_payments}
+                        </span>{" "}
+                        <span className="text-slate-400">ok</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {d.total_payments} total · {d.failed_payments} failed ·{" "}
+                        {d.cancelled_payments} cancelled
+                      </div>
+                    </td>
+                    <td className="px-6 py-3 text-slate-700">
+                      <div className="font-medium">
+                        {Number(d.disbursed_amount).toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        of {Number(d.total_amount).toLocaleString()}
+                      </div>
+                    </td>
+                    <td className="px-6 py-3 whitespace-nowrap text-slate-600">
+                      {format(new Date(d.created_at), "MMM d, yyyy HH:mm")}
+                    </td>
+                    <td className="px-6 py-3 text-right">
+                      <button
+                        onClick={() => setLogsForId(d.id)}
+                        className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                      >
+                        Logs
+                      </button>
+                    </td>
                   </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-      {/* Log modal */}
       {logsForId && (
-        <LogModal disbursementId={logsForId} onClose={() => setLogsForId(null)} />
+        <LogModal
+          disbursementId={logsForId}
+          onClose={() => setLogsForId(null)}
+        />
       )}
     </div>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────────────
+// Small stat + banner components (kept local to this file — no need to hoist)
+// ──────────────────────────────────────────────────────────────────────────────
+
+function StatTile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "slate" | "emerald" | "red" | "indigo";
+}) {
+  const toneClasses = {
+    slate: "border-slate-200 bg-white",
+    emerald: "border-emerald-200 bg-emerald-50",
+    red: "border-red-200 bg-red-50",
+    indigo: "border-indigo-200 bg-indigo-50",
+  }[tone];
+  const valueClasses = {
+    slate: "text-slate-800",
+    emerald: "text-emerald-700",
+    red: "text-red-700",
+    indigo: "text-indigo-700",
+  }[tone];
+  return (
+    <div className={`rounded-xl border p-3 ${toneClasses}`}>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className={`mt-1 text-2xl font-bold ${valueClasses}`}>{value}</div>
+    </div>
+  );
+}
+
+function Banner({
+  tone,
+  icon,
+  title,
+  lines,
+}: {
+  tone: "success" | "warning" | "error" | "info";
+  icon: React.ReactNode;
+  title: string;
+  lines: string[];
+}) {
+  const toneClasses = {
+    success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    warning: "border-amber-200 bg-amber-50 text-amber-800",
+    error: "border-red-200 bg-red-50 text-red-800",
+    info: "border-indigo-200 bg-indigo-50 text-indigo-800",
+  }[tone];
+  return (
+    <div className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${toneClasses}`}>
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <div>
+        <p className="font-semibold">{title}</p>
+        {lines.length > 0 && (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sm opacity-90">
+            {lines.map((l, idx) => (
+              <li key={idx}>{l}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function fileBasename(name: string): string {
+  const idx = name.lastIndexOf(".");
+  return idx > 0 ? name.slice(0, idx) : name;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Main page
+// ──────────────────────────────────────────────────────────────────────────────
+
 export default function PayoutsPage() {
-  const [activeTab, setActiveTab] = useState<"history" | "batch" | "sdp">("history");
+  const [activeTab, setActiveTab] = useState<PayoutTab>("history");
   const [selectedBatch, setSelectedBatch] = useState<string | null>(null);
 
   // Batch payout history
@@ -892,8 +1030,8 @@ export default function PayoutsPage() {
     loading: payoutLoading,
     error: payoutError,
     refresh: refreshPayouts,
-  } = usePolling(() => api.payoutHistory(20, 0), 30000);
-  const payouts = payoutData?.payouts ?? [];
+  } = usePolling<Payout>(() => api.payoutHistory(20, 0) as any, 30000);
+  const payouts = (payoutData as any)?.payouts ?? [];
 
   // Batch details — only fetched when a batch row is clicked
   const { data: batchDetails } = selectedBatch
@@ -915,41 +1053,46 @@ export default function PayoutsPage() {
         bankAccountId,
         anchorId,
       });
-      refreshPayouts();
-    } catch (err) {
-      console.error("Failed to request payout:", err);
+      form.reset();
+      await refreshPayouts();
+    } catch {
+      // errors show as alert banner in history area
     }
   };
 
-  const TABS: { id: "history" | "batch" | "sdp"; label: string }[] = [
+  const TABS: { id: PayoutTab; label: string }[] = [
     { id: "history", label: "Payout History" },
     { id: "batch", label: "Batch Disbursements" },
     { id: "sdp", label: "SDP CSV Upload" },
   ];
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Payouts</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Manage bulk disbursement batches, payout history, and SDP CSV uploads
+            Manage bulk disbursement batches, payout history, and SDP CSV
+            uploads.
           </p>
         </div>
       </div>
 
-      {/* Tab navigation */}
-      <div className="border-b border-slate-200 mb-6">
-        <nav className="-mb-px flex space-x-8">
+      {/* ── Tab nav ─────────────────────────────────────────────────────── */}
+      <div className="mb-6 border-b border-slate-200">
+        <nav className="-mb-px flex space-x-8 overflow-x-auto">
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); setSelectedBatch(null); }}
-              className={`${
+              onClick={() => {
+                setActiveTab(tab.id);
+                setSelectedBatch(null);
+              }}
+              className={`whitespace-nowrap border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
                 activeTab === tab.id
                   ? "border-indigo-500 text-indigo-600"
                   : "border-transparent text-slate-500 hover:text-slate-700"
-              } whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors`}
+              }`}
             >
               {tab.label}
             </button>
@@ -957,12 +1100,13 @@ export default function PayoutsPage() {
         </nav>
       </div>
 
-      {/* ── Payout History tab ──────────────────────────────────────────────── */}
+      {/* ── Payout History ──────────────────────────────────────────────── */}
       {activeTab === "history" && (
         <div className="space-y-6">
-          {/* Request payout form */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm max-w-lg">
-            <h2 className="font-semibold text-slate-800 mb-4">Request Payout</h2>
+          <div className="max-w-lg rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 font-semibold text-slate-800">
+              Request Payout
+            </h2>
             <form onSubmit={handleSubmitPayout} className="space-y-3">
               <div className="flex gap-2">
                 <input
@@ -972,11 +1116,11 @@ export default function PayoutsPage() {
                   step="0.01"
                   name="amount"
                   placeholder="Amount"
-                  className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <select
                   name="asset"
-                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   {["USDC", "USDT", "XLM"].map((a) => (
                     <option key={a}>{a}</option>
@@ -987,17 +1131,17 @@ export default function PayoutsPage() {
                 required
                 name="bankAccountId"
                 placeholder="Bank Account ID (UUID)"
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <input
                 required
                 name="anchorId"
                 placeholder="Anchor ID"
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               <button
                 type="submit"
-                className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
               >
                 Request Payout
               </button>
@@ -1005,21 +1149,28 @@ export default function PayoutsPage() {
           </div>
 
           {payoutError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
               {payoutError}
             </div>
           )}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="px-6 py-4 border-b border-slate-200">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-6 py-4">
               <h3 className="font-semibold text-slate-800">Recent Payouts</h3>
             </div>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="border-b border-slate-200 bg-slate-50">
                 <tr>
-                  {["ID", "Date", "Amount", "Asset", "Status", "Anchor"].map((h) => (
+                  {[
+                    "ID",
+                    "Date",
+                    "Amount",
+                    "Asset",
+                    "Status",
+                    "Anchor",
+                  ].map((h) => (
                     <th
                       key={h}
-                      className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide"
+                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
                     >
                       {h}
                     </th>
@@ -1028,28 +1179,23 @@ export default function PayoutsPage() {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {payoutLoading && payouts.length === 0 ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={i}>
-                      {Array.from({ length: 6 }).map((_, j) => (
-                        <td key={j} className="px-6 py-3">
-                          <div className="h-4 bg-slate-100 rounded animate-pulse" />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
+                  skeletonRows(5, 6)
                 ) : payouts.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-10 text-center text-slate-400">
+                    <td
+                      colSpan={6}
+                      className="px-6 py-10 text-center text-slate-400"
+                    >
                       No payouts yet
                     </td>
                   </tr>
                 ) : (
-                  payouts.map((p) => (
+                  payouts.map((p: Payout) => (
                     <tr key={p.id} className="hover:bg-slate-50">
                       <td className="px-6 py-3 font-mono text-xs text-slate-500">
                         {p.id.slice(0, 8)}…
                       </td>
-                      <td className="px-6 py-3 text-slate-600 whitespace-nowrap">
+                      <td className="whitespace-nowrap px-6 py-3 text-slate-600">
                         {format(new Date(p.createdAt), "MMM d, yyyy")}
                       </td>
                       <td className="px-6 py-3 font-medium">
@@ -1059,7 +1205,9 @@ export default function PayoutsPage() {
                       <td className="px-6 py-3">
                         <StatusBadge status={p.status} />
                       </td>
-                      <td className="px-6 py-3 text-slate-400 text-xs">{p.anchorId}</td>
+                      <td className="px-6 py-3 text-xs text-slate-400">
+                        {p.anchorId}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -1069,69 +1217,78 @@ export default function PayoutsPage() {
         </div>
       )}
 
-      {/* ── Batch Disbursements tab ─────────────────────────────────────────── */}
+      {/* ── Batch Disbursements ─────────────────────────────────────────── */}
       {activeTab === "batch" && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-slate-500">Total Batches</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">{batches.length}</p>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Recipients</p>
               <p className="mt-1 text-3xl font-bold text-slate-900">
-                {batches.reduce((sum, b) => sum + (b.total_recipients || 0), 0)}
+                {batches.length}
               </p>
             </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <p className="text-sm text-slate-500">Total Recipients</p>
+              <p className="mt-1 text-3xl font-bold text-slate-900">
+                {batches.reduce(
+                  (sum, b) => sum + (b.total_recipients || 0),
+                  0,
+                )}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <p className="text-sm text-slate-500">Total Volume (USDC)</p>
               <p className="mt-1 text-3xl font-bold text-slate-900">
                 {(
-                  batches.reduce((sum, b) => sum + (b.total_amount || 0), 0) /
-                  1_000_000
+                  batches.reduce(
+                    (sum, b) => sum + (b.total_amount || 0),
+                    0,
+                  ) / 1_000_000
                 ).toLocaleString()}
               </p>
             </div>
           </div>
 
           {batchError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
               {batchError}
             </div>
           )}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="px-6 py-4 border-b border-slate-200">
-              <h3 className="font-semibold text-slate-800">Batch Disbursement History</h3>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-6 py-4">
+              <h3 className="font-semibold text-slate-800">
+                Batch Disbursement History
+              </h3>
             </div>
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 border-b border-slate-200">
+              <thead className="border-b border-slate-200 bg-slate-50">
                 <tr>
-                  {["Batch ID", "Date", "Recipients", "Total", "Status", "Results"].map(
-                    (h) => (
-                      <th
-                        key={h}
-                        className="px-6 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide"
-                      >
-                        {h}
-                      </th>
-                    )
-                  )}
+                  {[
+                    "Batch ID",
+                    "Date",
+                    "Recipients",
+                    "Total",
+                    "Status",
+                    "Results",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {batchLoading && batches.length === 0 ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={i}>
-                      {Array.from({ length: 6 }).map((_, j) => (
-                        <td key={j} className="px-6 py-3">
-                          <div className="h-4 bg-slate-100 rounded animate-pulse" />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
+                  skeletonRows(5, 6)
                 ) : batches.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-10 text-center text-slate-400">
+                    <td
+                      colSpan={6}
+                      className="px-6 py-10 text-center text-slate-400"
+                    >
                       No batch disbursements yet
                     </td>
                   </tr>
@@ -1139,24 +1296,31 @@ export default function PayoutsPage() {
                   batches.map((batch) => (
                     <tr
                       key={batch.id}
-                      className="hover:bg-slate-50 cursor-pointer"
+                      className="cursor-pointer hover:bg-slate-50"
                       onClick={() => setSelectedBatch(batch.id)}
                     >
                       <td className="px-6 py-3 font-mono text-xs text-slate-500">
                         {batch.id.slice(0, 8)}…
                       </td>
-                      <td className="px-6 py-3 text-slate-600 whitespace-nowrap">
-                        {format(new Date(batch.created_at), "MMM d, yyyy HH:mm")}
+                      <td className="whitespace-nowrap px-6 py-3 text-slate-600">
+                        {format(
+                          new Date(batch.created_at),
+                          "MMM d, yyyy HH:mm",
+                        )}
                       </td>
-                      <td className="px-6 py-3 font-medium">{batch.total_recipients}</td>
                       <td className="px-6 py-3 font-medium">
-                        {(batch.total_amount / 1_000_000).toLocaleString()} {batch.currency}
+                        {batch.total_recipients}
+                      </td>
+                      <td className="px-6 py-3 font-medium">
+                        {(batch.total_amount / 1_000_000).toLocaleString()}{" "}
+                        {batch.currency}
                       </td>
                       <td className="px-6 py-3">
                         <StatusBadge status={batch.status} />
                       </td>
                       <td className="px-6 py-3 text-xs text-slate-500">
-                        {batch.succeeded_count} succeeded, {batch.failed_count} failed
+                        {batch.succeeded_count} succeeded, {batch.failed_count}{" "}
+                        failed
                       </td>
                     </tr>
                   ))
@@ -1165,114 +1329,197 @@ export default function PayoutsPage() {
             </table>
           </div>
 
-          {/* Batch details modal */}
-          {selectedBatch && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900 bg-opacity-50 p-4">
-              <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[80vh] flex flex-col">
-                <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-                  <h3 className="font-semibold text-slate-800">Batch Details</h3>
-                  <button
-                    onClick={() => setSelectedBatch(null)}
-                    className="text-slate-400 hover:text-slate-600"
-                  >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="p-6 overflow-y-auto flex-1">
-                  {batchDetails ? (
-                    <div className="space-y-6">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-slate-500">Batch ID</p>
-                          <p className="font-mono text-sm text-slate-800">{batchDetails.batch.id}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-slate-500">Status</p>
-                          <StatusBadge status={batchDetails.batch.status} />
-                        </div>
-                        <div>
-                          <p className="text-sm text-slate-500">Currency</p>
-                          <p className="font-medium text-slate-800">{batchDetails.batch.currency}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-slate-500">Total Recipients</p>
-                          <p className="font-medium text-slate-800">{batchDetails.batch.total_recipients}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-slate-500">Total Amount</p>
-                          <p className="font-medium text-slate-800">
-                            {(batchDetails.batch.total_amount / 1_000_000).toLocaleString()}{" "}
-                            {batchDetails.batch.currency}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-slate-500">Created</p>
-                          <p className="font-medium text-slate-800">
-                            {format(new Date(batchDetails.batch.created_at), "MMM d, yyyy HH:mm")}
-                          </p>
-                        </div>
-                      </div>
-
-                      {batchDetails.recipients.length > 0 && (
-                        <div className="border-t border-slate-200 pt-6">
-                          <h4 className="font-semibold text-slate-800 mb-3">Recipients</h4>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead className="bg-slate-50">
-                                <tr>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Amount</th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Destination</th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Attempts</th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Tx Hash</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {batchDetails.recipients.map((r) => (
-                                  <tr key={r.id}>
-                                    <td className="px-4 py-2"><StatusBadge status={r.status} /></td>
-                                    <td className="px-4 py-2 font-medium">
-                                      {(r.amount / 1_000_000).toLocaleString()}
-                                    </td>
-                                    <td className="px-4 py-2 text-slate-600 font-mono text-xs">
-                                      {r.destination_address || r.user_id || "N/A"}
-                                    </td>
-                                    <td className="px-4 py-2 text-slate-600">{r.attempt_count}</td>
-                                    <td className="px-4 py-2 font-mono text-xs text-slate-500">
-                                      {r.tx_hash?.slice(0, 16) || "Pending"}…
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-center py-8">
-                      <p className="text-slate-500">Loading batch details...</p>
-                    </div>
-                  )}
-                </div>
-                <div className="px-6 py-4 border-t border-slate-200 flex justify-end">
-                  <button
-                    onClick={() => setSelectedBatch(null)}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
+          {selectedBatch && batchDetails && (
+            <BatchDetailsModal
+              batch={batchDetails.batch}
+              recipients={batchDetails.recipients}
+              onClose={() => setSelectedBatch(null)}
+            />
           )}
         </div>
       )}
 
-      {/* ── SDP CSV Upload tab ──────────────────────────────────────────────── */}
+      {/* ── SDP CSV Upload Tab (actual implementation of the task) ──────── */}
       {activeTab === "sdp" && <SdpDisbursementTab />}
+    </div>
+  );
+}
+
+function skeletonRows(rows: number, cols: number) {
+  return Array.from({ length: rows }).map((_, i) => (
+    <tr key={i}>
+      {Array.from({ length: cols }).map((_, j) => (
+        <td key={j} className="px-6 py-3">
+          <div className="h-4 animate-pulse rounded bg-slate-100" />
+        </td>
+      ))}
+    </tr>
+  ));
+}
+
+function BatchDetailsModal({
+  batch,
+  recipients,
+  onClose,
+}: {
+  batch: BatchPayout;
+  recipients: BatchRecipient[];
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h3 className="font-semibold text-slate-800">Batch Details</h3>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+            <InfoCell label="Batch ID" value={batch.id} mono />
+            <InfoCell label="Status">
+              <StatusBadge status={batch.status} />
+            </InfoCell>
+            <InfoCell label="Currency" value={batch.currency} />
+            <InfoCell
+              label="Total Recipients"
+              value={batch.total_recipients.toString()}
+            />
+            <InfoCell
+              label="Total Amount"
+              value={`${(batch.total_amount / 1_000_000).toLocaleString()} ${batch.currency}`}
+            />
+            <InfoCell
+              label="Created"
+              value={format(new Date(batch.created_at), "MMM d, yyyy HH:mm")}
+            />
+            <InfoCell
+              label="Succeeded"
+              value={batch.succeeded_count.toString()}
+              tone="emerald"
+            />
+            <InfoCell
+              label="Failed"
+              value={batch.failed_count.toString()}
+              tone="red"
+            />
+            {batch.started_at && (
+              <InfoCell
+                label="Started"
+                value={format(new Date(batch.started_at), "MMM d, HH:mm")}
+              />
+            )}
+            {batch.completed_at && (
+              <InfoCell
+                label="Completed"
+                value={format(new Date(batch.completed_at), "MMM d, HH:mm")}
+              />
+            )}
+          </div>
+
+          {recipients.length > 0 && (
+            <div className="mt-6 border-t border-slate-200 pt-6">
+              <h4 className="mb-3 font-semibold text-slate-800">
+                Recipients ({recipients.length})
+              </h4>
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      {[
+                        "Status",
+                        "Amount",
+                        "Destination",
+                        "Attempts",
+                        "Tx Hash",
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-500"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {recipients.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-4 py-2">
+                          <StatusBadge status={r.status} />
+                        </td>
+                        <td className="px-4 py-2 font-medium">
+                          {(r.amount / 1_000_000).toLocaleString()}
+                        </td>
+                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-600">
+                          {r.destination_address || r.user_id || "N/A"}
+                        </td>
+                        <td className="px-4 py-2 text-slate-600">
+                          {r.attempt_count}
+                        </td>
+                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-500">
+                          {r.tx_hash ? `${r.tx_hash.slice(0, 16)}…` : "Pending"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end border-t border-slate-200 px-6 py-4">
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InfoCell({
+  label,
+  value,
+  children,
+  mono,
+  tone,
+}: {
+  label: string;
+  value?: string;
+  children?: React.ReactNode;
+  mono?: boolean;
+  tone?: "emerald" | "red";
+}) {
+  const valueClasses =
+    tone === "emerald"
+      ? "text-emerald-700"
+      : tone === "red"
+        ? "text-red-700"
+        : "text-slate-800";
+  return (
+    <div className="rounded-lg bg-slate-50 p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <div
+        className={`mt-1 ${mono ? "font-mono text-xs" : "font-medium"} ${valueClasses}`}
+      >
+        {children ?? value ?? "—"}
+      </div>
     </div>
   );
 }
