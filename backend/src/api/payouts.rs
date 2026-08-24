@@ -43,7 +43,7 @@ pub struct ListBatchesResponse {
 
 pub async fn list_batches(
     State(pool): State<PgPool>,
-    query: axum::Query<ListBatchesQuery>,
+    query: axum::extract::Query<ListBatchesQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let offset = query.offset.unwrap_or(0).max(0);

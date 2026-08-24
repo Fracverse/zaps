@@ -639,6 +639,43 @@ pub async fn toggle_auto_earn(
 
 // ── #375 — POST /api/yield/deposit ────────────────────────────────────────
 
+pub fn deserialize_whole_number<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let val: serde_json::Value = serde::de::Deserialize::deserialize(deserializer)?;
+    match val {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i)
+            } else if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 {
+                    Ok(f as i64)
+                } else {
+                    Err(D::Error::custom("fractional micro-units are rejected"))
+                }
+            } else {
+                Err(D::Error::custom("invalid number format"))
+            }
+        }
+        serde_json::Value::String(s) => {
+            if let Ok(i) = s.parse::<i64>() {
+                Ok(i)
+            } else if let Ok(f) = s.parse::<f64>() {
+                if f.fract() == 0.0 {
+                    Ok(f as i64)
+                } else {
+                    Err(D::Error::custom("fractional micro-units are rejected"))
+                }
+            } else {
+                Err(D::Error::custom("invalid number in string"))
+            }
+        }
+        _ => Err(D::Error::custom("expected a number or string representing a number")),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct DepositRequest {
     /// Amount to move from available to earning balance (in micro-units).
@@ -1206,7 +1243,7 @@ async fn build_vault_xdr(
         vault_contract,
         fn_name,
         amount,
-        MIN_BASE_FEE, // placeholder fee; will be replaced after simulation
+        MIN_BASE_FEE.to_i64() as u32, // placeholder fee; will be replaced after simulation
     )?;
 
     // Simulate against the Soroban RPC to estimate the real fee.
@@ -1218,7 +1255,7 @@ async fn build_vault_xdr(
         .await
         .unwrap_or_else(|e| {
             tracing::warn!("soroban simulation failed ({e}); using MIN_BASE_FEE as fallback");
-            MIN_BASE_FEE as u64
+            MIN_BASE_FEE.to_i64() as u64
         });
 
     // Re-build with the simulated fee so the client can submit without bumping.
@@ -1292,7 +1329,7 @@ fn build_soroban_manage_data_xdr(
     // Sequence 0 is a sentinel; the client MUST substitute account.sequence + 1.
     let sequence: i64 = 0;
 
-    let tx = Transaction::builder(source_pk, sequence, fee)
+    let tx = Transaction::builder(source_pk, sequence, stellar_base::amount::Stroops::new(fee as i64))
         .with_memo(memo)
         .add_operation(op)
         .into_transaction()
@@ -1361,7 +1398,7 @@ async fn simulate_transaction_fee(rpc_url: &str, envelope_xdr: &str) -> Result<u
                 .as_str()
                 .and_then(|s| s.parse::<u64>().ok())
         })
-        .unwrap_or(MIN_BASE_FEE as u64);
+        .unwrap_or(MIN_BASE_FEE.to_i64() as u64);
 
     Ok(fee)
 }

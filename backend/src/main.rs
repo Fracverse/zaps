@@ -246,7 +246,9 @@ async fn main() {
                 pool.clone(),
                 username_address_cache.clone(),
             )),
-        );
+        )
+        .nest("/admin", api::admin_routes(pool.clone()));
+
 
     // #561 — routes that require a valid Privy JWT are wrapped with the auth
     // middleware so the token is validated (and cached) before any handler runs.

@@ -385,3 +385,76 @@ pub async fn clear_sweep_failure(pool: &PgPool, user_id: Uuid) -> Result<(), sql
 
     Ok(())
 }
+
+#[derive(Debug, Clone)]
+pub struct UserYieldTotals {
+    pub total_deposited: i64,
+    pub total_withdrawn: i64,
+    pub total_earned: i64,
+    pub transaction_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlatformYieldTotals {
+    pub tvl: i64,
+    pub total_available: i64,
+    pub active_accounts: i64,
+    pub auto_earn_accounts: i64,
+}
+
+pub async fn get_user_yield_totals(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<UserYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount ELSE 0 END), 0) as total_deposited,
+            COALESCE(SUM(CASE WHEN type = 'WITHDRAW' THEN amount ELSE 0 END), 0) as total_withdrawn,
+            COALESCE(SUM(CASE WHEN type = 'EARNED' THEN amount ELSE 0 END), 0) as total_earned,
+            COUNT(*) as transaction_count
+        FROM yield_transactions
+        WHERE user_id = $1
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(UserYieldTotals {
+        total_deposited: row.get("total_deposited"),
+        total_withdrawn: row.get("total_withdrawn"),
+        total_earned: row.get("total_earned"),
+        transaction_count: row.get("transaction_count"),
+    })
+}
+
+pub async fn get_platform_yield_totals(
+    pool: &PgPool,
+) -> Result<PlatformYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(earning_balance), 0) as tvl,
+            COALESCE(SUM(available_balance), 0) as total_available,
+            COUNT(CASE WHEN earning_balance > 0 THEN 1 END) as active_accounts
+        FROM user_yield_balances
+        "#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let auto_earn_accounts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users WHERE auto_earn_enabled = true"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PlatformYieldTotals {
+        tvl: row.get("tvl"),
+        total_available: row.get("total_available"),
+        active_accounts: row.get("active_accounts"),
+        auto_earn_accounts,
+    })
+}
+

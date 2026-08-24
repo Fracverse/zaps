@@ -206,7 +206,7 @@ async fn send_yield_reports(
     let client = reqwest::Client::new();
     for (batch_index, batch) in expo_push_batches(&messages).enumerate() {
         if let Err(err) =
-            send_expo_push_batch(&client, batch, config.expo_access_token.as_deref()).await
+            send_expo_push_batch(pool, &client, batch, config.expo_access_token.as_deref()).await
         {
             tracing::warn!(
                 batch_number = batch_index + 1,
@@ -337,6 +337,7 @@ fn build_expo_push_request(
 }
 
 async fn send_expo_push_batch(
+    pool: &PgPool,
     client: &reqwest::Client,
     messages: &[ExpoPushMessage],
     access_token: Option<&str>,
@@ -351,19 +352,29 @@ async fn send_expo_push_batch(
     }
 
     let body: serde_json::Value = response.json().await?;
-    if has_device_not_registered(&body) {
-        sqlx::query(
-            "DELETE FROM user_push_tokens WHERE user_id = $1 AND expo_push_token = $2",
-        )
-        .bind(user_id)
-        .bind(token)
-        .execute(pool)
-        .await?;
-        tracing::info!(
-            user_id = %user_id,
-            %token,
-            "Deleted invalid Expo push token (DeviceNotRegistered)"
-        );
+    if let Some(arr) = body.get("data").and_then(|d| d.as_array()) {
+        for (i, ticket) in arr.iter().enumerate() {
+            if ticket.get("status").and_then(|s| s.as_str()) == Some("error")
+                && ticket
+                    .get("details")
+                    .and_then(|d| d.get("error"))
+                    .and_then(|e| e.as_str())
+                    == Some("DeviceNotRegistered")
+            {
+                if let Some(msg) = messages.get(i) {
+                    let token = &msg.to;
+                    if let Err(e) = sqlx::query("DELETE FROM user_push_tokens WHERE expo_push_token = $1")
+                        .bind(token)
+                        .execute(pool)
+                        .await
+                    {
+                        tracing::error!("Failed to delete invalid push token {token}: {e:?}");
+                    } else {
+                        tracing::info!(%token, "Deleted invalid Expo push token (DeviceNotRegistered)");
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
