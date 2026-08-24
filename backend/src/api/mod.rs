@@ -144,6 +144,7 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .route("/balance", get(r#yield::get_balance))
         .route("/metrics", get(r#yield::get_metrics))
         .route("/history", get(r#yield::get_history))
+        .route("/rates/history", get(r#yield::get_rate_history))
         .route("/deposit", post(r#yield::deposit))
         .route("/withdraw", post(r#yield::withdraw))
         .route("/toggle-auto", post(r#yield::toggle_auto_earn))

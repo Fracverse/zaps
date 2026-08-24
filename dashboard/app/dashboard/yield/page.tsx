@@ -2,6 +2,15 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { format } from "date-fns";
 import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import {
   detectFreighter,
   connectFreighter,
   signWithFreighter,
@@ -225,7 +234,7 @@ function WalletBadge({ wallet }: { wallet: FreighterWalletState }) {
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function YieldPage() {
-  const [tab, setTab] = useState<"config" | "audit">("config");
+  const [tab, setTab] = useState<"config" | "audit" | "apy-history">("config");
 
   // ── Wallet state ─────────────────────────────────────────────────────────────
   const [wallet, setWallet] = useState<FreighterWalletState>(DEFAULT_WALLET_STATE);
@@ -371,7 +380,41 @@ export default function YieldPage() {
 
   const hasActiveFilters = search || actionFilter !== "all" || dateFrom || dateTo;
 
-  // Summary stats
+  // ── APY Rate History ──────────────────────────────────────────────────────────
+  const [apyHistory, setApyHistory] = useState<{ date: string; apy: number }[]>([]);
+  const [apyLoading, setApyLoading] = useState(false);
+  const [apyError, setApyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tab !== "apy-history") return;
+    let cancelled = false;
+    setApyLoading(true);
+    setApyError(null);
+    api
+      .yieldRateHistory()
+      .then((res) => {
+        if (!cancelled) {
+          const formatted = res.rates.map((r) => ({
+            date: new Date(r.created_at).toISOString().slice(0, 10),
+            apy: r.apy,
+          }));
+          setApyHistory(formatted);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setApyError(err instanceof Error ? err.message : "Failed to load APY history");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setApyLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  // ── Summary stats
   const stats = useMemo(() => {
     const deposits = MOCK_TXS.filter((t) => t.action === "deposit").reduce(
       (s, t) => s + t.tokenVolume,
@@ -393,14 +436,14 @@ export default function YieldPage() {
       <div className="flex items-start justify-between mb-1">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Yield Vault</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Admin configuration and transaction audit log</p>
+          <p className="text-sm text-slate-500 mt-0.5">Admin configuration, transaction audit log, and APY history</p>
         </div>
         <WalletBadge wallet={wallet} />
       </div>
 
       {/* Tab Bar */}
       <div className="flex gap-2 mt-5 mb-6 border-b border-slate-200">
-        {(["config", "audit"] as const).map((t) => (
+        {(["config", "audit", "apy-history"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -410,7 +453,7 @@ export default function YieldPage() {
                 : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
           >
-            {t === "config" ? "Vault Configuration" : "Audit History"}
+            {t === "config" ? "Vault Configuration" : t === "audit" ? "Audit History" : "APY History"}
           </button>
         ))}
       </div>
@@ -814,79 +857,72 @@ export default function YieldPage() {
         </div>
       )}
 
-      {/* Emergency Pause Confirmation Drawer */}
-      {showPauseDrawer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-            <div className="bg-red-600 px-6 py-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">
-                {pauseAction === "pause" ? "⚠ Emergency Pause" : "Resume Operations"}
-              </h3>
-              <button
-                onClick={() => {
-                  setShowPauseDrawer(false);
-                  setPauseConfirmed(false);
-                }}
-                className="text-white hover:text-red-200 transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-6">
-              {pauseAction === "pause" ? (
-                <>
-                  <p className="text-sm text-slate-700 mb-4">
-                    You are about to <strong>pause all vault operations</strong>. This will:
-                  </p>
-                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
-                    <li>Block all new deposits</li>
-                    <li>Block all withdrawals</li>
-                    <li>Halt yield accrual</li>
-                    <li>Freeze vault interactions</li>
-                  </ul>
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
-                    <p className="text-xs text-red-800 font-medium">
-                      This action requires administrator privileges and will be signed via Freighter.
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm text-slate-700 mb-4">
-                    You are about to <strong>resume vault operations</strong>. This will:
-                  </p>
-                  <ul className="text-sm text-slate-600 space-y-2 mb-6 list-disc list-inside">
-                    <li>Allow new deposits</li>
-                    <li>Allow withdrawals</li>
-                    <li>Resume yield accrual</li>
-                    <li>Restore vault interactions</li>
-                  </ul>
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-6">
-                    <p className="text-xs text-green-800 font-medium">
-                      This action requires administrator privileges and will be signed via Freighter.
-                    </p>
-                  </div>
-                </>
-              )}
+      {/* ── APY History Tab ──────────────────────────────────────────────────── */}
+      {tab === "apy-history" && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+          <h2 className="font-semibold text-slate-800 mb-1">APY Rate History</h2>
+          <p className="text-xs text-slate-500 mb-4">
+            Historical APY rate trends over time.
+          </p>
 
-              {!pauseConfirmed ? (
-                <button
-                  onClick={() => setPauseConfirmed(true)}
-                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 transition-colors"
-                >
-                  First Confirmation
-                </button>
-              ) : (
-                <button
-                  onClick={handlePauseConfirm}
-                  disabled={signing}
-                  className="w-full bg-red-600 text-white py-3 rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition-colors"
-                >
-                  {signing ? "Signing with Freighter…" : "Final Confirmation - Sign & Submit"}
-                </button>
-              )}
+          {apyError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+              {apyError}
             </div>
-          </div>
+          )}
+
+          {apyLoading ? (
+            <div className="h-80 animate-pulse rounded-lg bg-slate-100" />
+          ) : apyHistory.length === 0 ? (
+            <div className="h-80 flex items-center justify-center text-slate-400 text-sm">
+              No rate history available
+            </div>
+          ) : (
+            <div className="h-80 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={apyHistory} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="apyGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#4f46e5" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 12, fill: "#64748b" }}
+                    tickLine={{ stroke: "#cbd5e1" }}
+                    axisLine={{ stroke: "#cbd5e1" }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 12, fill: "#64748b" }}
+                    tickLine={{ stroke: "#cbd5e1" }}
+                    axisLine={{ stroke: "#cbd5e1" }}
+                    tickFormatter={(v: number) => `${v.toFixed(1)}%`}
+                    domain={["auto", "auto"]}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid #e2e8f0",
+                      boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+                    }}
+                    labelStyle={{ color: "#334155", fontWeight: 600 }}
+                    formatter={(value: number) => [`${value.toFixed(2)}%`, "APY"]}
+                    labelFormatter={(label) => `Date: ${label}`}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="apy"
+                    stroke="#4f46e5"
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#apyGradient)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       )}
     </div>

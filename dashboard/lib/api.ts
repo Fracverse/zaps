@@ -118,6 +118,10 @@ export const api = {
   // Yield vault aggregate metrics
   yieldStats: () => req<YieldStats>("/admin/vault/stats"),
 
+  // Yield vault APY rate history
+  yieldRateHistory: () =>
+    req<{ rates: { apy: number; created_at: string }[] }>("/api/yield/rates/history"),
+
   // Username registry
   searchUsers: (query: string) =>
     req<UserSearchResult[]>(`/api/users/search?q=${encodeURIComponent(query)}`),
