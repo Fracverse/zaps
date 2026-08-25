@@ -42,6 +42,9 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      // The drawer spec belongs to mobile-chrome; at a desktop viewport the
+      // hamburger is display:none and every assertion in it would fail.
+      testIgnore: /mobile-nav\.spec\.ts$/,
     },
     {
       // #808 — the mobile drawer only exists below the md breakpoint, so it
