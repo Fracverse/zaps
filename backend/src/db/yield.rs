@@ -179,6 +179,26 @@ pub async fn get_current_yield_rate(pool: &PgPool) -> Result<Option<i32>, sqlx::
     Ok(rate)
 }
 
+/// Fetch APY rate history for charting, ordered oldest to newest.
+pub async fn get_yield_rate_history(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<YieldRateHistory>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, YieldRateHistory>(
+        r#"
+        SELECT id, apy, created_at
+          FROM yield_rates_history
+         ORDER BY created_at ASC
+         LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 /// BE-547: age of the most recent APY checkpoint, in seconds.
 ///
 /// `None` when no checkpoint has ever been recorded. Used by the hourly

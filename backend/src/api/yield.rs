@@ -597,6 +597,43 @@ pub async fn get_history(
     .into_response()
 }
 
+#[derive(Serialize)]
+pub struct YieldRateHistoryItem {
+    pub apy: f64,
+    pub created_at: String,
+}
+
+#[derive(Serialize)]
+pub struct YieldRateHistoryResponse {
+    pub rates: Vec<YieldRateHistoryItem>,
+}
+
+pub async fn get_rate_history(
+    State(pool): State<sqlx::PgPool>,
+) -> impl IntoResponse {
+    let rows = match crate::db::r#yield::get_yield_rate_history(&pool, 200).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("yield rate history fetch error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to retrieve yield rate history" })),
+            )
+                .into_response();
+        }
+    };
+
+    let rates: Vec<YieldRateHistoryItem> = rows
+        .iter()
+        .map(|r| YieldRateHistoryItem {
+            apy: r.apy as f64 / 100.0,
+            created_at: r.created_at.to_string(),
+        })
+        .collect();
+
+    Json(YieldRateHistoryResponse { rates }).into_response()
+}
+
 // ── #378 — POST /api/yield/toggle-auto ────────────────────────────────────
 
 #[derive(Deserialize)]
