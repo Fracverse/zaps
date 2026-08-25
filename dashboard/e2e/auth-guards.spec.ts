@@ -215,3 +215,202 @@ test.describe("Login form: field validation", () => {
     ).toBeVisible({ timeout: 6_000 });
   });
 });
+
+// ── Yield Vault: parameter updates (#804) ────────────────────────────────────
+
+/**
+ * Freighter is a browser extension, so Playwright has no way to install or
+ * drive the real wallet. `lib/freighter.ts` resolves its API through
+ * `loadFreighterApi()`, which prefers `window.__zapsFreighterApiMock__` outside
+ * production builds — these tests install a stand-in there before the app
+ * boots. The seam is compiled out of production, so a real user's page cannot
+ * be pointed at a fake wallet.
+ */
+const FREIGHTER_MOCK_KEY = "__zapsFreighterApiMock__";
+const MOCK_PUBLIC_KEY = "GD3XABCDEFGHIJKLMNOPQRSTUVWXYZ12345678ABCD";
+const MOCK_SIGNED_XDR = "AAAAAgAAAABsignedEnvelopeFromMockWallet==";
+
+interface WalletMockOptions {
+  /** Simulate the extension not being installed at all. */
+  installed?: boolean;
+  /** Simulate the extension present but not yet granted access. */
+  connected?: boolean;
+  /** Make signTransaction resolve with an error, as a user rejection does. */
+  signError?: string;
+}
+
+/**
+ * Install a fake Freighter and a mock auth token, then open the vault page.
+ */
+async function visitVaultWithWallet(
+  page: Page,
+  options: WalletMockOptions = {},
+): Promise<void> {
+  const { installed = true, connected = true, signError } = options;
+
+  await page.addInitScript(
+    ({ key, publicKey, signedXdr, installed, connected, signError }) => {
+      window.localStorage.setItem("token", "mock-auth-token-for-e2e");
+
+      if (!installed) {
+        // detectFreighter() treats a throwing API as "extension not present".
+        (window as unknown as Record<string, unknown>)[key] = {
+          isConnected: () => Promise.reject(new Error("not installed")),
+          getAddress: () => Promise.reject(new Error("not installed")),
+          getNetwork: () => Promise.reject(new Error("not installed")),
+          requestAccess: () => Promise.reject(new Error("not installed")),
+          signTransaction: () => Promise.reject(new Error("not installed")),
+        };
+        return;
+      }
+
+      const calls: unknown[] = [];
+      (window as unknown as Record<string, unknown>).__freighterSignCalls = calls;
+
+      (window as unknown as Record<string, unknown>)[key] = {
+        isConnected: () => Promise.resolve({ isConnected: connected }),
+        getAddress: () => Promise.resolve({ address: publicKey }),
+        getNetwork: () => Promise.resolve({ network: "TESTNET" }),
+        requestAccess: () => Promise.resolve({ address: publicKey }),
+        signTransaction: (xdr: string, opts: { networkPassphrase: string }) => {
+          calls.push({ xdr, opts });
+          return signError
+            ? Promise.resolve({ error: signError })
+            : Promise.resolve({ signedTxXdr: signedXdr });
+        },
+      };
+    },
+    {
+      key: FREIGHTER_MOCK_KEY,
+      publicKey: MOCK_PUBLIC_KEY,
+      signedXdr: MOCK_SIGNED_XDR,
+      installed,
+      connected,
+      signError,
+    },
+  );
+
+  await page.goto("/dashboard/yield");
+  await page.waitForLoadState("networkidle");
+}
+
+/** Fill the APY field, tick the confirmation box, and submit. */
+async function submitApy(page: Page, apy: string): Promise<void> {
+  const apyInput = page.getByLabel("APY (%)");
+  await apyInput.fill(apy);
+  await page.locator("#vault-confirm").check();
+  await page.getByRole("button", { name: /sign & submit via freighter/i }).click();
+}
+
+test.describe("Yield Vault: APY parameter updates", () => {
+  test("admin can update APY and sign with Freighter", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "7.5");
+
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByTestId("vault-success")).toContainText(
+      /transaction signed and submitted/i,
+    );
+  });
+
+  test("the APY value entered is what gets signed", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "12.25");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    // The page encodes the vault params as base64 JSON before handing them to
+    // the wallet, so decoding the captured XDR proves the form value survived.
+    const signed = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string; opts: { networkPassphrase: string } }[]
+        | undefined;
+      if (!calls?.length) return null;
+      const last = calls[calls.length - 1];
+      return { payload: JSON.parse(atob(last.xdr)), passphrase: last.opts.networkPassphrase };
+    });
+
+    expect(signed).not.toBeNull();
+    expect(signed!.payload.fn).toBe("set_vault_params");
+    expect(signed!.payload.apy).toBe("12.25");
+    expect(signed!.passphrase).toBeTruthy();
+  });
+
+  test("the connected wallet address is submitted as the admin", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "6.0");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string }[]
+        | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload.admin).toBe(MOCK_PUBLIC_KEY);
+  });
+
+  test("the pause flag is carried through with the APY change", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await page.getByRole("switch", { name: /pause vault/i }).click();
+    await submitApy(page, "5.5");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string }[]
+        | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload.paused).toBe(true);
+    expect(payload.apy).toBe("5.5");
+  });
+
+  test("submission is blocked until the confirmation box is ticked", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await page.getByLabel("APY (%)").fill("9.0");
+
+    const submit = page.getByRole("button", { name: /sign & submit via freighter/i });
+    await expect(submit).toBeDisabled();
+
+    await page.locator("#vault-confirm").check();
+    await expect(submit).toBeEnabled();
+  });
+
+  test("the confirmation box is cleared after a successful submission", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "8.0");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    // Re-arming for every change is deliberate: an admin should have to
+    // confirm each on-chain write, not just the first.
+    await expect(page.locator("#vault-confirm")).not.toBeChecked();
+  });
+
+  test("a rejected signature surfaces the wallet's message, not a success toast", async ({
+    page,
+  }) => {
+    await visitVaultWithWallet(page, { signError: "User declined access" });
+
+    await submitApy(page, "7.5");
+
+    await expect(page.getByTestId("vault-error")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByTestId("vault-error")).toContainText(/user declined access/i);
+    await expect(page.getByTestId("vault-success")).toHaveCount(0);
+  });
+
+  test("submission is unavailable while the wallet is disconnected", async ({ page }) => {
+    await visitVaultWithWallet(page, { connected: false });
+
+    const submit = page.getByRole("button", { name: /connect wallet to sign/i });
+    await expect(submit).toBeVisible();
+    await expect(submit).toBeDisabled();
+  });
+});
