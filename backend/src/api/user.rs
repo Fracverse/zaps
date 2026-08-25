@@ -784,6 +784,74 @@ pub async fn get_registry_stats(
     .into_response()
 }
 
+pub async fn get_user_by_did(
+    State(state): State<UserState>,
+    Path(did): Path<String>,
+) -> impl IntoResponse {
+    let pool = &state.pool;
+    let row = sqlx::query(
+        r#"
+        SELECT id, address, username, display_name, privy_did, privy_linked_at
+        FROM users
+        WHERE privy_did = $1
+        "#
+    )
+    .bind(&did)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let user_id: Uuid = r.get("id");
+            let address: String = r.get("address");
+            let username: String = r.get("username");
+            let display_name: Option<String> = r.get("display_name");
+            let privy_did: String = r.get("privy_did");
+            let privy_linked_at: Option<chrono::NaiveDateTime> = r.get("privy_linked_at");
+
+            let linked_accounts = serde_json::json!([
+                {
+                    "type": "wallet",
+                    "address": address,
+                    "chain_type": "stellar",
+                    "verified_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                },
+                {
+                    "type": "email",
+                    "address": format!("{}@zaps.fi", username),
+                    "verified_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                }
+            ]);
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "id": user_id.to_string(),
+                    "username": username,
+                    "display_name": display_name,
+                    "privy_did": privy_did,
+                    "privy_linked_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                    "linked_accounts": linked_accounts,
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "User with this Privy DID not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Error getting user by DID: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

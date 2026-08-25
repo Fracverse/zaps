@@ -4,6 +4,8 @@ use axum::{
     Router,
 };
 
+pub mod admin;
+pub use admin::admin_routes;
 pub mod auth;
 pub mod auth_middleware;
 pub mod bridge;
@@ -77,6 +79,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
         .route("/friends/:id/accept", post(user::accept_friend_request))
         .route("/friends/:id/reject", post(user::reject_friend_request))
         .route("/resolve/:username", get(user::resolve_address))
+        .route("/did/:did", get(user::get_user_by_did))
         .with_state(state)
 }
 

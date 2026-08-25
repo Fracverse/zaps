@@ -4,8 +4,10 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::db::r#yield::{
-    get_current_yield_rate, list_auto_sweep_candidates, log_yield_rate_update,
-    process_internal_sweep_deposit, seconds_since_last_yield_rate,
+    clear_sweep_failure, get_current_yield_rate, list_auto_sweep_candidates,
+    list_sweep_backoff_excluded_users, log_yield_rate_update,
+    process_internal_sweep_deposit, record_sweep_failure,
+    seconds_since_last_yield_rate,
 };
 use crate::services::stellar::StellarClient;
 
