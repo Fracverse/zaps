@@ -969,6 +969,73 @@ function StatTile({
   );
 }
 
+function ProgressRing({
+  percent,
+  size = 120,
+  strokeWidth = 10,
+  trackColor = "#e2e8f0",
+  progressColor = "#4f46e5",
+  label,
+  sublabel,
+}: {
+  percent: number;
+  size?: number;
+  strokeWidth?: number;
+  trackColor?: string;
+  progressColor?: string;
+  label?: string;
+  sublabel?: string;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(1, percent));
+  const offset = circumference * (1 - clamped);
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={trackColor}
+          strokeWidth={strokeWidth}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={progressColor}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          className="transition-all duration-700 ease-out"
+        />
+        <text
+          x={size / 2}
+          y={size / 2}
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-slate-900 text-sm font-bold"
+          style={{ fontSize: size * 0.22 }}
+        >
+          {Math.round(clamped * 100)}%
+        </text>
+      </svg>
+      {label && (
+        <p className="text-xs font-medium text-slate-700">{label}</p>
+      )}
+      {sublabel && (
+        <p className="text-[11px] text-slate-500">{sublabel}</p>
+      )}
+    </div>
+  );
+}
+
 function Banner({
   tone,
   icon,
@@ -1220,34 +1287,55 @@ export default function PayoutsPage() {
       {/* ── Batch Disbursements ─────────────────────────────────────────── */}
       {activeTab === "batch" && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Batches</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {batches.length}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Recipients</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {batches.reduce(
-                  (sum, b) => sum + (b.total_recipients || 0),
-                  0,
-                )}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Volume (USDC)</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {(
-                  batches.reduce(
-                    (sum, b) => sum + (b.total_amount || 0),
-                    0,
-                  ) / 1_000_000
-                ).toLocaleString()}
-              </p>
-            </div>
-          </div>
+          {(() => {
+            const totalRecipients = batches.reduce(
+              (sum, b) => sum + (b.total_recipients || 0),
+              0,
+            );
+            const totalSucceeded = batches.reduce(
+              (sum, b) => sum + (b.succeeded_count || 0),
+              0,
+            );
+            const successRate = totalRecipients > 0 ? totalSucceeded / totalRecipients : 0;
+
+            return (
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Batches</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {batches.length}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Recipients</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {totalRecipients}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Volume (USDC)</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {(
+                      batches.reduce(
+                        (sum, b) => sum + (b.total_amount || 0),
+                        0,
+                      ) / 1_000_000
+                    ).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <ProgressRing
+                    percent={successRate}
+                    size={110}
+                    strokeWidth={10}
+                    progressColor={successRate === 1 ? "#059669" : "#4f46e5"}
+                    label="Success Rate"
+                    sublabel={`${totalSucceeded} of ${totalRecipients} recipients`}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
           {batchError && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
