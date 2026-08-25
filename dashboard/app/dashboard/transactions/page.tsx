@@ -5,8 +5,14 @@ import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
 import PaymentDetailDialog from "@/components/PaymentDetailDialog";
+import {
+  PaginationFooter,
+  PAGE_SIZE_OPTIONS,
+  type PageSizeOption,
+} from "@/components/SearchBar";
 
-const PAGE_SIZE = 20;
+// Default page size — overridable via the items-per-page selector (#795)
+const DEFAULT_PAGE_SIZE: PageSizeOption = PAGE_SIZE_OPTIONS[0]; // 10
 
 const visibilityStyles = {
   PUBLIC: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
@@ -17,6 +23,8 @@ const visibilityStyles = {
 export default function TransactionsPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  // #795 — items-per-page state
+  const [pageSize, setPageSize] = useState<PageSizeOption>(DEFAULT_PAGE_SIZE);
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const { data, loading, error, refresh } = usePolling(
     () => api.socialFeed(),
@@ -42,8 +50,8 @@ export default function TransactionsPage() {
     );
   }, [data, search]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const paginated = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize);
 
   return (
     <div>
@@ -179,27 +187,16 @@ export default function TransactionsPage() {
         </div>
 
         {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-3">
-            <span className="text-xs text-slate-500">
-              {filtered.length} feeds · page {page + 1} of {totalPages}
-            </span>
-            <div className="flex gap-1">
-              <button
-                disabled={page === 0}
-                onClick={() => setPage((current) => current - 1)}
-                className="rounded-lg border border-slate-300 px-3 py-1 text-sm hover:bg-white disabled:opacity-40"
-              >
-                ← Prev
-              </button>
-              <button
-                disabled={page >= totalPages - 1}
-                onClick={() => setPage((current) => current + 1)}
-                className="rounded-lg border border-slate-300 px-3 py-1 text-sm hover:bg-white disabled:opacity-40"
-              >
-                Next →
-              </button>
-            </div>
-          </div>
+          <PaginationFooter
+            total={filtered.length}
+            page={page}
+            pageSize={pageSize}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(0);
+            }}
+            onPageChange={setPage}
+          />
         )}
       </div>
       {selectedUser && (

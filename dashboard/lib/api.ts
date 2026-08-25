@@ -152,6 +152,13 @@ export const api = {
   getIdentityLink: (userId: string) =>
     req<IdentityLink>(`/admin/identity/links/${encodeURIComponent(userId)}`),
 
+  // ── Admin audit log (#797) ────────────────────────────────────────────────
+  /** Fetch admin audit log entries, descending by timestamp. */
+  adminLogs: (limit = 50, offset = 0) =>
+    serverReq<{ logs: AdminAuditLog[]; total: number }>(
+      `/api/v1/admin/logs?limit=${limit}&offset=${offset}`,
+    ),
+
   // ── SDP (Stellar Disbursement Platform) ───────────────────────────────────
   sdp: {
     /**
@@ -446,6 +453,24 @@ export interface IdentityLink {
   linked_at: string;
   /** Verification status of the identity link. */
   status: "active" | "pending" | "revoked";
+}
+
+// ── Admin audit log ────────────────────────────────────────────────────────
+
+/** A single admin action recorded in the server-side audit log. */
+export interface AdminAuditLog {
+  /** Unique log entry ID. */
+  id: string;
+  /** Admin user ID who performed the action. */
+  admin_id: string;
+  /** Human-readable action label, e.g. "fee_coefficient_updated". */
+  action: string;
+  /** Free-form details or JSON payload diff. */
+  details?: string;
+  /** IP address of the requesting admin. */
+  ip_address?: string;
+  /** ISO-8601 timestamp of the action. */
+  timestamp: string;
 }
 
 // ── Stellar Disbursement Platform (SDP) ────────────────────────────────────
