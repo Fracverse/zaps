@@ -14,6 +14,7 @@ const PAUSED_KEY: Symbol = symbol_short!("paused");
 enum DataKey {
     Balance(Address),
     Allowance(Address, Address),
+    Blacklisted(Address),
 }
 
 #[contract]
@@ -76,9 +77,24 @@ impl NairaTokenContract {
             .set(&DataKey::Balance(to), &(bal + amount));
     }
 
+    pub fn blacklist(env: Env, addr: Address) {
+        Self::require_admin(&env);
+        env.storage().persistent().set(&DataKey::Blacklisted(addr), &true);
+    }
+
+    pub fn unblacklist(env: Env, addr: Address) {
+        Self::require_admin(&env);
+        env.storage().persistent().remove(&DataKey::Blacklisted(addr));
+    }
+
+    pub fn is_blacklisted(env: Env, addr: Address) -> bool {
+        env.storage().persistent().has(&DataKey::Blacklisted(addr))
+    }
+
     pub fn burn(env: Env, from: Address, amount: i128) {
         Self::require_not_paused(&env);
         Self::require_admin(&env);
+        assert!(!env.storage().persistent().has(&DataKey::Blacklisted(from.clone())), "AddressBlacklisted");
         assert!(amount > 0, "amount must be positive");
         let bal: i128 = env
             .storage()
@@ -94,6 +110,7 @@ impl NairaTokenContract {
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         Self::require_not_paused(&env);
         from.require_auth();
+        assert!(!env.storage().persistent().has(&DataKey::Blacklisted(from.clone())), "AddressBlacklisted");
         assert!(amount > 0, "amount must be positive");
         let from_bal: i128 = env
             .storage()
