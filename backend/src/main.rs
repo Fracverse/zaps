@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
+use redis;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -32,6 +33,7 @@ use zaps_backend::services;
 struct HealthState {
     pool: sqlx::PgPool,
     stellar_rpc_url: String,
+    redis_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -65,10 +67,19 @@ struct RpcHealth {
 }
 
 #[derive(Serialize)]
+struct RedisHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
 struct HealthComponents {
     database: DbHealth,
     yield_db: YieldDbHealth,
     soroban_rpc: RpcHealth,
+    redis: RedisHealth,
 }
 
 #[derive(Serialize)]
@@ -227,15 +238,18 @@ async fn main() {
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
 
-    // Health check state: pool + Soroban RPC URL for live component probing.
+    // Health check state: pool + Soroban RPC URL + Redis for live component probing.
     let health_state = HealthState {
         pool: pool.clone(),
         stellar_rpc_url: config.stellar_rpc_url.clone(),
+        redis_url: config.redis_url.clone(),
     };
 
     // Setup routes
     let public_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/healthz", get(liveness_probe))
+        .route("/readyz", get(readiness_probe))
         .route("/api/v1/config", get(app_config))
         .with_state(health_state);
 
@@ -390,14 +404,18 @@ async fn app_config() -> Json<AppConfigResponse> {
 // ── /health handler ───────────────────────────────────────────────────────────
 
 async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
-    // Run all three probes concurrently so latencies don't stack.
-    let (db, yield_db, rpc) = tokio::join!(
+    // Run all probes concurrently so latencies don't stack.
+    let (db, yield_db, rpc, redis) = tokio::join!(
         probe_database(&state.pool),
         probe_yield_db(&state.pool),
         probe_soroban_rpc(&state.stellar_rpc_url),
+        probe_redis(state.redis_url.as_deref()),
     );
 
-    let all_ok = db.status == "ok" && yield_db.status == "ok" && rpc.status == "ok";
+    let all_ok = db.status == "ok"
+        && yield_db.status == "ok"
+        && rpc.status == "ok"
+        && redis.status == "ok";
 
     let body = HealthResponse {
         status: if all_ok { "ok" } else { "degraded" },
@@ -405,6 +423,7 @@ async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
             database: db,
             yield_db,
             soroban_rpc: rpc,
+            redis,
         },
         checked_at: Utc::now().to_rfc3339(),
     };
@@ -414,6 +433,46 @@ async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
+
+    (code, Json(body))
+}
+
+/// GET /healthz — lightweight liveness probe for Kubernetes.
+/// Returns 200 if the process is alive; does not check dependencies.
+async fn liveness_probe() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// GET /readyz — Kubernetes readiness probe.
+/// Verifies DB and Redis are reachable; returns HTTP 200 only when both pass.
+async fn readiness_probe(State(state): State<HealthState>) -> impl IntoResponse {
+    let (db, redis) = tokio::join!(
+        probe_database(&state.pool),
+        probe_redis(state.redis_url.as_deref()),
+    );
+
+    let db_ok = db.status == "ok";
+    let redis_ok = redis.status == "ok" || state.redis_url.is_none();
+
+    let status = if db_ok && redis_ok { "ok" } else { "not ready" };
+    let code = if db_ok && redis_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let mut body = serde_json::json!({
+        "status": status,
+        "db": db_ok,
+        "redis": redis_ok,
+    });
+
+    if let Some(e) = &db.error {
+        body["db_error"] = serde_json::json!(e);
+    }
+    if let Some(e) = &redis.error {
+        body["redis_error"] = serde_json::json!(e);
+    }
 
     (code, Json(body))
 }
@@ -533,6 +592,47 @@ async fn probe_soroban_rpc(rpc_url: &str) -> RpcHealth {
             status: "error",
             latency_ms,
             latest_ledger: None,
+            error: Some(e),
+        },
+    }
+}
+
+/// Redis PING probe. Returns "ok" when Redis responds with PONG.
+async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
+    let start = Instant::now();
+
+    let Some(url) = redis_url else {
+        return RedisHealth {
+            status: "skipped",
+            latency_ms: 0,
+            error: None,
+        };
+    };
+
+    let result: Result<(), String> = async {
+        let client = redis::Client::open(url).map_err(|e| e.to_string())?;
+        let mut conn = redis::tokio::aio::ConnectionManager::new(client)
+            .await
+            .map_err(|e| e.to_string())?;
+        redis::cmd("PING")
+            .query_async::<String>(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(()) => RedisHealth {
+            status: "ok",
+            latency_ms,
+            error: None,
+        },
+        Err(e) => RedisHealth {
+            status: "error",
+            latency_ms,
             error: Some(e),
         },
     }
