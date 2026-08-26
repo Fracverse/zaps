@@ -50,6 +50,9 @@ const DEFAULT_MAX_ATTEMPTS: i32 = 3;
 const DEFAULT_CLAIM_SIZE: i64 = 100;
 /// A claim older than this is assumed to belong to a dead worker.
 const DEFAULT_LEASE_TIMEOUT_SECS: i64 = 900;
+/// Maximum items per sub-chunk when processing a batch claim.
+/// Prevents gas limit issues on-chain and keeps SDP submissions bounded.
+const CHUNK_SIZE: usize = 50;
 
 pub struct DisbursementWorkerConfig {
     pub poll_interval: Duration,
@@ -193,25 +196,35 @@ async fn process_cycle(
         "Dispatching payout batch"
     );
 
-    // Sequential on purpose: SDP rate-limits per account, and parallel
-    // submissions from one source account contend on the Stellar sequence
-    // number.
-    for recipient in recipients {
-        let attempt = recipient.attempt_count + 1;
-        let outcome = dispatch_one(&recipient, sdp_client).await;
+    // Process recipients in sub-chunks of CHUNK_SIZE to prevent gas limit
+    // issues on-chain and keep SDP submissions bounded. Each chunk is
+    // submitted sequentially; recipients within a chunk are also sequential
+    // (SDP rate-limits per account, and parallel submissions contend on
+    // the Stellar sequence number).
+    for (chunk_idx, chunk) in recipients.chunks(CHUNK_SIZE).enumerate() {
+        tracing::debug!(
+            batch_id = %batch_id,
+            chunk = chunk_idx + 1,
+            chunk_size = chunk.len(),
+            "Processing chunk"
+        );
+
+        for recipient in chunk {
+            let attempt = recipient.attempt_count + 1;
+            let outcome = dispatch_one(recipient, sdp_client).await;
 
         match outcome {
             SdpOutcome::Submitted {
                 payment_id: sdp_payment_id,
                 tx_hash,
             } => {
-                mark_submitted(pool, &recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
+                mark_submitted(pool, recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
                     .await?;
                 log_dispatch(pool, batch_id, Some(recipient.id), attempt, "SUBMITTED", None, None)
                     .await?;
             }
             SdpOutcome::Retryable(err) if attempt < config.max_attempts => {
-                mark_retry(pool, &recipient, &err).await?;
+                mark_retry(pool, recipient, &err).await?;
                 log_dispatch(
                     pool,
                     batch_id,
@@ -226,7 +239,7 @@ async fn process_cycle(
             SdpOutcome::Retryable(err) | SdpOutcome::Permanent(err) => {
                 // Either permanently bad, or out of retries. Fail this row only
                 // — one dead recipient must not strand the rest of the batch.
-                mark_failed(pool, &recipient, &err).await?;
+                mark_failed(pool, recipient, &err).await?;
                 log_dispatch(
                     pool,
                     batch_id,
@@ -240,6 +253,7 @@ async fn process_cycle(
             }
         }
     }
+    } // end chunk loop
 
     finalize_batch(pool, batch_id).await?;
     Ok(())
