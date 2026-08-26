@@ -44,6 +44,12 @@ fn advance_ledgers(env: &Env, ledgers: u32) {
     });
 }
 
+fn advance_timestamp(env: &Env, secs: u64) {
+    env.ledger().with_mut(|li| {
+        li.timestamp = li.timestamp.saturating_add(secs);
+    });
+}
+
 #[test]
 fn test_initialize_sets_defaults() {
     let (_env, client, _contract_id, _owner, _depositor, _token) = setup();
@@ -378,4 +384,30 @@ fn test_emergency_exit_rescues_assets() {
     assert_eq!(client.shares_of(&depositor), 0);
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT);
+}
+
+#[test]
+fn test_update_apy_queues_change_and_apply_after_timelock() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    // Queue a new APY.
+    client.update_apy(&owner, &1_000);
+
+    // Applying before the 24-hour delay elapses must fail.
+    advance_timestamp(&env, APY_TIMELOCK_SECS - 1);
+    let res = client.try_apply_apy(&owner);
+    assert!(res.is_err(), "apply_apy must fail before timelock elapses");
+
+    // Once the delay has elapsed, applying succeeds.
+    advance_timestamp(&env, 1);
+    client.apply_apy(&owner);
+    assert_eq!(client.apy(), 1_000);
+}
+
+#[test]
+fn test_apply_apy_rejects_without_pending_change() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    let res = client.try_apply_apy(&owner);
+    assert!(res.is_err(), "apply_apy must fail with no pending change");
 }
