@@ -114,12 +114,33 @@ impl StellarClient {
         Ok(1234567)
     }
 
-    /// Broadcast a transaction envelope to the network
+    /// Broadcast a transaction envelope to the network.
+    ///
+    /// The actual HTTP call goes through `send_rpc_request`, which already
+    /// implements automatic retry with exponential backoff (1s, 2s, 4s) for
+    /// temporary failures — HTTP 503 and timeouts — as required by issue #729.
     pub async fn submit_transaction(
         &self,
-        _tx_envelope: &str,
+        tx_envelope: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        Ok("tx_hash_placeholder".to_string())
+        let params = json!({ "transaction": tx_envelope });
+
+        let response = self.send_rpc_request("sendTransaction", params).await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(format!("RPC error submitting transaction: {error}").into());
+        }
+
+        let hash = match response
+            .get("result")
+            .and_then(|r| r.get("hash"))
+            .and_then(|h| h.as_str())
+        {
+            Some(h) => h.to_string(),
+            None => return Err(format!("Missing transaction hash in RPC response").into()),
+        };
+
+        Ok(hash)
     }
 }
 
