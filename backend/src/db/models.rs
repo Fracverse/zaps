@@ -86,7 +86,7 @@ pub struct YieldTransaction {
     pub created_at: NaiveDateTime,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct YieldRateHistory {
     pub id: Uuid,
     pub apy: i32,

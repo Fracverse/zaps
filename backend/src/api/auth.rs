@@ -1,7 +1,139 @@
-use axum::{extract::State, response::IntoResponse, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::{Request, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
+};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
+
+// ── Per-IP rate limiting for public auth endpoints ─────────────────────────
+//
+// Registration/login (`/api/auth/challenge`, `/api/auth/verify`,
+// `/api/auth/privy`) are unauthenticated by definition, which makes them the
+// natural target for credential-stuffing / brute-force attempts. This is a
+// dedicated, stricter limiter for just those routes (10 requests/minute/IP)
+// independent of the coarser global token-bucket layered in main.rs.
+
+const AUTH_RATE_LIMIT_MAX_REQUESTS: u32 = 10;
+const AUTH_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
+struct AuthRateWindow {
+    count: u32,
+    window_started_at: Instant,
+}
+
+/// Fixed-window counter keyed by client IP, shared across the auth routes.
+#[derive(Clone)]
+pub struct AuthRateLimiter {
+    windows: Arc<Mutex<HashMap<String, AuthRateWindow>>>,
+}
+
+impl AuthRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            windows: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Returns `true` if the request should be allowed, `false` if the caller
+    /// has exceeded `AUTH_RATE_LIMIT_MAX_REQUESTS` within the current window.
+    async fn check(&self, key: &str) -> bool {
+        let mut windows = self.windows.lock().await;
+        let now = Instant::now();
+
+        match windows.get_mut(key) {
+            Some(w) if now.duration_since(w.window_started_at) >= AUTH_RATE_LIMIT_WINDOW => {
+                w.count = 1;
+                w.window_started_at = now;
+                true
+            }
+            Some(w) if w.count < AUTH_RATE_LIMIT_MAX_REQUESTS => {
+                w.count += 1;
+                true
+            }
+            Some(_) => false,
+            None => {
+                windows.insert(
+                    key.to_string(),
+                    AuthRateWindow {
+                        count: 1,
+                        window_started_at: now,
+                    },
+                );
+                true
+            }
+        }
+    }
+}
+
+impl Default for AuthRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Best-effort client IP extraction: prefers the first hop of `X-Forwarded-For`
+/// (set by a reverse proxy/load balancer), falling back to the socket's peer
+/// address when the app is reached directly.
+fn client_ip<B>(request: &Request<B>) -> String {
+    request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|ip| ip.trim().to_string())
+        .filter(|ip| !ip.is_empty())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|info| info.0.ip().to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Axum middleware enforcing `AUTH_RATE_LIMIT_MAX_REQUESTS` per
+/// `AUTH_RATE_LIMIT_WINDOW` per client IP. Responds `429 Too Many Requests`
+/// on overflow.
+pub async fn auth_rate_limit(
+    State(limiter): State<AuthRateLimiter>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let ip = client_ip(&request);
+
+    if limiter.check(&ip).await {
+        next.run(request).await
+    } else {
+        tracing::warn!("Rate limit exceeded for IP {ip} on auth endpoint");
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "Too many requests. Please try again in a minute."
+            })),
+        )
+            .into_response()
+    }
+}
+
+/// Shared state for the auth router: the DB pool plus the Privy JWKS client
+/// used to verify Privy-issued session tokens in `privy_auth`.
+#[derive(Clone)]
+pub struct AuthState {
+    pub pool: sqlx::PgPool,
+    pub privy: Arc<super::privy_jwks::PrivyJwksClient>,
+    pub privy_app_id: String,
+}
 
 #[derive(Serialize)]
 pub struct ChallengeResponse {
@@ -48,9 +180,10 @@ pub async fn get_challenge() -> impl IntoResponse {
 }
 
 pub async fn verify_signature(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<AuthState>,
     Json(payload): Json<VerifyRequest>,
 ) -> impl IntoResponse {
+    let pool = state.pool;
     let message_bytes = payload.challenge.as_bytes();
 
     let signature_bytes = if let Ok(bytes) = hex::decode(&payload.signature) {
@@ -147,9 +280,11 @@ pub async fn verify_signature(
 /// POST /api/auth/privy - Create new user account linked to Privy identity
 /// Verifies Privy token, links DID to Stellar address, and returns JWT credentials.
 pub async fn privy_auth(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<AuthState>,
     Json(payload): Json<PrivyAuthRequest>,
 ) -> impl IntoResponse {
+    let pool = state.pool;
+
     // Validate Stellar address format
     if !is_valid_stellar_address(&payload.stellar_address) {
         return (
@@ -168,41 +303,49 @@ pub async fn privy_auth(
             .into_response();
     }
 
-    // Verify Privy token (mock verification for now - integrate with actual Privy SDK)
-    if !verify_privy_token(&payload.privy_token, &payload.privy_did).await {
+    // Verify the Privy token's signature (against Privy's JWKS), expiry,
+    // issuer and audience, and extract its claims.
+    let claims: PrivyTokenPayload = match state
+        .privy
+        .verify_token(&payload.privy_token, &state.privy_app_id)
+        .await
+    {
+        Ok(claims) => claims,
+        Err(e) => {
+            tracing::warn!("Privy token verification failed: {e}");
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Privy token verification failed" })),
+            )
+                .into_response();
+        }
+    };
+
+    // The verified token's subject must match the DID the client claims to be.
+    if claims.subject != payload.privy_did {
         return (
             axum::http::StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Privy token verification failed" })),
+            Json(serde_json::json!({
+                "error": "Privy token does not belong to the supplied privy_did"
+            })),
         )
             .into_response();
     }
 
     // Issue #562: Verify that the submitted Stellar address is authorized in the Privy token
-    match verify_stellar_address_in_privy_payload(&payload.privy_token, &payload.stellar_address) {
-        Ok(true) => {
-            tracing::debug!(
-                "Stellar address {} verified in Privy token payload",
-                payload.stellar_address
-            );
-        }
-        Ok(false) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "The submitted Stellar address does not match any wallet linked to your Privy identity"
-                })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!("Error verifying Stellar address in Privy payload: {}", e);
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("Invalid Privy token: {}", e) })),
-            )
-                .into_response();
-        }
+    if !stellar_address_in_linked_accounts(&claims, &payload.stellar_address) {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "The submitted Stellar address does not match any wallet linked to your Privy identity"
+            })),
+        )
+            .into_response();
     }
+    tracing::debug!(
+        "Stellar address {} verified in Privy token payload",
+        payload.stellar_address
+    );
 
     // Check if Stellar address is already linked to a different Privy DID
     match sqlx::query("SELECT privy_did FROM users WHERE address = $1")
@@ -449,7 +592,9 @@ fn is_valid_stellar_address(address: &str) -> bool {
     }
 }
 
-/// Issue #562: Privy JWT payload structure with linked accounts
+/// Issue #562/#563: Privy JWT claims, including linked accounts. Deserialized
+/// only after `PrivyJwksClient::verify_token` has confirmed the token's
+/// signature, expiry, issuer and audience.
 #[derive(Debug, Deserialize)]
 struct PrivyTokenPayload {
     #[serde(rename = "sub")]
@@ -469,78 +614,14 @@ struct PrivyLinkedAccount {
     pub verified_at: Option<String>,
 }
 
-/// Verifies Privy token and DID linkage, including wallet address matching (Issue #562)
-/// Note: This is a placeholder implementation. In production, verify against Privy's API.
-/// Reference: https://docs.privy.com/reference
-async fn verify_privy_token(token: &str, did: &str) -> bool {
-    // TODO: In production, call Privy's verification endpoint:
-    // POST https://auth.privy.io/api/v1/verify_token
-    // with the token and validate the returned DID matches the one provided
-    
-    // For now, perform basic validation:
-    // - Token should be a non-empty string
-    // - DID should match expected format
-    if token.trim().is_empty() || did.trim().is_empty() {
-        return false;
-    }
-    
-    // In a real implementation, you would:
-    // 1. Decode the JWT token
-    // 2. Verify the signature using Privy's public key
-    // 3. Extract and validate the DID claim
-    // 4. Check token expiration
-    
-    // For this implementation, we assume the client provides a valid Privy token
-    // and we perform server-side verification in production
-    tracing::debug!("Privy token verification (placeholder - implement with actual Privy SDK)");
-    true
-}
-
-/// Issue #562: Verify that the submitted Stellar address matches an authorized wallet
-/// in the Privy token's linked_accounts payload.
-///
-/// This prevents users from submitting arbitrary Stellar addresses that don't belong
-/// to their Privy identity, enforcing wallet ownership verification at the token level.
-fn verify_stellar_address_in_privy_payload(
-    token: &str,
+/// Issue #562: Checks whether `expected_stellar_address` appears among the
+/// verified token's linked Stellar wallets, preventing a caller from
+/// submitting an address that doesn't belong to their Privy identity.
+fn stellar_address_in_linked_accounts(
+    claims: &PrivyTokenPayload,
     expected_stellar_address: &str,
-) -> Result<bool, String> {
-    // Decode JWT without verification (verification happens in verify_privy_token)
-    // We're only extracting the payload structure here to inspect linked_accounts
-    let validation = jsonwebtoken::Validation::default();
-    
-    // In production, use Privy's public key for verification
-    // For now, we decode the payload without signature verification
-    // since verify_privy_token handles the actual verification
-    let header = match jsonwebtoken::decode_header(token) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::warn!("Failed to decode Privy token header: {:?}", e);
-            return Err("Invalid token format".to_string());
-        }
-    };
-
-    // Use a dummy decoding key just to extract the payload structure
-    // In production, replace this with Privy's actual public key
-    let dummy_secret = "dummy-key-for-payload-extraction";
-    let mut validation = jsonwebtoken::Validation::new(header.alg);
-    validation.insecure_disable_signature_validation();
-    
-    let token_data = match jsonwebtoken::decode::<PrivyTokenPayload>(
-        token,
-        &jsonwebtoken::DecodingKey::from_secret(dummy_secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::warn!("Failed to decode Privy token payload: {:?}", e);
-            return Err("Invalid token payload".to_string());
-        }
-    };
-
-    // Issue #562: Check if the expected Stellar address exists in the linked_accounts
-    let stellar_wallets: Vec<&str> = token_data
-        .claims
+) -> bool {
+    let stellar_wallets: Vec<&str> = claims
         .linked_accounts
         .iter()
         .filter(|acc| {
@@ -557,7 +638,6 @@ fn verify_stellar_address_in_privy_payload(
         stellar_wallets
     );
 
-    // Verify the submitted address matches one of the authorized Stellar wallets
     let is_authorized = stellar_wallets
         .iter()
         .any(|&addr| addr.eq_ignore_ascii_case(expected_stellar_address));
@@ -570,6 +650,57 @@ fn verify_stellar_address_in_privy_payload(
         );
     }
 
-    Ok(is_authorized)
+    is_authorized
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn allows_up_to_the_limit_then_blocks() {
+        let limiter = AuthRateLimiter::new();
+        for i in 0..AUTH_RATE_LIMIT_MAX_REQUESTS {
+            assert!(
+                limiter.check("1.2.3.4").await,
+                "request {i} should be allowed within the limit"
+            );
+        }
+        assert!(
+            !limiter.check("1.2.3.4").await,
+            "request past the limit should be blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn tracks_each_ip_independently() {
+        let limiter = AuthRateLimiter::new();
+        for _ in 0..AUTH_RATE_LIMIT_MAX_REQUESTS {
+            assert!(limiter.check("1.1.1.1").await);
+        }
+        assert!(
+            !limiter.check("1.1.1.1").await,
+            "1.1.1.1 should now be blocked"
+        );
+        assert!(
+            limiter.check("2.2.2.2").await,
+            "a different IP must have its own budget"
+        );
+    }
+
+    #[test]
+    fn client_ip_prefers_first_hop_of_x_forwarded_for() {
+        let request = Request::builder()
+            .header("x-forwarded-for", "203.0.113.9, 10.0.0.1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(client_ip(&request), "203.0.113.9");
+    }
+
+    #[test]
+    fn client_ip_falls_back_to_unknown_without_any_source() {
+        let request = Request::builder().body(axum::body::Body::empty()).unwrap();
+        assert_eq!(client_ip(&request), "unknown");
+    }
 }
 

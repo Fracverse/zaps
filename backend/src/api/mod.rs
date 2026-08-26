@@ -11,6 +11,7 @@ pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
 pub mod payouts;
+pub mod privy_jwks;
 pub mod social;
 pub mod user;
 pub mod r#yield;
@@ -21,12 +22,30 @@ pub use auth_middleware::{
     auth_middleware, spawn_cache_sweep, AuthMiddlewareState, AuthTokenCache, AuthenticatedUser,
 };
 
-pub fn auth_routes(pool: sqlx::PgPool) -> Router {
+/// Builds the auth router from an already-assembled `AuthState` (pool +
+/// Privy JWKS client). Prefer this when the caller wants control over the
+/// JWKS URL / app ID (e.g. tests pointing at a mock JWKS server).
+pub fn auth_routes_with_state(state: auth::AuthState) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
-        .with_state(pool)
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            auth::AuthRateLimiter::new(),
+            auth::auth_rate_limit,
+        ))
+}
+
+/// Convenience wrapper that builds `AuthState` from `PRIVY_APP_ID` /
+/// `PRIVY_JWKS_URL` env vars (see `config::Config`).
+pub fn auth_routes(pool: sqlx::PgPool) -> Router {
+    let config = crate::config::Config::from_env();
+    auth_routes_with_state(auth::AuthState {
+        pool,
+        privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
+        privy_app_id: config.privy_app_id,
+    })
 }
 
 /// #561 — Session Refresh & Auth Middleware

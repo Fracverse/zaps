@@ -254,7 +254,16 @@ async fn main() {
         .with_state(health_state);
 
     let sensitive_routes = Router::new()
-        .nest("/api/auth", api::auth_routes(pool.clone()))
+        .nest(
+            "/api/auth",
+            api::auth_routes_with_state(api::auth::AuthState {
+                pool: pool.clone(),
+                privy: Arc::new(api::privy_jwks::PrivyJwksClient::new(
+                    config.privy_jwks_url.clone(),
+                )),
+                privy_app_id: config.privy_app_id.clone(),
+            }),
+        )
         .nest(
             "/api/users",
             api::user_routes_with_state(api::user::UserState::new(
@@ -376,7 +385,16 @@ async fn main() {
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // `into_make_service_with_connect_info` populates `ConnectInfo<SocketAddr>`
+    // on every request so IP-based rate limiting (auth::auth_rate_limit,
+    // rate_limiter_middleware) has a real peer address to fall back on when
+    // there's no `X-Forwarded-For` header (i.e. no reverse proxy in front).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 // ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────
@@ -611,7 +629,7 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
 
     let result: Result<(), String> = async {
         let client = redis::Client::open(url).map_err(|e| e.to_string())?;
-        let mut conn = redis::tokio::aio::ConnectionManager::new(client)
+        let mut conn = redis::aio::ConnectionManager::new(client)
             .await
             .map_err(|e| e.to_string())?;
         redis::cmd("PING")

@@ -155,7 +155,7 @@ impl BatchLock {
         script
             .key(key)
             .arg(value)
-            .invoke_async::<_, ()>(&mut self.pool.clone())
+            .invoke_async::<()>(&mut self.pool.clone())
             .await?;
 
         Ok(())
