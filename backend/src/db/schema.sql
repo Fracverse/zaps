@@ -199,3 +199,16 @@ CREATE INDEX IF NOT EXISTS idx_batch_recipients_locked
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_batch ON dispatch_logs(batch_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_recipient
     ON dispatch_logs(recipient_id, created_at DESC) WHERE recipient_id IS NOT NULL;
+
+-- #806: Dead-letter queue for permanently failing push/webhook dispatches.
+CREATE TABLE IF NOT EXISTS failed_webhook_dlq (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    destination TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    error_message TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 5 CHECK (retry_count >= 0),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_failed_webhook_dlq_created_at
+    ON failed_webhook_dlq(created_at DESC);

@@ -236,6 +236,7 @@ async fn main() {
     // Setup routes
     let public_routes = Router::new()
         .route("/health", get(health_check))
+        .route("/api/v1/config", get(app_config))
         .with_state(health_state);
 
     let sensitive_routes = Router::new()
@@ -362,6 +363,28 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+// ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────
+
+#[derive(Serialize)]
+struct AppConfigResponse {
+    minimum_required_version: String,
+    ios_store_url: String,
+    android_store_url: String,
+}
+
+async fn app_config() -> Json<AppConfigResponse> {
+    Json(AppConfigResponse {
+        minimum_required_version: std::env::var("MIN_APP_VERSION")
+            .unwrap_or_else(|_| "1.0.0".into()),
+        ios_store_url: std::env::var("IOS_STORE_URL")
+            .unwrap_or_else(|_| "https://apps.apple.com/app/zaps".into()),
+        android_store_url: std::env::var("ANDROID_STORE_URL")
+            .unwrap_or_else(|_| {
+                "https://play.google.com/store/apps/details?id=app.zaps".into()
+            }),
+    })
 }
 
 // ── /health handler ───────────────────────────────────────────────────────────

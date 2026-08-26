@@ -13,7 +13,7 @@ import {
   type PageSizeOption,
   filterTransactionRows,
 } from "@/components/SearchBar";
-import { fmtAmount } from "@/lib/utils";
+import { downloadBlob, fmtAmount, toCSV } from "@/lib/utils";
 
 // Default page size — overridable via the items-per-page selector (#795)
 const DEFAULT_PAGE_SIZE: PageSizeOption = PAGE_SIZE_OPTIONS[0]; // 10
@@ -23,6 +23,79 @@ const visibilityStyles = {
   FRIENDS: "bg-amber-50 text-amber-700 ring-amber-600/20",
   PRIVATE: "bg-slate-100 text-slate-700 ring-slate-500/20",
 };
+
+function stampFilename(prefix: string, ext: string): string {
+  return `${prefix}-${format(new Date(), "yyyy-MM-dd")}.${ext}`;
+}
+
+/** #787 — Export the currently displayed table rows as a local CSV or JSON file. */
+function exportAuditRows(rows: unknown[], prefix: string, kind: "csv" | "json") {
+  if (rows.length === 0) return;
+
+  if (kind === "json") {
+    const blob = new Blob([JSON.stringify(rows, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = stampFilename(prefix, "json");
+    anchor.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  // Transaction rows use the shared CSV helper; social-feed rows fall back to JSON keys.
+  const first = rows[0] as Record<string, unknown> | undefined;
+  if (first && "from_address" in first && "send_amount" in first) {
+    downloadBlob(
+      toCSV(rows as Parameters<typeof toCSV>[0]),
+      stampFilename(prefix, "csv"),
+      "text/csv;charset=utf-8;",
+    );
+    return;
+  }
+
+  const headers = Object.keys(first ?? {});
+  const csv = [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers
+        .map((key) => `"${String((row as Record<string, unknown>)[key] ?? "").replace(/"/g, '""')}"`)
+        .join(","),
+    ),
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = stampFilename(prefix, "csv");
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function ExportButtons({
+  disabled,
+  onCsv,
+  onJson,
+}: {
+  disabled: boolean;
+  onCsv: () => void;
+  onJson: () => void;
+}) {
+  const buttonClass =
+    "rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <div className="flex items-center gap-2">
+      <button type="button" disabled={disabled} onClick={onCsv} className={buttonClass}>
+        Export CSV
+      </button>
+      <button type="button" disabled={disabled} onClick={onJson} className={buttonClass}>
+        Export JSON
+      </button>
+    </div>
+  );
+}
 
 export default function TransactionsPage() {
   return (
@@ -116,8 +189,13 @@ function TransactionsPageInner() {
       )}
 
       <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 px-4 py-3">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-semibold text-slate-800">Transactions</h2>
+          <ExportButtons
+            disabled={filteredTx.length === 0}
+            onCsv={() => exportAuditRows(filteredTx, "transaction-audit", "csv")}
+            onJson={() => exportAuditRows(filteredTx, "transaction-audit", "json")}
+          />
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -180,6 +258,14 @@ function TransactionsPageInner() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="text-sm font-semibold text-slate-800">Social payments</h2>
+          <ExportButtons
+            disabled={filtered.length === 0}
+            onCsv={() => exportAuditRows(filtered, "social-payment-audit", "csv")}
+            onJson={() => exportAuditRows(filtered, "social-payment-audit", "json")}
+          />
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-slate-200 bg-slate-50">
