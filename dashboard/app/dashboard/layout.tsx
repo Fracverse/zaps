@@ -117,14 +117,45 @@ export default function DashboardLayout({
 }) {
   const { authenticated, login } = usePrivy();
   const router = useRouter();
+  const [sessionReady, setSessionReady] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
 
   useEffect(() => {
-    if (!authenticated) {
-      router.replace("/");
-    }
-  }, [authenticated, router]);
+    const token = Boolean(localStorage.getItem("token"));
+    const cookieAuth = document.cookie.split(";").some((part) => {
+      const name = part.trim().split("=")[0];
+      return (
+        (name === "token" ||
+          name === "zaps-auth" ||
+          name === "privy-token" ||
+          name === "privy-id-token" ||
+          name === "privy-session") &&
+        part.includes("=")
+      );
+    });
+    setHasSession(token || cookieAuth);
+    setSessionReady(true);
+  }, []);
 
-  if (!authenticated) {
+  useEffect(() => {
+    if (authenticated) {
+      document.cookie = "zaps-auth=1; path=/; SameSite=Lax";
+    }
+  }, [authenticated]);
+
+  const allowed = authenticated || hasSession;
+
+  useEffect(() => {
+    if (sessionReady && !allowed) {
+      router.replace("/login");
+    }
+  }, [sessionReady, allowed, router]);
+
+  if (!sessionReady) {
+    return null;
+  }
+
+  if (!allowed) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-8 w-full max-w-sm text-center">

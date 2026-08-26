@@ -36,6 +36,20 @@ const MIXED_INVALID = 2;
  * client-side.
  */
 async function openSdpTab(page: Page): Promise<void> {
+  await page.context().addCookies([
+    {
+      name: "token",
+      value: "e2e-mock-api-token",
+      domain: "localhost",
+      path: "/",
+    },
+    {
+      name: "zaps-auth",
+      value: "1",
+      domain: "localhost",
+      path: "/",
+    },
+  ]);
   await page.addInitScript(() => {
     const expiry = Date.now() + 60 * 60 * 1000;
     window.localStorage.setItem("privy:token", "e2e-mock-access-token");

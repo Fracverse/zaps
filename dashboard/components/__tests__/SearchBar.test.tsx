@@ -4,8 +4,11 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 
 const push = vi.fn();
+const replace = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace }),
+  usePathname: () => "/dashboard",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 const searchUsers = vi.fn();
@@ -13,7 +16,7 @@ vi.mock("@/lib/api", () => ({
   api: { searchUsers: (...a: unknown[]) => searchUsers(...a) },
 }));
 
-import SearchBar from "@/components/SearchBar";
+import SearchBar, { filterTransactionRows } from "@/components/SearchBar";
 
 const ROWS = [
   { username: "alice", public_key: "GA1ALICE", registered_at: "2026-01-01" },
@@ -43,6 +46,7 @@ describe("SearchBar filtering", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     push.mockReset();
+    replace.mockReset();
     searchUsers.mockReset();
     // Default: filter the fixture by the query, as the backend would.
     searchUsers.mockImplementation(async (q: string) =>
@@ -203,5 +207,48 @@ describe("SearchBar filtering", () => {
         `/dashboard/transactions?user=${encodeURIComponent("a b&c")}`,
       );
     });
+  });
+});
+
+describe("filterTransactionRows", () => {
+  const rows = [
+    {
+      from_address: "GABCADDRESS",
+      memo: "rent",
+      status: "completed",
+    },
+    {
+      from_address: "GXYZOTHER",
+      memo: "payroll",
+      status: "failed",
+    },
+    {
+      from_address: "GNOMEMO",
+      memo: "",
+      status: "pending",
+    },
+  ];
+
+  it("returns all rows when the query is empty", () => {
+    expect(filterTransactionRows(rows, "")).toHaveLength(3);
+    expect(filterTransactionRows(rows, "   ")).toHaveLength(3);
+  });
+
+  it("filters by address in real time", () => {
+    const result = filterTransactionRows(rows, "gabc");
+    expect(result).toHaveLength(1);
+    expect(result[0].from_address).toBe("GABCADDRESS");
+  });
+
+  it("filters by memo", () => {
+    const result = filterTransactionRows(rows, "pay");
+    expect(result).toHaveLength(1);
+    expect(result[0].memo).toBe("payroll");
+  });
+
+  it("filters by status", () => {
+    const result = filterTransactionRows(rows, "failed");
+    expect(result).toHaveLength(1);
+    expect(result[0].status).toBe("failed");
   });
 });

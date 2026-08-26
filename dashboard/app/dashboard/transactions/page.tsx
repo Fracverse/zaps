@@ -1,15 +1,19 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
 import PaymentDetailDialog from "@/components/PaymentDetailDialog";
+import StatusBadge from "@/components/StatusBadge";
 import {
   PaginationFooter,
   PAGE_SIZE_OPTIONS,
   type PageSizeOption,
+  filterTransactionRows,
 } from "@/components/SearchBar";
+import { fmtAmount } from "@/lib/utils";
 
 // Default page size — overridable via the items-per-page selector (#795)
 const DEFAULT_PAGE_SIZE: PageSizeOption = PAGE_SIZE_OPTIONS[0]; // 10
@@ -21,6 +25,20 @@ const visibilityStyles = {
 };
 
 export default function TransactionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="h-32 animate-pulse rounded-xl border border-slate-200 bg-white" />
+      }
+    >
+      <TransactionsPageInner />
+    </Suspense>
+  );
+}
+
+function TransactionsPageInner() {
+  const searchParams = useSearchParams();
+  const headerQuery = searchParams.get("q") ?? "";
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   // #795 — items-per-page state
@@ -30,25 +48,27 @@ export default function TransactionsPage() {
     () => api.socialFeed(),
     20000,
   );
+  const { data: txData } = usePolling(() => api.transactions(), 20000);
 
   const handleRowClick = useCallback((username: string) => {
     setSelectedUser(username);
   }, []);
 
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!data) return [];
-    if (!term) return data;
+  const activeQuery = search || headerQuery;
 
-    return data.filter((feed) =>
-      [
-        feed.sender_username,
-        feed.receiver_username,
-        feed.memo,
-        feed.tx_hash,
-      ].some((value) => value.toLowerCase().includes(term)),
-    );
-  }, [data, search]);
+  useEffect(() => {
+    setPage(0);
+  }, [activeQuery]);
+
+  const filtered = useMemo(() => {
+    if (!data) return [];
+    return filterTransactionRows(data, activeQuery);
+  }, [data, activeQuery]);
+
+  const filteredTx = useMemo(() => {
+    if (!txData) return [];
+    return filterTransactionRows(txData, activeQuery);
+  }, [txData, activeQuery]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const paginated = filtered.slice(page * pageSize, (page + 1) * pageSize);
@@ -79,7 +99,7 @@ export default function TransactionsPage() {
         </label>
         <input
           id="social-payment-search"
-          placeholder="Sender, recipient, note, or transaction hash"
+          placeholder="Filter by address, memo, or status"
           value={search}
           onChange={(event) => {
             setSearch(event.target.value);
@@ -94,6 +114,70 @@ export default function TransactionsPage() {
           {error}
         </div>
       )}
+
+      <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-800">Transactions</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50">
+              <tr>
+                {["Date", "Address", "Amount", "Memo", "Status"].map((heading) => (
+                  <th
+                    key={heading}
+                    className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    {heading}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {!txData ? (
+                Array.from({ length: 4 }).map((_, row) => (
+                  <tr key={row}>
+                    {Array.from({ length: 5 }).map((__, column) => (
+                      <td key={column} className="px-4 py-3">
+                        <div className="h-4 animate-pulse rounded bg-slate-100" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : filteredTx.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-4 py-10 text-center text-slate-400"
+                  >
+                    No transactions match this filter
+                  </td>
+                </tr>
+              ) : (
+                filteredTx.map((tx) => (
+                  <tr key={tx.id} className="hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                      {format(new Date(tx.created_at), "MMM d, yyyy HH:mm")}
+                    </td>
+                    <td className="break-all px-4 py-3 font-mono text-xs text-slate-700">
+                      {tx.from_address}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-800">
+                      {fmtAmount(tx.send_amount, tx.send_asset)}
+                    </td>
+                    <td className="max-w-xs px-4 py-3 text-slate-600">
+                      <span className="line-clamp-2">{tx.memo || "—"}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={tx.status} />
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
