@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { format } from "date-fns";
@@ -1454,6 +1454,45 @@ function BatchDetailsModal({
   recipients: BatchRecipient[];
   onClose: () => void;
 }) {
+  const [rows, setRows] = useState<BatchRecipient[]>(recipients);
+  const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRows(recipients);
+  }, [recipients]);
+
+  const handleRetry = async (itemIndex: number) => {
+    setRetryError(null);
+    setRetryingIndex(itemIndex);
+    setRows((prev) =>
+      prev.map((row, i) =>
+        i === itemIndex ? { ...row, status: "retrying" } : row,
+      ),
+    );
+    try {
+      const result = await api.retryBatchItem(batch.id, itemIndex);
+      setRows((prev) =>
+        prev.map((row, i) => {
+          if (i !== itemIndex) return row;
+          if (result.recipient) return result.recipient;
+          return { ...row, status: result.status ?? "pending" };
+        }),
+      );
+    } catch (err) {
+      setRows((prev) =>
+        prev.map((row, i) =>
+          i === itemIndex ? { ...row, status: "failed" } : row,
+        ),
+      );
+      setRetryError(
+        err instanceof Error ? err.message : "Retry failed. Please try again.",
+      );
+    } finally {
+      setRetryingIndex(null);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
@@ -1515,10 +1554,16 @@ function BatchDetailsModal({
             )}
           </div>
 
-          {recipients.length > 0 && (
+          {retryError && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {retryError}
+            </div>
+          )}
+
+          {rows.length > 0 && (
             <div className="mt-6 border-t border-slate-200 pt-6">
               <h4 className="mb-3 font-semibold text-slate-800">
-                Recipients ({recipients.length})
+                Recipients ({rows.length})
               </h4>
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-sm">
@@ -1530,6 +1575,7 @@ function BatchDetailsModal({
                         "Destination",
                         "Attempts",
                         "Tx Hash",
+                        "Action",
                       ].map((h) => (
                         <th
                           key={h}
@@ -1541,25 +1587,46 @@ function BatchDetailsModal({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {recipients.map((r) => (
-                      <tr key={r.id}>
-                        <td className="px-4 py-2">
-                          <StatusBadge status={r.status} />
-                        </td>
-                        <td className="px-4 py-2 font-medium">
-                          {(r.amount / 1_000_000).toLocaleString()}
-                        </td>
-                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-600">
-                          {r.destination_address || r.user_id || "N/A"}
-                        </td>
-                        <td className="px-4 py-2 text-slate-600">
-                          {r.attempt_count}
-                        </td>
-                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-500">
-                          {r.tx_hash ? `${r.tx_hash.slice(0, 16)}…` : "Pending"}
-                        </td>
-                      </tr>
-                    ))}
+                    {rows.map((r, index) => {
+                      const failed = r.status.toLowerCase() === "failed";
+                      const busy = retryingIndex === index;
+                      return (
+                        <tr key={r.id}>
+                          <td className="px-4 py-2">
+                            <StatusBadge status={r.status} />
+                          </td>
+                          <td className="px-4 py-2 font-medium">
+                            {(r.amount / 1_000_000).toLocaleString()}
+                          </td>
+                          <td className="break-all px-4 py-2 font-mono text-xs text-slate-600">
+                            {r.destination_address || r.user_id || "N/A"}
+                          </td>
+                          <td className="px-4 py-2 text-slate-600">
+                            {r.attempt_count}
+                          </td>
+                          <td className="break-all px-4 py-2 font-mono text-xs text-slate-500">
+                            {r.tx_hash ? `${r.tx_hash.slice(0, 16)}…` : "Pending"}
+                          </td>
+                          <td className="px-4 py-2">
+                            {failed && (
+                              <button
+                                type="button"
+                                onClick={() => handleRetry(index)}
+                                disabled={busy}
+                                aria-label={`Retry payout item ${index}`}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <RefreshCw
+                                  size={12}
+                                  className={busy ? "animate-spin" : ""}
+                                />
+                                {busy ? "Retrying…" : "Retry"}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

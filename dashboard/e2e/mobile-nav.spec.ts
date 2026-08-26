@@ -12,6 +12,20 @@ import { test, expect, type Page } from "@playwright/test";
 
 /** Seed a Privy session and stub the dashboard's data calls. */
 async function openDashboard(page: Page, route = "/dashboard"): Promise<void> {
+  await page.context().addCookies([
+    {
+      name: "token",
+      value: "e2e-mock-api-token",
+      domain: "localhost",
+      path: "/",
+    },
+    {
+      name: "zaps-auth",
+      value: "1",
+      domain: "localhost",
+      path: "/",
+    },
+  ]);
   await page.addInitScript(() => {
     const expiry = Date.now() + 60 * 60 * 1000;
     window.localStorage.setItem("privy:token", "e2e-mock-access-token");

@@ -1,16 +1,77 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api, type UserSearchResult } from "@/lib/api";
 
+/** Fields used to filter the dashboard transactions table in real time. */
+export type TransactionFilterable = {
+  from_address?: string;
+  memo?: string | null;
+  status?: string;
+  sender_username?: string;
+  receiver_username?: string;
+  tx_hash?: string;
+};
+
+/**
+ * Filter a table array by address, memo, or status (also matches related
+ * username / hash fields so the same helper works on the social feed).
+ */
+export function filterTransactionRows<T extends TransactionFilterable>(
+  rows: T[],
+  query: string,
+): T[] {
+  const term = query.trim().toLowerCase();
+  if (!term) return rows;
+  return rows.filter((row) =>
+    [row.from_address, row.memo, row.status, row.sender_username, row.receiver_username, row.tx_hash]
+      .some((value) => (value ?? "").toLowerCase().includes(term)),
+  );
+}
+
 export default function SearchBar() {
+  return (
+    <Suspense fallback={<SearchBarFallback />}>
+      <SearchBarInner />
+    </Suspense>
+  );
+}
+
+function SearchBarFallback() {
+  return (
+    <input
+      type="text"
+      readOnly
+      placeholder="Search address, memo, or status…"
+      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm
+                 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+      aria-hidden="true"
+    />
+  );
+}
+
+function SearchBarInner() {
   const router = useRouter();
-  const [query, setQuery] = useState("");
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const syncQueryToUrl = useCallback(
+    (value: string) => {
+      if (typeof router.replace !== "function") return;
+      const params = new URLSearchParams(searchParams.toString());
+      if (value.trim()) params.set("q", value);
+      else params.delete("q");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
 
   const debouncedSearch = useCallback((value: string) => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -45,12 +106,14 @@ export default function SearchBar() {
         type="text"
         value={query}
         onChange={(e) => {
-          setQuery(e.target.value);
-          debouncedSearch(e.target.value);
+          const value = e.target.value;
+          setQuery(value);
+          syncQueryToUrl(value);
+          debouncedSearch(value);
         }}
         onFocus={() => results.length > 0 && setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
-        placeholder="Search users by username…"
+        placeholder="Search address, memo, or status…"
         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm
                    focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
         aria-label="Search users by username"

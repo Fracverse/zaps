@@ -26,12 +26,15 @@ export function storeSession(token: string, refreshToken?: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(TOKEN_KEY, token);
   if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  document.cookie = `${TOKEN_KEY}=${encodeURIComponent(token)}; path=/; SameSite=Lax`;
 }
 
 export function clearSession(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
+  document.cookie = `${TOKEN_KEY}=; path=/; max-age=0`;
+  document.cookie = `zaps-auth=; path=/; max-age=0`;
 }
 
 /**
@@ -206,6 +209,15 @@ export const api = {
   getBatchPayout: (id: string) =>
     req<{ batch: BatchPayout; recipients: BatchRecipient[] }>(
       `/api/payouts/batch/${id}`,
+    ),
+  /** Retry a single failed recipient in a batch disbursement. */
+  retryBatchItem: (id: string, itemIndex: number) =>
+    serverReq<{ status?: string; recipient?: BatchRecipient }>(
+      `/api/v1/payouts/batch/${id}/retry`,
+      {
+        method: "POST",
+        body: JSON.stringify({ item_index: itemIndex }),
+      },
     ),
 
   // Profile

@@ -93,6 +93,21 @@ fn test_deposit_rejects_zero_amount() {
 }
 
 #[test]
+fn test_withdraw_releases_reentrancy_lock() {
+    let (_env, client, _contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+
+    client.deposit(&depositor, &amount);
+    let shares = client.shares_of(&depositor);
+    let half = shares / 2;
+
+    client.withdraw(&depositor, &half);
+    client.withdraw(&depositor, &half);
+
+    assert_eq!(client.shares_of(&depositor), 0);
+}
+
+#[test]
 fn test_withdraw_returns_principal_at_initial_index() {
     let (env, client, _contract_id, _owner, depositor, token) = setup();
     let amount = 1_000_000i128;

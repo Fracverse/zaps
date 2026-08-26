@@ -153,6 +153,9 @@ mod sandbox_protocol {
 #[contracttype]
 enum DataKey {
     UserShares(Address),
+    /// Reentrancy lock for withdraw. Held in temporary storage for the
+    /// duration of the token transfer so a callback cannot re-enter.
+    Locked,
 }
 
 #[contract]
@@ -175,6 +178,19 @@ impl YieldVaultContract {
 
     fn require_not_paused(env: &Env) {
         assert!(!Self::is_paused(env), "deposits paused");
+    }
+
+    /// Read the withdraw reentrancy lock from temporary storage.
+    fn is_locked(env: &Env) -> bool {
+        env.storage()
+            .temporary()
+            .get(&DataKey::Locked)
+            .unwrap_or(false)
+    }
+
+    /// Set or clear the withdraw reentrancy lock (`DataKey::Locked`).
+    fn set_locked(env: &Env, locked: bool) {
+        env.storage().temporary().set(&DataKey::Locked, &locked);
     }
 
     /// SC-016: One-time initializer. Sets owner, token address, and initial APY.
@@ -486,6 +502,7 @@ impl YieldVaultContract {
     pub fn withdraw(env: Env, user: Address, shares: i128) {
         user.require_auth();
         assert!(shares > 0, "shares must be positive");
+        assert!(!Self::is_locked(&env), "reentrancy");
 
         Self::checkpoint_index(&env);
 
@@ -525,7 +542,12 @@ impl YieldVaultContract {
             .get(&TOKEN_KEY)
             .expect("not initialized");
         let vault_addr = env.current_contract_address();
+
+        // Lock before the external transfer so a token callback cannot
+        // re-enter withdraw. Release after the transfer completes.
+        Self::set_locked(&env, true);
         token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+        Self::set_locked(&env, false);
 
         env.events().publish(
             (Symbol::new(&env, "YieldWithdrawn"),),
