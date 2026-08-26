@@ -527,6 +527,9 @@ export default function YieldPage() {
 
             {msg && (
               <div
+                role="status"
+                aria-live="polite"
+                data-testid={msg.type === "ok" ? "vault-success" : "vault-error"}
                 className={`mb-4 p-3 rounded-lg text-sm ${
                   msg.type === "ok"
                     ? "bg-green-50 text-green-700 border border-green-200"
@@ -539,8 +542,10 @@ export default function YieldPage() {
 
             <form onSubmit={signAndSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">APY (%)</label>
+                <label htmlFor="vault-apy" className="block text-xs font-semibold text-slate-600 mb-1">APY (%)</label>
                 <input
+                  id="vault-apy"
+                  name="apy"
                   required
                   type="number"
                   min="0"
@@ -552,8 +557,10 @@ export default function YieldPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Admin Address</label>
+                <label htmlFor="vault-admin-address" className="block text-xs font-semibold text-slate-600 mb-1">Admin Address</label>
                 <input
+                  id="vault-admin-address"
+                  name="adminAddress"
                   required
                   placeholder="G…"
                   value={params.adminAddress}
@@ -574,9 +581,12 @@ export default function YieldPage() {
               </div>
 
               <div className="flex items-center gap-3">
-                <label className="text-xs font-semibold text-slate-600">Pause Vault</label>
+                <span className="text-xs font-semibold text-slate-600" id="vault-pause-label">Pause Vault</span>
                 <button
                   type="button"
+                  role="switch"
+                  aria-checked={params.paused}
+                  aria-labelledby="vault-pause-label"
                   onClick={() => setParams((p) => ({ ...p, paused: !p.paused }))}
                   className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
                     params.paused ? "bg-red-500" : "bg-slate-300"
@@ -599,6 +609,7 @@ export default function YieldPage() {
 
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input
+                  id="vault-confirm"
                   type="checkbox"
                   checked={confirmed}
                   onChange={(e) => setConfirmed(e.target.checked)}

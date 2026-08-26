@@ -19,15 +19,48 @@ export const DEFAULT_WALLET_STATE: FreighterWalletState = {
   network: null,
 };
 
+/** The subset of `@stellar/freighter-api` this module uses. */
+export interface FreighterApi {
+  isConnected: () => Promise<{ isConnected: boolean }>;
+  getAddress: () => Promise<{ address?: string }>;
+  getNetwork: () => Promise<{ network?: string }>;
+  requestAccess: () => Promise<{ address?: string; error?: string }>;
+  signTransaction: (
+    xdr: string,
+    opts: { networkPassphrase: string },
+  ) => Promise<{ signedTxXdr?: string; error?: string }>;
+}
+
+/** Global under which a stand-in Freighter API can be injected. */
+export const FREIGHTER_MOCK_KEY = "__zapsFreighterApiMock__";
+
+/**
+ * Resolve the Freighter API.
+ *
+ * Freighter is a browser extension, so end-to-end tests have no way to install
+ * or drive it. When `window.__zapsFreighterApiMock__` is present the module
+ * uses that instead of the real package, which is what lets the Playwright
+ * suite exercise the signing flow. The hook is ignored in production builds,
+ * so a page served to a user can never be talked into using a fake wallet by
+ * anything that manages to set the global.
+ */
+export async function loadFreighterApi(): Promise<FreighterApi> {
+  if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+    const injected = (window as unknown as Record<string, unknown>)[
+      FREIGHTER_MOCK_KEY
+    ];
+    if (injected) return injected as FreighterApi;
+  }
+  return (await import("@stellar/freighter-api")) as unknown as FreighterApi;
+}
+
 /**
  * Detect whether Freighter is installed in the browser and, if so,
  * whether it is already connected and which public key / network are active.
  */
 export async function detectFreighter(): Promise<FreighterWalletState> {
   try {
-    const { isConnected, getAddress, getNetwork } = await import(
-      "@stellar/freighter-api"
-    );
+    const { isConnected, getAddress, getNetwork } = await loadFreighterApi();
 
     const connectedResult = await isConnected();
     if (!connectedResult.isConnected) {
@@ -62,7 +95,7 @@ export async function detectFreighter(): Promise<FreighterWalletState> {
  */
 export async function connectFreighter(): Promise<FreighterWalletState> {
   try {
-    const { requestAccess } = await import("@stellar/freighter-api");
+    const { requestAccess } = await loadFreighterApi();
     const result = await requestAccess();
     if ("error" in result && result.error) {
       throw new Error(result.error);
@@ -88,7 +121,7 @@ export async function signWithFreighter(
   xdr: string,
   networkPassphrase: string
 ): Promise<SignResult> {
-  const { signTransaction } = await import("@stellar/freighter-api");
+  const { signTransaction } = await loadFreighterApi();
   const result = await signTransaction(xdr, { networkPassphrase });
   if ("error" in result && result.error) {
     throw new Error(result.error);

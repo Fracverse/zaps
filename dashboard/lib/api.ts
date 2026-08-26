@@ -5,17 +5,136 @@ const SERVER_BASE =
 const SDP_BASE =
   process.env.NEXT_PUBLIC_SDP_URL ?? "http://localhost:8000";
 
+export const TOKEN_KEY = "token";
+export const REFRESH_TOKEN_KEY = "refresh_token";
+
+/** Read a stored credential, tolerating a non-browser (SSR) context. */
+function readStored(key: string): string | null {
+  return typeof window !== "undefined" ? localStorage.getItem(key) : null;
+}
+
+export function getToken(): string | null {
+  return readStored(TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  return readStored(REFRESH_TOKEN_KEY);
+}
+
+/** Persist the credentials returned by login or refresh. */
+export function storeSession(token: string, refreshToken?: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(TOKEN_KEY, token);
+  if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+}
+
+export function clearSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+/**
+ * A single in-flight refresh, shared by every request that hits a 401 at once.
+ *
+ * A dashboard page fires several requests on mount. When the token expires
+ * they all come back 401 together, and without this each would spend the
+ * refresh token separately — the backend rotates it, so the first refresh
+ * invalidates the rest and the user is logged out despite holding a perfectly
+ * good session.
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Exchange the stored refresh token for a new access token.
+ *
+ * Resolves to the new access token, or null when there is nothing to exchange
+ * or the server rejects it. Never throws: callers treat null as "could not
+ * refresh" and surface the original error.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight;
+
+  const refresh_token = getRefreshToken();
+  if (!refresh_token) return null;
+
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token }),
+      });
+
+      if (!res.ok) {
+        // The refresh token is spent or revoked — nothing left to try.
+        clearSession();
+        return null;
+      }
+
+      const data = (await res.json()) as {
+        token?: string;
+        refresh_token?: string;
+      };
+
+      if (!data.token) {
+        clearSession();
+        return null;
+      }
+
+      // The backend rotates refresh tokens, so store whatever came back.
+      storeSession(data.token, data.refresh_token);
+      return data.token;
+    } catch {
+      // Network failure: leave the session alone so a reload can retry.
+      return null;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
+/** Build request headers, stamping the bearer token when there is one. */
+function authHeaders(
+  token: string | null,
+  init?: RequestInit,
+  base: Record<string, string> = { "Content-Type": "application/json" },
+): HeadersInit {
+  return {
+    ...base,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+}
+
+/**
+ * Perform an authenticated request, refreshing the access token once and
+ * retrying if the server answers 401.
+ *
+ * The retry is deliberately single-shot: if the replayed request is rejected
+ * too, the token is not the problem and looping would just multiply the
+ * failure.
+ */
+async function authedFetch(
+  url: string,
+  init: RequestInit | undefined,
+  buildHeaders: (token: string | null) => HeadersInit,
+): Promise<Response> {
+  const res = await fetch(url, { ...init, headers: buildHeaders(getToken()) });
+  if (res.status !== 401) return res;
+
+  const token = await refreshAccessToken();
+  if (!token) return res;
+
+  return fetch(url, { ...init, headers: buildHeaders(token) });
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-  });
+  const res = await authedFetch(`${BASE}${path}`, init, (token) =>
+    authHeaders(token, init),
+  );
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -201,16 +320,9 @@ export const api = {
 };
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
-  const res = await fetch(`${SERVER_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-  });
+  const res = await authedFetch(`${SERVER_BASE}${path}`, init, (token) =>
+    authHeaders(token, init),
+  );
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -227,23 +339,15 @@ async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
  * fills in the correct `multipart/form-data; boundary=…` value automatically.
  */
 async function sdpReq<T>(path: string, init?: RequestInit): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
-  const sdpAdminToken =
-    process.env.NEXT_PUBLIC_SDP_ADMIN_TOKEN ?? "";
-
+  const sdpAdminToken = process.env.NEXT_PUBLIC_SDP_ADMIN_TOKEN ?? "";
   const isMultipart = init?.body instanceof FormData;
 
-  const res = await fetch(`${SDP_BASE}${path}`, {
-    ...init,
-    headers: {
-      // Only set Content-Type for JSON requests; let browser handle multipart.
-      ...(isMultipart ? {} : { "Content-Type": "application/json" }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(sdpAdminToken ? { "SDP-Admin-Token": sdpAdminToken } : {}),
-      ...init?.headers,
-    },
-  });
+  const res = await authedFetch(`${SDP_BASE}${path}`, init, (token) => ({
+    // Only set Content-Type for JSON requests; let browser handle multipart.
+    ...authHeaders(token, undefined, isMultipart ? {} : { "Content-Type": "application/json" }),
+    ...(sdpAdminToken ? { "SDP-Admin-Token": sdpAdminToken } : {}),
+    ...(init?.headers as Record<string, string> | undefined),
+  }));
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
