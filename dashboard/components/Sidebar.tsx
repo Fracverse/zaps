@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import HealthStatus from "./HealthStatus";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: "⬛" },
@@ -23,7 +24,7 @@ export default function Sidebar() {
         <span className="text-xl font-bold tracking-tight">⚡ Zaps</span>
         <p className="text-xs text-slate-400 mt-0.5">Merchant Dashboard</p>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {nav.map(({ href, label, icon }) => (
           <Link
             key={href}
@@ -39,6 +40,7 @@ export default function Sidebar() {
           </Link>
         ))}
       </nav>
+      <HealthStatus />
       <div className="px-3 py-4 border-t border-slate-700">
         <button
           onClick={logout}
