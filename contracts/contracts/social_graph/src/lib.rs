@@ -2,13 +2,17 @@
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
 
-pub const MAX_FRIENDS: u32 = 100;
+/// Maximum number of active friends a single account may hold.
+/// Bounds on-chain storage to prevent unbounded growth.
+pub const MAX_FRIENDS: u32 = 500;
 
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
     Friendship(Address, Address),
-    FriendCount(Address),
+    /// Running count of active friendships for an account.
+    /// Incremented on accept, decremented on remove.
+    UserFriendCount(Address),
 }
 
 #[contracttype]
@@ -38,6 +42,8 @@ pub enum Error {
     IncomingRequestExists = 4,
     /// There is no pending request between these parties to act on.
     NoPendingRequest = 5,
+    /// Accepting this request would push the user's friend count past MAX_FRIENDS.
+    FriendListFull = 6,
 }
 
 #[contract]
@@ -95,13 +101,17 @@ impl SocialGraphContract {
             return Err(Error::NoPendingRequest);
         }
 
-        let count_key_req = DataKey::FriendCount(requester.clone());
+        let count_key_req = DataKey::UserFriendCount(requester.clone());
         let count_req: u32 = env.storage().persistent().get(&count_key_req).unwrap_or(0);
-        assert!(count_req < MAX_FRIENDS, "max friend cap exceeded");
+        if count_req >= MAX_FRIENDS {
+            return Err(Error::FriendListFull);
+        }
 
-        let count_key_friend = DataKey::FriendCount(friend.clone());
+        let count_key_friend = DataKey::UserFriendCount(friend.clone());
         let count_friend: u32 = env.storage().persistent().get(&count_key_friend).unwrap_or(0);
-        assert!(count_friend < MAX_FRIENDS, "max friend cap exceeded");
+        if count_friend >= MAX_FRIENDS {
+            return Err(Error::FriendListFull);
+        }
 
         env.storage().persistent().set(&count_key_req, &(count_req + 1));
         env.storage().persistent().set(&count_key_friend, &(count_friend + 1));
@@ -150,13 +160,13 @@ impl SocialGraphContract {
         user.require_auth();
 
         if Self::is_friend(env.clone(), user.clone(), friend.clone()) {
-            let count_key_user = DataKey::FriendCount(user.clone());
+            let count_key_user = DataKey::UserFriendCount(user.clone());
             let count_user: u32 = env.storage().persistent().get(&count_key_user).unwrap_or(0);
             if count_user > 0 {
                 env.storage().persistent().set(&count_key_user, &(count_user - 1));
             }
 
-            let count_key_friend = DataKey::FriendCount(friend.clone());
+            let count_key_friend = DataKey::UserFriendCount(friend.clone());
             let count_friend: u32 = env.storage().persistent().get(&count_key_friend).unwrap_or(0);
             if count_friend > 0 {
                 env.storage().persistent().set(&count_key_friend, &(count_friend - 1));
@@ -369,6 +379,59 @@ mod tests {
         assert_eq!(
             client.try_request_friend(&user, &user),
             Err(Ok(Error::CannotFriendSelf))
+        );
+    }
+
+    #[test]
+    fn accept_friend_returns_friend_list_full_when_cap_reached() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, SocialGraphContract);
+        let client = SocialGraphContractClient::new(&env, &contract_id);
+
+        let user_a = Address::generate(&env);
+        // Pre-seed user_a's count to MAX_FRIENDS so the very next accept is rejected.
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserFriendCount(user_a.clone()), &MAX_FRIENDS);
+        });
+
+        let user_b = Address::generate(&env);
+        client.request_friend(&user_b, &user_a);
+
+        assert_eq!(
+            client.try_accept_friend(&user_a, &user_b),
+            Err(Ok(Error::FriendListFull)),
+            "accepting a friend when requester is at capacity must return FriendListFull"
+        );
+    }
+
+    #[test]
+    fn accept_friend_returns_friend_list_full_for_the_acceptor() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, SocialGraphContract);
+        let client = SocialGraphContractClient::new(&env, &contract_id);
+
+        let requester = Address::generate(&env);
+        let acceptor = Address::generate(&env);
+
+        // Pre-seed the acceptor's count to MAX_FRIENDS.
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::UserFriendCount(acceptor.clone()), &MAX_FRIENDS);
+        });
+
+        client.request_friend(&requester, &acceptor);
+
+        assert_eq!(
+            client.try_accept_friend(&acceptor, &requester),
+            Err(Ok(Error::FriendListFull)),
+            "accepting when acceptor is at capacity must return FriendListFull"
         );
     }
 }

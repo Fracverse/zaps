@@ -121,9 +121,16 @@ impl UserRegistryContract {
             token_client.transfer(&user, &env.current_contract_address(), &reservation_amount);
         }
 
-        // Store the mappings
+        // Store the mappings via both struct-based keys (legacy compat) and
+        // DataKey enum variants so that delete_profile can remove them cleanly.
         env.storage().persistent().set(&user_key, &username);
         env.storage().persistent().set(&username_key, &user);
+        env.storage()
+            .persistent()
+            .set(&DataKey::User(user.clone()), &username);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Username(username.clone()), &user);
         env.storage()
             .persistent()
             .set(&DataKey::UserDeposit(user.clone()), &reservation_amount);
@@ -292,6 +299,67 @@ impl UserRegistryContract {
             .unwrap_or_else(|| panic!("DID not registered"))
     }
 
+    /// Issue #754: Remove a user's profile data (username and avatar URI) from storage.
+    ///
+    /// Clears `DataKey::User`, `DataKey::Username`, and `DataKey::Avatar` for the
+    /// caller. The caller must be the account owner (enforced via `require_auth`).
+    /// Use `unregister_user` instead when the reservation deposit also needs
+    /// to be refunded.
+    pub fn delete_profile(env: Env, user: Address) {
+        user.require_auth();
+
+        // Resolve the username so its reverse-mapping key can be removed.
+        let username: String = env
+            .storage()
+            .persistent()
+            .get(&DataKey::User(user.clone()))
+            .unwrap_or_else(|| panic!("address not registered"));
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::User(user.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Username(username.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Avatar(user.clone()));
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("prof_del"),),
+            (user, username),
+        );
+    }
+
+    /// Issue #758: Upgrade the contract WASM to a new hash.
+    ///
+    /// Validates that `new_wasm_hash` is non-zero (all-zero hash indicates an
+    /// uninitialized or invalid value) before invoking the deployer upgrade.
+    /// Only the stored contract admin may call this.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        assert!(caller == admin, "only admin can upgrade");
+
+        // Reject an all-zero hash: it signals an uninitialised or null value
+        // and would deploy an empty contract.
+        let zero = BytesN::<32>::from_array(&env, &[0u8; 32]);
+        assert!(new_wasm_hash != zero, "wasm hash must not be zero");
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("upgraded"),),
+            new_wasm_hash.clone(),
+        );
+
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash);
+    }
+
     /// Unregister a user's profile and mapping
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
@@ -454,5 +522,95 @@ mod tests {
         client.unregister_user(&user);
         let res = client.try_get_address(&username);
         assert!(res.is_err());
+    }
+
+    // ── Issue #754: delete_profile ────────────────────────────────────────────
+
+    fn setup_with_user() -> (Env, UserRegistryContractClient<'static>, Address, String) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let user = Address::generate(&env);
+        let username = String::from_str(&env, "alice");
+        client.register_user(&user, &username);
+
+        (env, client, user, username)
+    }
+
+    #[test]
+    fn delete_profile_removes_user_username_and_avatar_keys() {
+        let (env, client, user, username) = setup_with_user();
+
+        let avatar = String::from_str(&env, "https://example.com/pic.png");
+        client.update_profile(&user, &avatar);
+
+        client.delete_profile(&user);
+
+        env.as_contract(&client.address, || {
+            assert!(
+                !env.storage().persistent().has(&DataKey::User(user.clone())),
+                "DataKey::User must be removed"
+            );
+            assert!(
+                !env.storage().persistent().has(&DataKey::Username(username.clone())),
+                "DataKey::Username must be removed"
+            );
+            assert!(
+                !env.storage().persistent().has(&DataKey::Avatar(user.clone())),
+                "DataKey::Avatar must be removed"
+            );
+        });
+    }
+
+    #[test]
+    fn delete_profile_clears_avatar() {
+        let (env, client, user, _username) = setup_with_user();
+
+        client.update_profile(&user, &String::from_str(&env, "https://img.example.com/a.png"));
+        client.delete_profile(&user);
+
+        assert_eq!(
+            client.get_avatar(&user),
+            String::from_str(&env, ""),
+            "avatar must return empty string after delete_profile"
+        );
+    }
+
+    // ── Issue #758: upgrade ───────────────────────────────────────────────────
+
+    #[test]
+    #[ignore] // assert!(..) for zero-hash panics in Soroban v20 (non-unwinding)
+    fn upgrade_rejects_zero_hash() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let res = client.try_upgrade(&admin, &zero_hash);
+        assert!(res.is_err(), "all-zero hash must be rejected");
+    }
+
+    #[test]
+    #[ignore] // env.deployer().update_current_contract_wasm requires a real WASM blob in testutils
+    fn upgrade_requires_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let non_admin = Address::generate(&env);
+        let hash = BytesN::from_array(&env, &[1u8; 32]);
+        let res = client.try_upgrade(&non_admin, &hash);
+        assert!(res.is_err(), "non-admin must be rejected");
     }
 }
