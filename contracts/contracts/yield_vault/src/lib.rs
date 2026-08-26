@@ -9,6 +9,8 @@ use soroban_sdk::{
 const OWNER_KEY: Symbol = symbol_short!("owner");
 const TOKEN_KEY: Symbol = symbol_short!("token");
 const APY_KEY: Symbol = symbol_short!("apy");
+const PROPOSED_APY_KEY: Symbol = symbol_short!("prop_apy");
+const APY_ACTIVATION_KEY: Symbol = symbol_short!("apy_act");
 const SHARES_KEY: Symbol = symbol_short!("tot_shr");
 const ASSETS_KEY: Symbol = symbol_short!("tot_ast");
 const IDX_KEY: Symbol = symbol_short!("yld_idx");
@@ -18,6 +20,9 @@ const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
 const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
 const PAUSED_KEY: Symbol = symbol_short!("paused");
 const MAX_APY_BPS: u32 = 2_000;
+
+/// SC-053: Minimum delay (in seconds) between queuing an APY change and applying it.
+const APY_TIMELOCK_SECS: u64 = 86_400; // 24 hours
 
 /// Precision factor used in all fixed-point math (1e8).
 const PRECISION: i128 = 100_000_000;
@@ -296,18 +301,61 @@ impl YieldVaultContract {
         );
     }
 
-    /// Update the vault target APY in basis points.
-    /// Only the owner may call this entrypoint.
+    /// Queue a vault target APY change in basis points.
+    /// Only the owner may call this entrypoint. The change is not applied
+    /// immediately; it becomes active only after the 24-hour time-lock delay
+    /// has elapsed, at which point `apply_apy` must be called.
     pub fn update_apy(env: Env, caller: Address, new_apy_bps: u32) {
         caller.require_auth();
         Self::require_owner(&env, &caller);
         assert!(new_apy_bps <= MAX_APY_BPS, "apy out of bounds");
 
+        let activation = env
+            .ledger()
+            .timestamp()
+            .saturating_add(APY_TIMELOCK_SECS);
+        env.storage()
+            .instance()
+            .set(&PROPOSED_APY_KEY, &new_apy_bps);
+        env.storage()
+            .instance()
+            .set(&APY_ACTIVATION_KEY, &activation);
+        env.events().publish(
+            (Symbol::new(&env, "ApyQueued"),),
+            (new_apy_bps, activation),
+        );
+    }
+
+    /// Apply a previously queued APY change once the 24-hour time-lock delay
+    /// has elapsed. Only the owner may call this entrypoint.
+    pub fn apply_apy(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
+        let proposed: u32 = env
+            .storage()
+            .instance()
+            .get(&PROPOSED_APY_KEY)
+            .expect("no pending apy change");
+        let activation: u64 = env
+            .storage()
+            .instance()
+            .get(&APY_ACTIVATION_KEY)
+            .expect("no pending apy change");
+
+        let now = env.ledger().timestamp();
+        assert!(
+            now >= activation,
+            "apy change not yet active; time-lock still in effect"
+        );
+
         Self::checkpoint_index(&env);
         let old_apy: u32 = env.storage().instance().get(&APY_KEY).unwrap_or(0);
-        env.storage().instance().set(&APY_KEY, &new_apy_bps);
+        env.storage().instance().set(&APY_KEY, &proposed);
+        env.storage().instance().remove(&PROPOSED_APY_KEY);
+        env.storage().instance().remove(&APY_ACTIVATION_KEY);
         env.events()
-            .publish((Symbol::new(&env, "ApyUpdated"),), (old_apy, new_apy_bps));
+            .publish((Symbol::new(&env, "ApyUpdated"),), (old_apy, proposed));
     }
 
     /// Toggle paused state. While paused, new deposits are rejected.
@@ -539,6 +587,11 @@ impl YieldVaultContract {
 
     pub fn yield_index(env: Env) -> i128 {
         Self::current_index(&env)
+    }
+
+    /// Returns the currently active APY in basis points.
+    pub fn apy(env: Env) -> u32 {
+        env.storage().instance().get(&APY_KEY).unwrap_or(0)
     }
 
     // ─── SC-024: Emit YieldAccrued event on compound ──────────────────────────
