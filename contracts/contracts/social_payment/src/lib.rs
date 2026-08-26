@@ -1,8 +1,8 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, symbol_short, Address, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
+    Env, String, Symbol, Vec,
 };
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
@@ -17,7 +17,16 @@ const PR_COUNT_KEY: Symbol = symbol_short!("pr_cnt");
 const LIKE_COOLDOWN_LEDGERS: u32 = 5;
 
 /// Maximum number of recipients allowed in a single batch payout call.
+/// Prevents CPU / gas exhaustion from unbounded loops in Soroban.
 const MAX_BATCH_SIZE: u32 = 100;
+
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    /// The `recipients` vector supplied to `batch_payout` exceeds `MAX_BATCH_SIZE`.
+    BatchTooLarge = 1,
+}
 
 // ── External contract interface ───────────────────────────────────────────────
 
@@ -446,16 +455,19 @@ impl SocialPaymentContract {
     ///   - Emits MassPayoutExecuted with sender, batch_size, total_volume, fee_charged
     ///     so off-chain indexers can reconcile bulk payouts without scanning individual
     ///     BatchPayoutItem events.
-    pub fn batch_payout(env: Env, sender: Address, payouts: Vec<PayoutItem>) {
+    /// SC-039 / Issues #529–#532, #752: Batch payout to multiple recipients.
+    ///
+    /// Returns `Err(Error::BatchTooLarge)` when `payouts.len() > MAX_BATCH_SIZE`
+    /// so callers receive a typed, inspectable error instead of an opaque panic.
+    pub fn batch_payout(env: Env, sender: Address, payouts: Vec<PayoutItem>) -> Result<(), Error> {
         // #531 — explicit sender auth
         sender.require_auth();
 
-        // #531 — enforce max batch size
+        // #752 / #531 — enforce max batch size; return typed error on violation
         let batch_size = payouts.len();
-        assert!(
-            batch_size <= MAX_BATCH_SIZE,
-            "batch size exceeds maximum of 100"
-        );
+        if batch_size > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
 
         let naira_token: Address = env
             .storage()
@@ -521,6 +533,8 @@ impl SocialPaymentContract {
                 fee_charged: batch_fee,
             },
         );
+
+        Ok(())
     }
 
     /// SC-040 / Issue #533: Admin recovery route to salvage tokens sent to contract context by mistake.
@@ -1132,10 +1146,9 @@ mod tests {
         assert_eq!(token_client.balance(&sender), 9_950);
     }
 
-    // ── #531: batch size limit enforced ───────────────────────────────────────
+    // ── #752 / #531: batch size limit enforced via typed Error ───────────────
     #[test]
-    #[ignore] // assert!(..) in Soroban v20 causes non-unwinding panic
-    fn test_batch_payout_rejects_oversized_batch() {
+    fn test_batch_payout_rejects_oversized_batch_with_typed_error() {
         let (env, client, admin, _treasury, sender, _receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000_000);
         client.set_naira_token(&token);
@@ -1150,8 +1163,31 @@ mod tests {
             });
         }
 
-        let res = client.try_batch_payout(&sender, &items);
-        assert!(res.is_err(), "batch of 101 must be rejected");
+        assert_eq!(
+            client.try_batch_payout(&sender, &items),
+            Err(Ok(Error::BatchTooLarge)),
+            "batch of 101 must return BatchTooLarge error"
+        );
+    }
+
+    #[test]
+    fn test_batch_payout_accepts_exactly_max_batch_size() {
+        let (env, client, admin, _treasury, sender, _receiver) = setup();
+        // Mint enough to cover 100 × 1 stroop + fee
+        let token = mint_token(&env, &admin, &sender, 10_000);
+        client.set_naira_token(&token);
+
+        let mut items = soroban_sdk::vec![&env];
+        for _ in 0..100u32 {
+            let r = Address::generate(&env);
+            items.push_back(PayoutItem {
+                recipient: r,
+                amount: 1,
+            });
+        }
+
+        // Exactly 100 must succeed (returns Ok)
+        client.batch_payout(&sender, &items);
     }
 
     // ── #531: sender auth required ────────────────────────────────────────────
