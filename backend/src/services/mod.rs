@@ -5,3 +5,4 @@ pub mod redis_cache;
 pub mod stellar;
 pub mod sweep_worker;
 pub mod yield_calc;
+pub mod yield_service;
