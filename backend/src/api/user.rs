@@ -407,6 +407,81 @@ pub async fn suggest_usernames(
     .into_response()
 }
 
+/// GET /api/users/autocomplete?q=&limit=
+///
+/// Fast prefix-matching search endpoint backed by a pg_trgm GIN index (#725).
+/// Uses `ILIKE 'query%'` which the trigram index accelerates for large tables.
+/// Falls back to similarity scoring when the prefix index is insufficient.
+pub async fn autocomplete(
+    State(pool): State<sqlx::PgPool>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+) -> impl IntoResponse {
+    let term = params.q.trim().to_lowercase();
+    if term.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "q must not be empty" })),
+        )
+            .into_response();
+    }
+    if term.chars().count() > USERNAME_MAX_LEN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("q must be at most {} characters", USERNAME_MAX_LEN)
+            })),
+        )
+            .into_response();
+    }
+
+    let limit = params.limit.unwrap_or(10).clamp(1, 25);
+    let pattern = format!("{}%", escape_like_pattern(&term));
+
+    // ILIKE 'query%' is served by the trigram GIN index (idx_users_username_trgm)
+    // and by the btree text_pattern_ops index (idx_users_username_lower_pattern).
+    let rows = match sqlx::query(
+        r#"
+        SELECT username, address, avatar_url,
+               similarity(LOWER(username), $1) AS score
+        FROM users
+        WHERE LOWER(username) ILIKE $2 ESCAPE '\'
+        ORDER BY score DESC, LOWER(username) ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(&term)
+    .bind(&pattern)
+    .bind(limit)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Autocomplete query failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let results: Vec<UserSearchItem> = rows
+        .into_iter()
+        .map(|row| UserSearchItem {
+            username: row.get("username"),
+            address: row.get("address"),
+            avatar_url: row.get("avatar_url"),
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "query": term,
+        "results": results,
+    }))
+    .into_response()
+}
+
 pub async fn list_friends(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> impl IntoResponse {
     let rows = match sqlx::query(
         r#"
