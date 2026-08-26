@@ -10,6 +10,7 @@ import NotificationBell from "@/components/NotificationBell";
 import CommandPalette from "@/components/CommandPalette";
 import MobileNavDrawer from "@/components/MobileNavDrawer";
 import { NotificationsProvider } from "@/lib/notifications-context";
+import HealthStatusIndicator from "@/components/HealthStatusIndicator";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -91,6 +92,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
             {/* Right-side controls */}
             <div className="flex items-center gap-2">
+              {/* #785 — Backend health status indicator */}
+              <HealthStatusIndicator />
               {/* #798 — Notification bell */}
               <NotificationBell />
               <ThemeSelector />
