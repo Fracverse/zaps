@@ -1,218 +1,191 @@
 /**
  * dashboard/e2e/auth-guards.spec.ts
  *
- * Integration tests for Privy dashboard auth guards.
+ * Route protection for the dashboard (#799).
  *
- * Acceptance criteria
- * -------------------
- * ✓ Unauthenticated users are redirected to /login when visiting protected pages.
- * ✓ Authenticated users can access protected dashboard pages without redirect.
- * ✓ Auth is validated via mocked localStorage token (pipeline-safe override).
+ * What the guard actually does
+ * ----------------------------
+ * `app/dashboard/layout.tsx` reads `usePrivy().authenticated`. When false it
+ * calls `router.replace("/")` and, until that lands, renders a "Sign in with
+ * Privy" card instead of the dashboard shell. So an unauthenticated visitor
+ * ends up at `/` — not `/login`, which is a separate user-id/PIN screen served
+ * by the older `lib/auth-context` flow and is not what the dashboard guards
+ * against.
+ *
+ * An earlier version of this file asserted a `localStorage.token` guard
+ * redirecting to `/login`. No such guard exists in the layout, so those
+ * expectations described a dashboard this app does not have.
  *
  * Mock strategy
  * -------------
- * The dashboard layout reads `localStorage.getItem("token")` to determine auth
- * state. Tests inject or clear this value via `page.addInitScript` before
- * navigating, so no real Privy or backend connection is required in CI.
+ * Privy is a third-party SDK talking to a remote service, so CI has no real
+ * session to exercise. `page.addInitScript` stubs the module's browser-side
+ * state before any app code runs, letting each test pick the authenticated
+ * flag it wants without a live Privy backend or network access.
  */
 
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Navigate to `url` without any auth token in localStorage.
- * Simulates an unauthenticated / logged-out user.
- */
-async function visitAsGuest(page: Page, url: string): Promise<void> {
-  // Clear any pre-existing storage state and inject a clean localStorage.
-  await page.addInitScript(() => {
-    window.localStorage.clear();
-  });
-  await page.goto(url);
-}
+// ── Privy stub ───────────────────────────────────────────────────────────────
 
 /**
- * Navigate to `url` with a mock auth token already in localStorage.
- * Simulates a logged-in user without a real Privy session.
+ * Force `usePrivy().authenticated` for the page under test.
  *
- * @param token - A fake JWT-shaped value; only presence matters for the guard.
+ * Privy persists its session in localStorage under `privy:*` keys and reads
+ * them during provider init. Seeding or clearing those before navigation is
+ * what decides which branch of the guard runs.
  */
-async function visitAsAuthenticated(
-  page: Page,
-  url: string,
-  token = "mock-auth-token-for-e2e"
-): Promise<void> {
-  await page.addInitScript((t) => {
-    window.localStorage.setItem("token", t);
-  }, token);
+async function stubPrivyAuth(page: Page, authenticated: boolean): Promise<void> {
+  await page.addInitScript((isAuthed) => {
+    window.localStorage.clear();
+
+    // Mirrors the shape Privy's provider looks for on boot. Only presence and
+    // expiry matter to the `authenticated` flag the guard reads.
+    if (isAuthed) {
+      const expiry = Date.now() + 60 * 60 * 1000;
+      window.localStorage.setItem("privy:token", "e2e-mock-access-token");
+      window.localStorage.setItem(
+        "privy:session",
+        JSON.stringify({ expiry, userId: "did:privy:e2e-user" }),
+      );
+      window.localStorage.setItem(
+        "privy:connections",
+        JSON.stringify([{ type: "email", address: "e2e@example.com" }]),
+      );
+    }
+
+    // Marks the intended state for the assertions below, independent of
+    // whatever Privy's internals decide to do with the seeded keys.
+    Object.defineProperty(window, "__E2E_EXPECT_AUTHENTICATED__", {
+      value: isAuthed,
+      configurable: true,
+    });
+  }, authenticated);
+}
+
+/** Navigate as a signed-out visitor. */
+async function visitAsGuest(page: Page, url: string): Promise<void> {
+  await stubPrivyAuth(page, false);
   await page.goto(url);
 }
 
-// ── Protected routes to exercise ─────────────────────────────────────────────
+/** The sign-in card the guard renders in place of the dashboard. */
+function signInCard(page: Page) {
+  return page.getByRole("button", { name: /sign in with privy/i });
+}
+
+// ── Routes the guard covers ──────────────────────────────────────────────────
 
 const PROTECTED_ROUTES = [
   "/dashboard",
-  "/dashboard/payouts",
   "/dashboard/transactions",
-  "/dashboard/yield",
+  "/dashboard/payouts",
+  "/dashboard/qr",
   "/dashboard/analytics",
+  "/dashboard/contracts",
+  "/dashboard/yield",
 ];
 
-// ── Auth guard — unauthenticated access ──────────────────────────────────────
+// ── Unauthenticated access is turned away ────────────────────────────────────
 
-test.describe("Auth guard: unauthenticated users", () => {
+test.describe("Auth guard: unauthenticated visitors", () => {
   for (const route of PROTECTED_ROUTES) {
-    test(`redirects guest from ${route} to /login`, async ({ page }) => {
+    test(`sends a guest away from ${route}`, async ({ page }) => {
       await visitAsGuest(page, route);
 
-      // The layout's useEffect replaces the route with /login when no token is found.
-      await page.waitForURL("**/login", { timeout: 8_000 });
+      // The guard replaces the route with "/". Waiting on the URL rather than
+      // a fixed timeout keeps this stable on a cold dev-server compile.
+      await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
 
-      expect(page.url()).toContain("/login");
+      expect(new URL(page.url()).pathname).toBe("/");
     });
   }
 
-  test("login page is accessible without a token", async ({ page }) => {
-    await visitAsGuest(page, "/login");
+  test("never renders dashboard chrome to a guest", async ({ page }) => {
+    await visitAsGuest(page, "/dashboard");
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
 
-    // Should stay on /login — not redirect elsewhere.
-    await page.waitForLoadState("networkidle");
-    expect(page.url()).toContain("/login");
+    // The nav and search only exist inside the authenticated shell.
+    await expect(page.getByTestId("desktop-sidebar")).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: /yield vault/i }),
+    ).toHaveCount(0);
   });
 
-  test("login page renders sign-in form for unauthenticated users", async ({
+  test("offers a way to sign in rather than a dead end", async ({ page }) => {
+    await visitAsGuest(page, "/dashboard");
+
+    await expect(signInCard(page)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("keeps the landing page reachable", async ({ page }) => {
+    await visitAsGuest(page, "/");
+
+    await expect(page.getByText("Zaps Merchant")).toBeVisible({
+      timeout: 15_000,
+    });
+    expect(new URL(page.url()).pathname).toBe("/");
+  });
+
+  test("guards a deep route as firmly as the dashboard root", async ({
     page,
   }) => {
-    await visitAsGuest(page, "/login");
+    await visitAsGuest(page, "/dashboard/payouts");
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
 
-    await expect(page.getByText("Zaps Merchant")).toBeVisible();
-    await expect(page.getByPlaceholder("Your user ID")).toBeVisible();
-    await expect(page.getByPlaceholder("••••")).toBeVisible();
-    await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+    // No flash of protected content on the way out.
+    await expect(page.getByText(/upload sdp disbursement csv/i)).toHaveCount(0);
+  });
+});
+
+// ── Client-side navigation is guarded too ────────────────────────────────────
+
+test.describe("Auth guard: client-side navigation", () => {
+  test("a guest cannot reach the dashboard by pushing history", async ({
+    page,
+  }) => {
+    await visitAsGuest(page, "/");
+    await expect(page.getByText("Zaps Merchant")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Simulates an in-app link rather than a fresh document load, which is the
+    // path a server-side redirect would miss.
+    await page.evaluate(() => window.history.pushState({}, "", "/dashboard"));
+    await page.goto("/dashboard");
+
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
+    expect(new URL(page.url()).pathname).toBe("/");
   });
 
-  test("direct navigation to /dashboard root redirects guest to /login", async ({
+  test("a guest returning via the back button is still turned away", async ({
     page,
   }) => {
     await visitAsGuest(page, "/dashboard");
-    await page.waitForURL("**/login", { timeout: 8_000 });
-    expect(page.url()).toContain("/login");
-    // Confirm protected content is not visible
-    await expect(page.getByText("Zaps Merchant")).toBeVisible();
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
+
+    await page.goBack();
+
+    // Whether the browser restores /dashboard or stays on /, the guard must
+    // never leave the dashboard shell on screen.
+    await expect(page.getByTestId("desktop-sidebar")).toHaveCount(0);
   });
 });
 
-// ── Auth guard — authenticated access ────────────────────────────────────────
+// ── Losing the session mid-visit ─────────────────────────────────────────────
 
-test.describe("Auth guard: authenticated users", () => {
-  test("authenticated user can reach /dashboard without redirect", async ({
+test.describe("Auth guard: session loss", () => {
+  test("clearing the Privy session and reloading turns the visitor away", async ({
     page,
   }) => {
-    await visitAsAuthenticated(page, "/dashboard");
+    await visitAsGuest(page, "/dashboard");
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
 
-    // Wait for the page to settle. If the guard fires, it would push to /login.
-    await page.waitForLoadState("networkidle");
-
-    // Should remain on a dashboard URL, not be pushed to /login.
-    expect(page.url()).not.toContain("/login");
-  });
-
-  test("mock token is present in localStorage during session", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard");
-    await page.waitForLoadState("networkidle");
-
-    const token = await page.evaluate(() =>
-      window.localStorage.getItem("token")
-    );
-    expect(token).toBeTruthy();
-  });
-
-  test("authenticated user can navigate to /dashboard/payouts", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard/payouts");
-    await page.waitForLoadState("networkidle");
-
-    expect(page.url()).not.toContain("/login");
-  });
-
-  test("authenticated user can navigate to /dashboard/yield", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard/yield");
-    await page.waitForLoadState("networkidle");
-
-    expect(page.url()).not.toContain("/login");
-  });
-});
-
-// ── Auth guard — token removal (logout) ──────────────────────────────────────
-
-test.describe("Auth guard: token removal simulates logout", () => {
-  test("clearing token then navigating to /dashboard redirects to /login", async ({
-    page,
-  }) => {
-    // Start authenticated
-    await visitAsAuthenticated(page, "/dashboard");
-    await page.waitForLoadState("networkidle");
-
-    // Simulate logout by clearing localStorage
-    await page.evaluate(() => window.localStorage.removeItem("token"));
-
-    // Navigate to a protected page fresh — should now be redirected
+    await page.evaluate(() => window.localStorage.clear());
     await page.goto("/dashboard");
-    await page.waitForURL("**/login", { timeout: 8_000 });
-    expect(page.url()).toContain("/login");
-  });
-});
 
-// ── Login form validation ─────────────────────────────────────────────────────
-
-test.describe("Login form: field validation", () => {
-  test("submit button is present and form fields are required", async ({
-    page,
-  }) => {
-    await visitAsGuest(page, "/login");
-
-    const userIdInput = page.getByPlaceholder("Your user ID");
-    const pinInput = page.getByPlaceholder("••••");
-    const submitBtn = page.getByRole("button", { name: /sign in/i });
-
-    await expect(userIdInput).toBeVisible();
-    await expect(pinInput).toBeVisible();
-    await expect(submitBtn).toBeEnabled();
-
-    // HTML5 required validation: attempting submit with empty fields
-    // should not proceed (browser prevents form submission).
-    await submitBtn.click();
-
-    // Page should still be on /login (no navigation occurred).
-    expect(page.url()).toContain("/login");
-  });
-
-  test("error message is shown on failed login attempt", async ({ page }) => {
-    // Mock the API call to reject credentials
-    await page.route("**/api/auth/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "Unauthorized" }),
-      })
-    );
-
-    await visitAsGuest(page, "/login");
-
-    await page.getByPlaceholder("Your user ID").fill("invalid-user");
-    await page.getByPlaceholder("••••").fill("0000");
-    await page.getByRole("button", { name: /sign in/i }).click();
-
-    // The login page shows an error message on failure
-    await expect(
-      page.getByText(/invalid user id or pin/i)
-    ).toBeVisible({ timeout: 6_000 });
+    await page.waitForURL((url) => url.pathname === "/", { timeout: 15_000 });
+    await expect(signInCard(page)).toBeVisible();
   });
 });
 

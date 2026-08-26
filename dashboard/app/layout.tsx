@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { PrivyProvider } from "@privy-io/react-auth";
 import { ThemeProvider } from "next-themes";
+import { WalletProvider } from "@/lib/wallet-context";
 
 export const metadata: Metadata = {
   title: "Zaps Merchant Dashboard",
@@ -20,7 +21,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           }}
         >
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-            {children}
+            {/* #778 — one Freighter session for the whole app, restored on mount */}
+            <WalletProvider>{children}</WalletProvider>
           </ThemeProvider>
         </PrivyProvider>
       </body>

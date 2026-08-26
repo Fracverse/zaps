@@ -8,10 +8,13 @@ import SearchBar from "@/components/SearchBar";
 import ThemeSelector from "@/components/ThemeSelector";
 import NotificationBell from "@/components/NotificationBell";
 import CommandPalette from "@/components/CommandPalette";
+import MobileNavDrawer from "@/components/MobileNavDrawer";
 import { NotificationsProvider } from "@/lib/notifications-context";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // #808 — mobile drawer, only reachable below the md breakpoint
+  const [navOpen, setNavOpen] = useState(false);
 
   // #793 — Cmd+K / Ctrl+K opens the command palette
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -30,8 +33,32 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     <>
       <div className="flex min-h-screen bg-slate-50 dark:bg-slate-950">
         <Sidebar />
-        <main className="ml-60 flex-1 p-6 overflow-auto">
+        <main className="flex-1 overflow-auto p-4 md:ml-60 md:p-6">
           <div className="mb-6 flex items-center justify-between gap-4">
+            {/* #808 — hamburger opens the nav drawer on small screens */}
+            <button
+              type="button"
+              onClick={() => setNavOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={navOpen}
+              data-testid="mobile-nav-trigger"
+              className="rounded-lg border border-slate-300 p-2 text-slate-600 transition-colors hover:bg-slate-50 md:hidden dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+
             {/* Search bar with Cmd+K hint */}
             <div className="flex-1 flex items-center gap-2">
               <div className="flex-1">
@@ -76,6 +103,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 
       {/* #793 — Command palette modal */}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+
+      {/* #808 — Mobile navigation drawer */}
+      <MobileNavDrawer open={navOpen} onClose={() => setNavOpen(false)} />
     </>
   );
 }

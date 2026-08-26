@@ -134,3 +134,38 @@ export function truncateKey(key: string, head = 4, tail = 4): string {
   if (key.length <= head + tail + 3) return key;
   return `${key.slice(0, head)}…${key.slice(-tail)}`;
 }
+
+// ── Wallet session persistence (#778) ────────────────────────────────────────
+
+/**
+ * localStorage key recording that the user has previously granted access.
+ *
+ * Freighter's `isConnected()` reports whether the extension is present and
+ * unlocked, not whether *this site* was ever authorised. Without a local record
+ * a page refresh would either silently show a wallet the user never connected,
+ * or pop an access prompt on every load. This flag is what makes the reconnect
+ * on mount deliberate rather than either of those.
+ */
+export const WALLET_SESSION_KEY = "zaps.wallet.connected";
+
+/** Whether a previous session recorded a granted connection. */
+export function hasWalletSession(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(WALLET_SESSION_KEY) === "true";
+  } catch {
+    // Private mode or a blocked store costs reconnect, not the app.
+    return false;
+  }
+}
+
+/** Record, or clear, the granted-connection flag for future page loads. */
+export function setWalletSession(connected: boolean): void {
+  try {
+    if (typeof window === "undefined") return;
+    if (connected) window.localStorage.setItem(WALLET_SESSION_KEY, "true");
+    else window.localStorage.removeItem(WALLET_SESSION_KEY);
+  } catch {
+    /* best-effort */
+  }
+}
