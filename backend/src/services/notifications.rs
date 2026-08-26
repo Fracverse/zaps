@@ -10,6 +10,9 @@ use crate::services::yield_calc::SECONDS_PER_YEAR;
 
 const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
 const EXPO_PUSH_BATCH_SIZE: usize = 100;
+/// Permanently failing push/webhook dispatches land in `failed_webhook_dlq`
+/// after this many attempts (#806).
+const MAX_WEBHOOK_RETRIES: u32 = 5;
 const DEFAULT_YIELD_REPORT_THRESHOLD: i64 = 1_000;
 // Cron expressions are `sec min hour day month day-of-week`, evaluated in UTC.
 const DEFAULT_DAILY_CRON: &str = "0 0 0 * * *";
@@ -205,14 +208,19 @@ async fn send_yield_reports(
 
     let client = reqwest::Client::new();
     for (batch_index, batch) in expo_push_batches(&messages).enumerate() {
-        if let Err(err) =
-            send_expo_push_batch(pool, &client, batch, config.expo_access_token.as_deref()).await
+        if let Err(err) = dispatch_expo_push_with_retries(
+            pool,
+            &client,
+            batch,
+            config.expo_access_token.as_deref(),
+        )
+        .await
         {
             tracing::warn!(
                 batch_number = batch_index + 1,
                 batch_size = batch.len(),
                 error = ?err,
-                "Failed to send yield report push notification batch"
+                "Yield report push notification batch exhausted retries"
             );
         }
     }
@@ -334,6 +342,123 @@ fn build_expo_push_request(
         request = request.bearer_auth(token);
     }
     request
+}
+
+/// True once a dispatch has used up its 5 attempts and must go to the DLQ.
+fn should_dead_letter(attempts_made: u32) -> bool {
+    attempts_made >= MAX_WEBHOOK_RETRIES
+}
+
+/// Retry an Expo (or generic HTTP webhook) dispatch up to 5 times, then persist
+/// the payload + last error into `failed_webhook_dlq`.
+async fn dispatch_expo_push_with_retries(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    messages: &[ExpoPushMessage],
+    access_token: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let payload = serde_json::to_value(messages)?;
+    let mut last_error = String::new();
+    let mut attempts = 0u32;
+
+    while attempts < MAX_WEBHOOK_RETRIES {
+        attempts += 1;
+        match send_expo_push_batch(pool, client, messages, access_token).await {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_error = err.to_string();
+                tracing::warn!(
+                    attempt = attempts,
+                    max = MAX_WEBHOOK_RETRIES,
+                    destination = EXPO_PUSH_URL,
+                    error = %last_error,
+                    "Webhook/push dispatch attempt failed"
+                );
+                if should_dead_letter(attempts) {
+                    break;
+                }
+            }
+        }
+    }
+
+    record_failed_webhook_dlq(pool, EXPO_PUSH_URL, &payload, &last_error, attempts).await?;
+    Err(format!(
+        "webhook permanently failed after {attempts} retries: {last_error}"
+    )
+    .into())
+}
+
+/// Dispatch a generic HTTP webhook with the same 5-attempt budget, then DLQ.
+pub async fn dispatch_http_webhook(
+    pool: &PgPool,
+    client: &reqwest::Client,
+    destination: &str,
+    payload: &serde_json::Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut last_error = String::new();
+    let mut attempts = 0u32;
+
+    while attempts < MAX_WEBHOOK_RETRIES {
+        attempts += 1;
+        match client.post(destination).json(payload).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                last_error = format!("HTTP {status}: {text}");
+            }
+            Err(err) => {
+                last_error = err.to_string();
+            }
+        }
+        tracing::warn!(
+            attempt = attempts,
+            max = MAX_WEBHOOK_RETRIES,
+            destination,
+            error = %last_error,
+            "Webhook dispatch attempt failed"
+        );
+        if should_dead_letter(attempts) {
+            break;
+        }
+    }
+
+    record_failed_webhook_dlq(pool, destination, payload, &last_error, attempts).await?;
+    Err(format!(
+        "webhook permanently failed after {attempts} retries: {last_error}"
+    )
+    .into())
+}
+
+/// Persist a permanently failing push/webhook so operators can inspect or replay it.
+async fn record_failed_webhook_dlq(
+    pool: &PgPool,
+    destination: &str,
+    payload: &serde_json::Value,
+    error_message: &str,
+    retry_count: u32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO failed_webhook_dlq
+            (destination, payload, error_message, retry_count)
+        VALUES ($1, $2::jsonb, $3, $4)
+        "#,
+    )
+    .bind(destination)
+    .bind(payload.to_string())
+    .bind(error_message)
+    .bind(retry_count as i32)
+    .execute(pool)
+    .await?;
+
+    tracing::error!(
+        destination,
+        retry_count,
+        error = error_message,
+        "Moved failed webhook/push dispatch to failed_webhook_dlq"
+    );
+    Ok(())
 }
 
 async fn send_expo_push_batch(
@@ -463,6 +588,29 @@ mod tests {
         assert_eq!(payload.len(), 2);
         assert_eq!(payload[0]["to"], "ExponentPushToken[first]");
         assert_eq!(payload[1]["to"], "ExponentPushToken[second]");
+    }
+
+    #[test]
+    fn dispatch_moves_to_dlq_after_five_retries() {
+        assert!(!should_dead_letter(0));
+        assert!(!should_dead_letter(4));
+        assert!(should_dead_letter(5));
+        assert!(should_dead_letter(6));
+        assert_eq!(MAX_WEBHOOK_RETRIES, 5);
+    }
+
+    #[test]
+    fn dlq_record_captures_payload_retry_count_and_error() {
+        let messages = vec![test_message("ExponentPushToken[dead]".to_string())];
+        let payload = serde_json::to_value(&messages).unwrap();
+        let error_message = "Expo push API returned 500: upstream timeout";
+        let retry_count = MAX_WEBHOOK_RETRIES;
+
+        assert_eq!(payload[0]["to"], "ExponentPushToken[dead]");
+        assert_eq!(payload[0]["title"], "Test notification");
+        assert_eq!(retry_count, 5);
+        assert!(error_message.contains("500"));
+        assert!(should_dead_letter(retry_count));
     }
 
     fn test_message(to: String) -> ExpoPushMessage {
