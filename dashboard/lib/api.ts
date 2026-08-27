@@ -290,6 +290,12 @@ export const api = {
       `/api/v1/admin/logs?limit=${limit}&offset=${offset}`,
     ),
 
+  // ── Backend health (#785) ─────────────────────────────────────────────────
+  /** Poll the backend /health endpoint. No auth required. */
+  health: () =>
+    fetch(`${BASE}/health`)
+      .then((res) => res.json() as Promise<HealthResponse>),
+
   // ── SDP (Stellar Disbursement Platform) ───────────────────────────────────
   sdp: {
     /**
@@ -546,6 +552,24 @@ export interface RegistryStats {
   total_usernames: number;
   weekly_growth: number;
   active_registrations: number;
+}
+
+// ── Backend health (#785) ───────────────────────────────────────────────────
+
+export interface HealthComponentStatus {
+  status: string;
+  latency_ms: number;
+}
+
+export interface HealthResponse {
+  /** "ok" when all components are healthy; "degraded" otherwise. */
+  status: "ok" | "degraded";
+  components: {
+    database: HealthComponentStatus;
+    yield_db: HealthComponentStatus;
+    soroban_rpc: HealthComponentStatus;
+  };
+  checked_at: string;
 }
 
 // ── Identity linking ────────────────────────────────────────────────────────
