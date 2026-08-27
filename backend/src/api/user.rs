@@ -139,9 +139,12 @@ pub fn validate_username_prefix(prefix: &str) -> Result<(), UsernameError> {
 }
 
 fn validate_username_charset(value: &str) -> Result<(), UsernameError> {
+    if value.starts_with('.') || value.ends_with('.') || value.contains("..") {
+        return Err(UsernameError::InvalidCharacters);
+    }
     if value
         .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.')
     {
         Ok(())
     } else {
@@ -963,13 +966,21 @@ mod tests {
 
     #[test]
     fn rejects_symbols_and_whitespace() {
-        for candidate in ["e-bube", "e_bube", "e.bube", "e bube", "ebube!", "ébube"] {
+        for candidate in ["e-bube", "e_bube", "e bube", "ebube!", "ébube"] {
             assert_eq!(
                 validate_username(candidate),
                 Err(UsernameError::InvalidCharacters),
                 "expected {candidate:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn accepts_dot_separated_usernames_but_not_edge_dots() {
+        assert_eq!(validate_username("test.zaps"), Ok(()));
+        assert_eq!(validate_username(".test"), Err(UsernameError::InvalidCharacters));
+        assert_eq!(validate_username("test."), Err(UsernameError::InvalidCharacters));
+        assert_eq!(validate_username("test..zaps"), Err(UsernameError::InvalidCharacters));
     }
 
     #[test]
