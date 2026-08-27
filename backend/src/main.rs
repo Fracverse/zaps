@@ -611,7 +611,7 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
 
     let result: Result<(), String> = async {
         let client = redis::Client::open(url).map_err(|e| e.to_string())?;
-        let mut conn = redis::tokio::aio::ConnectionManager::new(client)
+        let mut conn = redis::aio::ConnectionManager::new(client)
             .await
             .map_err(|e| e.to_string())?;
         redis::cmd("PING")

@@ -15,7 +15,7 @@ dotenvy = "0.15.7"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
 tower-http = { version = "0.5.2", features = ["cors", "trace"] }
-reqwest = { version = "0.11.24", features = ["json"] }
+reqwest = { version = "0.12", features = ["json"] }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 jsonwebtoken = "9.2.0"
 base64 = "0.22.1"
