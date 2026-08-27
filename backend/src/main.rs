@@ -335,48 +335,82 @@ async fn main() {
                 ),
         );
 
+    // #726 — Track background worker tasks so they can be allowed to finish
+    // their current batch item before the process exits on shutdown.
+    let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
     // Spawn indexer in the background
     let indexer_pool = pool.clone();
     let indexer_rpc_url = config.stellar_rpc_url.clone();
     let indexer_cache = yield_cache.clone();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url, indexer_cache).await {
             tracing::error!("Stellar Indexer background worker failed: {:?}", e);
         }
-    });
+    }));
 
     // Spawn the bridge status poller to periodically refresh pending cross-chain deposits.
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         api::bridge::run_status_poller(bridge_state).await;
-    });
+    }));
 
     // BE-029: Auto-sweep idle stablecoins for users with auto-earn enabled.
     let sweep_pool = pool.clone();
     let sweep_config = services::sweep_worker::SweepWorkerConfig::from_env();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
-    });
+    }));
 
     // BE-547: Hourly APY checkpoints into yield_rates_history, so the series
     // every yield estimate is priced against has a guaranteed cadence.
     let checkpoint_pool = pool.clone();
     let checkpoint_config = services::sweep_worker::YieldCheckpointConfig::from_env();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         services::sweep_worker::run_yield_checkpoints(checkpoint_pool, checkpoint_config).await;
-    });
+    }));
 
     // BE-032: Daily / weekly yield report push notifications.
     let notification_pool = pool.clone();
     let notification_config = services::notifications::NotificationSchedulerConfig::from_env();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         services::notifications::run(notification_pool, notification_config).await;
-    });
+    }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    // #726 — Graceful shutdown: run the HTTP server until it stops OR a
+    // SIGTERM/ctrl-c is received.  On shutdown we stop accepting new work and
+    // let the tracked background workers finish their current batch item
+    // (and flush DB connections) before exiting.
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            if let Err(e) = result {
+                tracing::error!("HTTP server terminated with error: {e}");
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!(
+                "Shutdown signal received; completing active worker tasks before exit"
+            );
+        }
+    }
+
+    let join_workers = tokio::spawn(async move {
+        for handle in worker_handles {
+            let _ = handle.await;
+        }
+    });
+    if tokio::time::timeout(std::time::Duration::from_secs(30), join_workers)
+        .await
+        .is_err()
+    {
+        tracing::warn!("Some worker tasks did not finish within the grace period");
+    }
+
+    tracing::info!("Shutdown complete");
 }
 
 // ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────

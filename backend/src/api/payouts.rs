@@ -1,15 +1,21 @@
 use axum::{
+    body::Bytes,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::db::models::PayoutBatch;
+
+/// HMAC-SHA256 construction used to verify SDP webhook signatures.
+type HmacSha256 = Hmac<Sha256>;
 
 /// GET /api/payouts/batches
 /// Return paginated list of batch payout runs (from payout_batches table).
@@ -321,4 +327,136 @@ pub async fn create_batch(
         status,
     })
     .into_response()
+}
+
+/// POST /api/payouts/sdp/webhook
+///
+/// Stellar Disbursement Platform (SDP) reconciliation webhook receiver.
+///
+/// 1. Validates the `X-SDP-Signature` header as an HMAC-SHA256 of the raw
+///    request body keyed by `SDP_WEBHOOK_SECRET` (constant-time compare).
+/// 2. On success, updates the referenced batch recipient's state in the
+///    database (status + tx_hash).  See issue #727.
+pub async fn sdp_reconciliation_webhook(
+    State(pool): State<PgPool>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    // ── 1. Resolve the webhook secret ────────────────────────────────────────
+    let secret = match std::env::var("SDP_WEBHOOK_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Webhook secret not configured" })),
+            )
+                .into_response();
+        }
+    };
+
+    // ── 2. Read the supplied signature ───────────────────────────────────────
+    let signature = match headers
+        .get("X-SDP-Signature")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(s) => s,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Missing signature header" })),
+            )
+                .into_response();
+        }
+    };
+
+    // ── 3. Compute HMAC-SHA256 of the raw body and compare ───────────────────
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Invalid webhook secret" })),
+            )
+                .into_response();
+        }
+    };
+    mac.update(&body);
+    let computed = hex::encode(mac.finalize().into_bytes());
+
+    if !constant_time_eq(computed.as_bytes(), signature.as_bytes()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Invalid signature" })),
+        )
+            .into_response();
+    }
+
+    // ── 4. Parse the reconciliation payload ─────────────────────────────────
+    let payload: SdpReconciliationPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("SDP webhook payload parse error: {e}");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid payload" })),
+            )
+                .into_response();
+        }
+    };
+
+    let recipient_id: Uuid = match payload.id.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid recipient id" })),
+            )
+                .into_response();
+        }
+    };
+
+    // ── 5. Update the batch item state ──────────────────────────────────────
+    match sqlx::query(
+        "UPDATE batch_recipients SET status = $1, tx_hash = COALESCE($2, tx_hash) WHERE id = $3",
+    )
+    .bind(&payload.status)
+    .bind(&payload.tx_hash)
+    .bind(recipient_id)
+    .execute(&pool)
+    .await
+    {
+        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to update batch recipient {}: {e}", payload.id);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to update batch item" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// SDP reconciliation webhook payload.
+#[derive(Debug, Deserialize)]
+struct SdpReconciliationPayload {
+    /// Batch recipient id (UUID string).
+    pub id: String,
+    /// New disbursement status reported by SDP (e.g. "SUCCESS", "FAILED").
+    pub status: String,
+    /// Transaction hash, when available.
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+}
+
+/// Constant-time comparison to avoid leaking the signature via timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
