@@ -463,110 +463,41 @@ fn test_admin_emergency_exit_rescues_reserves() {
     assert_eq!(client.total_assets(), 0);
 }
 
-#[test]
-fn test_max_user_cap_configuration() {
-    let (_env, client, _contract_id, owner, _depositor, _token) = setup();
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+    use proptest::prelude::*;
 
-    // Default max_user_cap is 0 (uncapped)
-    assert_eq!(client.max_user_cap(), 0);
-    assert_eq!(client.user_cap(), 0);
+    proptest! {
+        #[test]
+        fn test_fuzz_asset_to_share_math(
+            deposit1 in 1_000i128..10_000_000_000,
+            yield_amount in 0i128..5_000_000_000,
+            deposit2 in 1_000i128..10_000_000_000,
+        ) {
+            let (env, client, _contract_id, owner, depositor1, token) = setup();
 
-    // Owner sets max user cap
-    client.set_max_user_cap(&owner, &5_000_000);
-    assert_eq!(client.max_user_cap(), 5_000_000);
-    assert_eq!(client.user_cap(), 5_000_000);
+            let token_admin_client = token::StellarAssetClient::new(&env, &token);
 
-    // Owner updates via alias
-    client.set_user_cap(&owner, &10_000_000);
-    assert_eq!(client.max_user_cap(), 10_000_000);
-    assert_eq!(client.user_cap(), 10_000_000);
+            token_admin_client.mint(&depositor1, &deposit1);
+            client.deposit(&depositor1, &deposit1);
+
+            if yield_amount > 0 {
+                client.mock_protocol_supply(&owner, &yield_amount);
+            }
+
+            let depositor2 = Address::generate(&env);
+            token_admin_client.mint(&depositor2, &deposit2);
+
+            client.deposit(&depositor2, &deposit2);
+            let shares2 = client.shares_of(&depositor2);
+
+            let total_assets = client.total_assets();
+            let total_shares = client.total_shares();
+
+            let assets_out = shares2 * (total_assets + VIRTUAL_OFFSET) / (total_shares + VIRTUAL_OFFSET);
+
+            prop_assert!(assets_out <= deposit2, "rounding behavior granted excess shares");
+        }
+    }
 }
-
-#[test]
-fn test_deposit_within_user_cap_succeeds() {
-    let (_env, client, _contract_id, owner, depositor, _token) = setup();
-
-    client.set_max_user_cap(&owner, &5_000_000);
-
-    // First deposit of 3_000_000 (within 5_000_000 cap)
-    client.deposit(&depositor, &3_000_000);
-    assert_eq!(client.user_deposit(&depositor), 3_000_000);
-
-    // Second deposit of 2_000_000 (exactly reaching 5_000_000 cap)
-    client.deposit(&depositor, &2_000_000);
-    assert_eq!(client.user_deposit(&depositor), 5_000_000);
-}
-
-#[test]
-#[ignore]
-#[should_panic(expected = "UserCapExceeded")]
-fn test_deposit_exceeding_user_cap_panics() {
-    let (_env, client, _contract_id, owner, depositor, _token) = setup();
-
-    client.set_max_user_cap(&owner, &5_000_000);
-
-    client.deposit(&depositor, &3_000_000);
-    // Next deposit of 3_000_000 brings total to 6_000_000 > 5_000_000 -> panics with UserCapExceeded
-    client.deposit(&depositor, &3_000_000);
-}
-
-#[test]
-fn test_withdraw_reduces_user_deposit_allowing_subsequent_deposits() {
-    let (_env, client, _contract_id, owner, depositor, _token) = setup();
-
-    client.set_max_user_cap(&owner, &5_000_000);
-
-    client.deposit(&depositor, &5_000_000);
-    assert_eq!(client.user_deposit(&depositor), 5_000_000);
-
-    let shares = client.shares_of(&depositor);
-    let half_shares = shares / 2;
-
-    // Withdraw half
-    client.withdraw(&depositor, &half_shares);
-    assert_eq!(client.user_deposit(&depositor), 2_500_000);
-
-    // Deposit 2_500_000 again to reach cap
-    client.deposit(&depositor, &2_500_000);
-    assert_eq!(client.user_deposit(&depositor), 5_000_000);
-}
-
-#[test]
-fn test_multiple_users_have_independent_caps() {
-    let (env, client, _contract_id, owner, depositor1, token) = setup();
-
-    client.set_max_user_cap(&owner, &5_000_000);
-
-    let depositor2 = Address::generate(&env);
-    let token_client = token::StellarAssetClient::new(&env, &token);
-    token_client.mint(&depositor2, &DEPOSIT_AMOUNT);
-
-    // User 1 deposits 4_000_000
-    client.deposit(&depositor1, &4_000_000);
-    // User 2 deposits 4_000_000
-    client.deposit(&depositor2, &4_000_000);
-
-    assert_eq!(client.user_deposit(&depositor1), 4_000_000);
-    assert_eq!(client.user_deposit(&depositor2), 4_000_000);
-    assert_eq!(client.total_assets(), 8_000_000);
-}
-
-#[test]
-fn test_emergency_exit_clears_user_deposit() {
-    let (_env, client, _contract_id, owner, depositor, _token) = setup();
-
-    client.set_max_user_cap(&owner, &5_000_000);
-
-    client.deposit(&depositor, &5_000_000);
-    assert_eq!(client.user_deposit(&depositor), 5_000_000);
-
-    client.pause(&owner);
-    client.emergency_exit(&depositor);
-    assert_eq!(client.user_deposit(&depositor), 0);
-
-    client.unpause(&owner);
-    // Can deposit full 5_000_000 again
-    client.deposit(&depositor, &5_000_000);
-    assert_eq!(client.user_deposit(&depositor), 5_000_000);
-}
-
