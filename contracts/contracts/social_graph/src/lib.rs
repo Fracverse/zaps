@@ -246,6 +246,18 @@ mod tests {
     }
 
     #[test]
+    fn friendship_becomes_active_only_after_recipient_accepts() {
+        let (_env, client, user, friend, _other) = setup();
+
+        client.request_friend(&user, &friend);
+        assert!(!client.is_friend(&user, &friend));
+
+        client.accept_friend(&friend, &user);
+        assert!(client.is_friend(&user, &friend));
+        assert!(client.is_friend(&friend, &user));
+    }
+
+    #[test]
     fn accept_makes_friendship_mutual() {
         let (env, client, user, friend, other) = setup();
 
