@@ -1,8 +1,8 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, String, Symbol,
 };
 
 #[contract]
@@ -11,15 +11,15 @@ pub struct UserRegistryContract;
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    User(Address),       // Maps Address -> Username (String)
-    Username(String),    // Maps Username (String) -> Address
-    Avatar(Address),     // Maps Address -> Avatar URI (String)
-    PrivyDid(String),    // Maps Privy DID -> wallet Address
-    WalletDid(Address),  // Maps wallet Address -> Privy DID (reverse index)
-    Admin,               // Stores the contract admin Address
-    PrivyVerifierKey,    // Ed25519 public key trusted to attest DID <-> wallet links
-    ReservationToken,    // Stores Naira token contract Address
-    ReservationAmount,   // Stores required reservation amount (i128)
+    User(Address),        // Maps Address -> Username (String)
+    Username(String),     // Maps Username (String) -> Address
+    Avatar(Address),      // Maps Address -> Avatar URI (String)
+    PrivyDid(String),     // Maps Privy DID -> wallet Address
+    WalletDid(Address),   // Maps wallet Address -> Privy DID (reverse index)
+    Admin,                // Stores the contract admin Address
+    PrivyVerifierKey,     // Ed25519 public key trusted to attest DID <-> wallet links
+    ReservationToken,     // Stores Naira token contract Address
+    ReservationAmount,    // Stores required reservation amount (i128)
     UserDeposit(Address), // Stores deposited reservation amount per user (i128)
 }
 
@@ -85,7 +85,13 @@ impl UserRegistryContract {
             .set(&DataKey::ReservationAmount, &amount);
     }
 
-    /// Register a username mapping to the sender's address
+    /// Register a username mapping to the sender's address.
+    ///
+    /// Deducts the configured reservation lock fee (`ReservationAmount` of
+    /// `ReservationToken`, e.g. the Naira token contract) from `user` into
+    /// this contract's own balance, tracked per-user under
+    /// `DataKey::UserDeposit`. See `update_profile` (issue #772) for how the
+    /// fee is released back once the user completes their profile.
     pub fn register_user(env: Env, user: Address, username: String) {
         user.require_auth();
         Self::validate_username(&username);
@@ -172,12 +178,35 @@ impl UserRegistryContract {
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
-    /// Update user profile metadata (e.g. avatar URI)
+    /// Update user profile metadata (e.g. avatar URI).
+    ///
+    /// Issue #772: releases the username-reservation lock fee held in escrow
+    /// (see `register_user`) back to `user` the first time they complete
+    /// their profile. `DataKey::UserDeposit` doubles as the "not yet
+    /// activated" flag: a successful release clears it to zero, so calling
+    /// `update_profile` again — or `unregister_user`'s own refund path —
+    /// finds nothing left to pay out and cannot release the fee twice.
     pub fn update_profile(env: Env, user: Address, avatar_uri: String) {
         user.require_auth();
         env.storage()
             .persistent()
             .set(&DataKey::Avatar(user.clone()), &avatar_uri);
+
+        let deposit_key = DataKey::UserDeposit(user.clone());
+        let deposit_amount: i128 = env.storage().persistent().get(&deposit_key).unwrap_or(0);
+        if deposit_amount > 0 {
+            let reservation_token: Address = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ReservationToken)
+                .unwrap_or_else(|| panic!("reservation token not configured"));
+            let token_client = token::Client::new(&env, &reservation_token);
+            token_client.transfer(&env.current_contract_address(), &user, &deposit_amount);
+            env.storage().persistent().remove(&deposit_key);
+
+            env.events()
+                .publish((symbol_short!("res_rel"),), (user.clone(), deposit_amount));
+        }
 
         env.events().publish(
             (soroban_sdk::symbol_short!("prof_upd"),),
@@ -276,11 +305,7 @@ impl UserRegistryContract {
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
         // Remove old reverse mapping if present
-        if let Some(old_wallet) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, Address>(&did_key)
-        {
+        if let Some(old_wallet) = env.storage().persistent().get::<DataKey, Address>(&did_key) {
             env.storage()
                 .persistent()
                 .remove(&DataKey::WalletDid(old_wallet));
@@ -325,10 +350,8 @@ impl UserRegistryContract {
             .persistent()
             .remove(&DataKey::Avatar(user.clone()));
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("prof_del"),),
-            (user, username),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("prof_del"),), (user, username));
     }
 
     /// Issue #758: Upgrade the contract WASM to a new hash.
@@ -356,11 +379,16 @@ impl UserRegistryContract {
             new_wasm_hash.clone(),
         );
 
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    /// Unregister a user's profile and mapping
+    /// Unregister a user's profile and mapping.
+    ///
+    /// Refunds any reservation deposit still held for `user`. In the normal
+    /// flow that deposit was already released by `update_profile` on profile
+    /// completion (issue #772), so this is a fallback for users who never
+    /// completed their profile before unregistering — `UserDeposit` reads as
+    /// 0 either way once it has been paid out.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
@@ -407,6 +435,121 @@ mod test;
 mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+
+    // ── Issue #772: reservation lock-fee release on profile completion ──────
+
+    /// Registers a contract with a reservation fee configured against a real
+    /// (test) token, and mints the returned user enough balance to cover it.
+    fn setup_with_reservation() -> (
+        Env,
+        UserRegistryContractClient<'static>,
+        Address,
+        Address,
+        i128,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let token_admin_addr = Address::generate(&env);
+        let token_contract_id = env
+            .register_stellar_asset_contract_v2(token_admin_addr)
+            .address();
+        let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+
+        let reservation_amount: i128 = 500;
+        client.set_reservation_config(&token_contract_id, &reservation_amount);
+
+        let user = Address::generate(&env);
+        token_admin.mint(&user, &10_000_i128);
+
+        (env, client, user, token_contract_id, reservation_amount)
+    }
+
+    #[test]
+    fn update_profile_releases_reservation_deposit_on_first_call() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        client.register_user(&user, &String::from_str(&env, "alice"));
+
+        let token = token::Client::new(&env, &token_contract_id);
+        assert_eq!(token.balance(&user), 10_000 - reservation_amount);
+        assert_eq!(token.balance(&client.address), reservation_amount);
+
+        client.update_profile(&user, &String::from_str(&env, "https://example.com/a.png"));
+
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "deposit must be paid back in full on profile completion"
+        );
+        assert_eq!(token.balance(&client.address), 0);
+    }
+
+    #[test]
+    fn update_profile_does_not_release_deposit_twice() {
+        let (env, client, user, token_contract_id, _reservation_amount) = setup_with_reservation();
+        client.register_user(&user, &String::from_str(&env, "bob"));
+
+        client.update_profile(&user, &String::from_str(&env, "https://example.com/a.png"));
+        client.update_profile(&user, &String::from_str(&env, "https://example.com/b.png"));
+
+        let token = token::Client::new(&env, &token_contract_id);
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "a second update_profile call must not pay the deposit out again"
+        );
+    }
+
+    #[test]
+    fn unregister_after_profile_completed_does_not_refund_again() {
+        let (env, client, user, token_contract_id, _reservation_amount) = setup_with_reservation();
+        client.register_user(&user, &String::from_str(&env, "carol"));
+        client.update_profile(&user, &String::from_str(&env, "https://example.com/a.png"));
+
+        let token = token::Client::new(&env, &token_contract_id);
+        let balance_after_activation = token.balance(&user);
+
+        client.unregister_user(&user);
+
+        assert_eq!(
+            token.balance(&user),
+            balance_after_activation,
+            "unregister_user must not refund a deposit update_profile already released"
+        );
+    }
+
+    #[test]
+    fn update_profile_with_zero_reservation_amount_does_not_transfer() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let token_admin_addr = Address::generate(&env);
+        let token_contract_id = env
+            .register_stellar_asset_contract_v2(token_admin_addr)
+            .address();
+        client.set_reservation_config(&token_contract_id, &0i128);
+
+        let user = Address::generate(&env);
+        client.register_user(&user, &String::from_str(&env, "dave"));
+
+        // No panic and no transfer expected: nothing was ever escrowed.
+        client.update_profile(&user, &String::from_str(&env, "https://example.com/a.png"));
+
+        let token = token::Client::new(&env, &token_contract_id);
+        assert_eq!(token.balance(&user), 0);
+        assert_eq!(token.balance(&client.address), 0);
+    }
 
     #[test]
     fn test_register_and_update_profile() {
@@ -557,11 +700,15 @@ mod tests {
                 "DataKey::User must be removed"
             );
             assert!(
-                !env.storage().persistent().has(&DataKey::Username(username.clone())),
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Username(username.clone())),
                 "DataKey::Username must be removed"
             );
             assert!(
-                !env.storage().persistent().has(&DataKey::Avatar(user.clone())),
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Avatar(user.clone())),
                 "DataKey::Avatar must be removed"
             );
         });
@@ -571,7 +718,10 @@ mod tests {
     fn delete_profile_clears_avatar() {
         let (env, client, user, _username) = setup_with_user();
 
-        client.update_profile(&user, &String::from_str(&env, "https://img.example.com/a.png"));
+        client.update_profile(
+            &user,
+            &String::from_str(&env, "https://img.example.com/a.png"),
+        );
         client.delete_profile(&user);
 
         assert_eq!(
