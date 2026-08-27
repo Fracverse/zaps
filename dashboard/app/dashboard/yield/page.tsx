@@ -18,6 +18,8 @@ import {
   type FreighterWalletState,
   DEFAULT_WALLET_STATE,
 } from "@/lib/freighter";
+import { useSuperAdmin } from "@/lib/auth-context";
+import { api } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -234,6 +236,9 @@ function WalletBadge({ wallet }: { wallet: FreighterWalletState }) {
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function YieldPage() {
+  // #786 — only superadmins may trigger vault configuration changes
+  const isSuperAdmin = useSuperAdmin();
+
   const [tab, setTab] = useState<"config" | "audit" | "apy-history">("config");
 
   // ── Wallet state ─────────────────────────────────────────────────────────────
@@ -541,6 +546,17 @@ export default function YieldPage() {
             )}
 
             <form onSubmit={signAndSubmit} className="space-y-4">
+              {/* #786 — access gate notice for non-superadmin users */}
+              {!isSuperAdmin && (
+                <div
+                  role="alert"
+                  data-testid="vault-access-denied"
+                  className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+                >
+                  🔒 Superadmin access required to modify vault parameters.
+                </div>
+              )}
+
               <div>
                 <label htmlFor="vault-apy" className="block text-xs font-semibold text-slate-600 mb-1">APY (%)</label>
                 <input
@@ -552,7 +568,10 @@ export default function YieldPage() {
                   step="0.1"
                   value={params.apy}
                   onChange={(e) => setParams((p) => ({ ...p, apy: e.target.value }))}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  disabled={!isSuperAdmin}
+                  aria-disabled={!isSuperAdmin}
+                  title={!isSuperAdmin ? "Superadmin access required" : undefined}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
                 />
               </div>
 
@@ -582,13 +601,18 @@ export default function YieldPage() {
 
               <div className="flex items-center gap-3">
                 <span className="text-xs font-semibold text-slate-600" id="vault-pause-label">Pause Vault</span>
+                {/* #786 — superadmin-only toggle */}
                 <button
                   type="button"
                   role="switch"
                   aria-checked={params.paused}
                   aria-labelledby="vault-pause-label"
-                  onClick={() => setParams((p) => ({ ...p, paused: !p.paused }))}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  disabled={!isSuperAdmin}
+                  aria-disabled={!isSuperAdmin}
+                  title={!isSuperAdmin ? "Superadmin access required" : undefined}
+                  data-testid="vault-pause-toggle"
+                  onClick={() => isSuperAdmin && setParams((p) => ({ ...p, paused: !p.paused }))}
+                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                     params.paused ? "bg-red-500" : "bg-slate-300"
                   }`}
                 >
@@ -620,11 +644,16 @@ export default function YieldPage() {
 
               <button
                 type="submit"
-                disabled={!confirmed || signing || !wallet.connected}
-                className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                data-testid="vault-sign-submit"
+                disabled={!isSuperAdmin || !confirmed || signing || !wallet.connected}
+                title={!isSuperAdmin ? "Superadmin access required" : undefined}
+                aria-disabled={!isSuperAdmin}
+                className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {signing
                   ? "Signing with Freighter…"
+                  : !isSuperAdmin
+                  ? "Superadmin access required"
                   : !wallet.connected
                   ? "Connect wallet to sign"
                   : "Sign & Submit via Freighter"}
