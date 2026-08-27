@@ -1,8 +1,8 @@
-#c[cfg(test)]
+#![cfg(test)]
 
 use super::*;
-use ed25519_dalek {Signer, SigningKey};
-use soroban_sdk {testutils::Address as _, xdr::ToXdr, BytesN, Env, String};
+use ed25519_dalek::{Signer, SigningKey};
+use soroban_sdk::{testutils::Address as _, xdr::ToXdr, BytesN, Env, String};
 
 /// Deterministic test-only signing key standing in for Privy's verifier key.
 fn verifier_key() -> SigningKey {
@@ -26,15 +26,15 @@ fn setup() -> (Env, UserRegistryContractClient<'static>, SigningKey) {
 }
 
 /// Sign the `(did, wallet)` payload the contract expects, as Privy's backend would.
-fn sign_did_link(r
+fn sign_did_link(
     env: &Env,
     signing_key: &SigningKey,
     did: &String,
     wallet: &Address,
 ) -> BytesN<64> {
-    let message = (did.clone(), wallet.clone()).to_dir(env);
+    let message = (did.clone(), wallet.clone()).to_xdr(env);
     let signature = signing_key.sign(&message.to_alloc_vec());
-    BytesN ::from_array(env, &signature.to_bytes())
+    BytesN::from_array(env, &signature.to_bytes())
 }
 
 /// Verify that registering the same DID twice panics with a duplicate error.
@@ -44,7 +44,7 @@ fn sign_did_link(r
 fn test_register_privy_did_duplicate_fails() {
     let (env, client, signing_key) = setup();
     let wallet = Address::generate(&env);
-    let did = String::from_str("&env", "did:privy:abc123");
+    let did = String::from_str(&env, "did:privy:abc123");
     let signature = sign_did_link(&env, &signing_key, &did, &wallet);
     client.register_privy_did(&did, &wallet, &signature);
     // Second registration with same DID must panic
@@ -57,7 +57,7 @@ fn test_register_privy_did_success() {
     let (env, client, signing_key) = setup();
     let wallet = Address::generate(&env);
     let did = String::from_str(&env, "did:privy:user1");
-    let signature = sign_did_link&env, &signing_key, &did, &wallet);
+    let signature = sign_did_link(&env, &signing_key, &did, &wallet);
     client.register_privy_did(&did, &wallet, &signature);
     assert_eq!(client.get_wallet_for_did(&did), wallet);
 }
@@ -67,7 +67,7 @@ fn test_register_privy_did_success() {
 fn test_register_privy_did_snapshot() {
     let (env, client, signing_key) = setup();
     let wallet = Address::generate(&env);
-    let did = String::from_str("&env", "did:privy:snapshot");
+    let did = String::from_str(&env, "did:privy:snapshot");
     let signature = sign_did_link(&env, &signing_key, &did, &wallet);
 
     client.register_privy_did(&did, &wallet, &signature);
@@ -92,7 +92,7 @@ fn test_register_privy_did_invalid_signature_fails() {
     let did = String::from_str(&env, "did:privy:untrusted");
 
     let forged_key = SigningKey::from_bytes(&[9u8; 32]);
-    let signature = sign_did_link&env, &forged_key, &did, &wallet);
+    let signature = sign_did_link(&env, &forged_key, &did, &wallet);
 
     client.register_privy_did(&did, &wallet, &signature);
 }
@@ -104,7 +104,7 @@ fn test_update_privy_did_success() {
     let old_wallet = Address::generate(&env);
     let new_wallet = Address::generate(&env);
     let did = String::from_str(&env, "did:privy:user2");
-    let signature = sign_did_link&env, &signing_key, &did, &old_wallet);
+    let signature = sign_did_link(&env, &signing_key, &did, &old_wallet);
     client.register_privy_did(&did, &old_wallet, &signature);
     client.update_privy_did(&did, &old_wallet, &new_wallet);
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
@@ -119,7 +119,7 @@ fn test_update_privy_did_wrong_wallet_fails() {
     let correct_wallet = Address::generate(&env);
     let wrong_wallet = Address::generate(&env);
     let new_wallet = Address::generate(&env);
-    let did = String::from_str("&env", "did:privy:user3");
+    let did = String::from_str(&env, "did:privy:user3");
     let signature = sign_did_link(&env, &signing_key, &did, &correct_wallet);
     client.register_privy_did(&did, &correct_wallet, &signature);
     client.update_privy_did(&did, &wrong_wallet, &new_wallet);

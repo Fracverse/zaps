@@ -139,9 +139,12 @@ pub fn validate_username_prefix(prefix: &str) -> Result<(), UsernameError> {
 }
 
 fn validate_username_charset(value: &str) -> Result<(), UsernameError> {
+    if value.starts_with('.') || value.ends_with('.') || value.contains("..") {
+        return Err(UsernameError::InvalidCharacters);
+    }
     if value
         .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.')
     {
         Ok(())
     } else {
@@ -197,10 +200,11 @@ pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 }
 
 pub async fn update_profile(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<UserState>,
     auth: AuthUser,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
+    let pool = &state.pool;
     let row = match sqlx::query(
         r#"
         UPDATE users
@@ -229,14 +233,17 @@ pub async fn update_profile(
         }
     };
 
-    Json(ProfileResponse {
+    let profile = ProfileResponse {
         address: row.get("address"),
         username: row.get("username"),
         display_name: row.get("display_name"),
         bio: row.get("bio"),
         avatar_url: row.get("avatar_url"),
-    })
-    .into_response()
+    };
+    if let Some(cache) = &state.cache {
+        cache.invalidate(&profile.username).await;
+    }
+    Json(profile).into_response()
 }
 
 /// Longest accepted `q` on /search. Sized for a Stellar address (56 chars),
@@ -963,13 +970,21 @@ mod tests {
 
     #[test]
     fn rejects_symbols_and_whitespace() {
-        for candidate in ["e-bube", "e_bube", "e.bube", "e bube", "ebube!", "ébube"] {
+        for candidate in ["e-bube", "e_bube", "e bube", "ebube!", "ébube"] {
             assert_eq!(
                 validate_username(candidate),
                 Err(UsernameError::InvalidCharacters),
                 "expected {candidate:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn accepts_dot_separated_usernames_but_not_edge_dots() {
+        assert_eq!(validate_username("test.zaps"), Ok(()));
+        assert_eq!(validate_username(".test"), Err(UsernameError::InvalidCharacters));
+        assert_eq!(validate_username("test."), Err(UsernameError::InvalidCharacters));
+        assert_eq!(validate_username("test..zaps"), Err(UsernameError::InvalidCharacters));
     }
 
     #[test]

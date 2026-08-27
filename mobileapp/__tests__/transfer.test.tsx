@@ -48,6 +48,18 @@ jest.mock("expo-file-system", () => ({
   documentDirectory: "/mock",
 }), { virtual: true });
 
+// #699 — mock the contacts service so it doesn't hit real device APIs
+jest.mock("../src/services/contacts", () => ({
+  fetchMatchedContacts: jest.fn(() => Promise.resolve([])),
+}));
+
+// #684 — mock biometric auth so it doesn't hit expo-local-authentication
+jest.mock("../app/biometric", () => ({
+  authenticateWithBiometrics: jest.fn(() =>
+    Promise.resolve({ success: true })
+  ),
+}));
+
 jest.mock("../src/components/BatchPayoutItemRow", () => "BatchPayoutItemRow");
 jest.mock("../src/components/BatchPayoutSummary", () => "BatchPayoutSummary");
 

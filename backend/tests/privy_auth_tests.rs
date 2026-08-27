@@ -3,7 +3,9 @@
 /// signature/audience/issuer verification rather than a placeholder.
 use axum::{
     body::Body,
+    extract::Extension,
     http::{Request, StatusCode},
+    routing::get,
     Router,
 };
 use chrono::Utc;
@@ -201,7 +203,24 @@ fn create_test_app(pool: PgPool) -> Router {
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
     };
-    Router::new().nest("/api/auth", zaps_backend::api::auth_routes_with_state(state))
+    Router::new().nest(
+        "/api/auth",
+        zaps_backend::api::auth_routes_with_state(state),
+    )
+}
+
+async fn protected_identity(
+    Extension(user): Extension<zaps_backend::api::AuthenticatedUser>,
+) -> String {
+    user.address
+}
+
+fn create_protected_test_app(pool: PgPool) -> Router {
+    zaps_backend::api::protected_routes(
+        Router::new().route("/protected", get(protected_identity)),
+        pool,
+        zaps_backend::api::AuthTokenCache::new(),
+    )
 }
 
 #[cfg(test)]
@@ -246,7 +265,10 @@ mod privy_auth_integration_tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
 
-        assert!(json["token"].is_string(), "Response should contain JWT token");
+        assert!(
+            json["token"].is_string(),
+            "Response should contain JWT token"
+        );
         assert_eq!(json["username"].as_str().unwrap(), "u_GBPK7THXDEPNBQB5K");
         assert_eq!(json["privy_did"].as_str().unwrap(), privy_did);
 
@@ -738,5 +760,86 @@ mod privy_auth_integration_tests {
             StatusCode::UNAUTHORIZED,
             "Token issued for a different Privy app must be rejected"
         );
+    }
+
+    /// Test 12 - A valid Privy token produces a session token that passes the
+    /// protected-route authentication middleware.
+    #[tokio::test]
+    async fn test_valid_privy_token_passes_auth_middleware() {
+        let pool = setup_test_pool().await;
+        let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
+        let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
+        cleanup_test_user(&pool, stellar_addr).await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/privy")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "privy_token": create_mock_privy_token(&privy_did, Some(stellar_addr), false),
+                    "privy_did": privy_did,
+                    "stellar_address": stellar_addr
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = create_test_app(pool.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let auth_response: Value = serde_json::from_slice(&body).unwrap();
+        let session_token = auth_response["token"].as_str().unwrap();
+
+        let protected_request = Request::builder()
+            .uri("/protected")
+            .header("authorization", format!("Bearer {session_token}"))
+            .body(Body::empty())
+            .unwrap();
+        let protected_response = create_protected_test_app(pool.clone())
+            .oneshot(protected_request)
+            .await
+            .unwrap();
+
+        assert_eq!(protected_response.status(), StatusCode::OK);
+        let body = protected_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        assert_eq!(body, stellar_addr);
+
+        cleanup_test_user(&pool, stellar_addr).await;
+    }
+
+    /// Test 13 - An invalid Privy verification response must not produce a
+    /// session token and is returned as 401 Unauthorized.
+    #[tokio::test]
+    async fn test_invalid_privy_token_returns_unauthorized() {
+        let pool = setup_test_pool().await;
+        let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
+        let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/privy")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "privy_token": "not-a-valid-privy-token",
+                    "privy_did": privy_did,
+                    "stellar_address": stellar_addr
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let response = create_test_app(pool).oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

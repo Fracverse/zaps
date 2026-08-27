@@ -36,6 +36,7 @@ import "../src/locales/i18n"; // Initialize i18n
 import { logNavigation, startNavigation } from "../src/utils/performance";
 import * as Linking from "expo-linking";
 import { parseSdpClaimUrl } from "../src/utils/sdpDeepLink";
+import { initOfflineSync } from "../src/services/api";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "https://api.zaps.app";
 const IOS_STORE_URL = "https://apps.apple.com/app/zaps";
@@ -123,13 +124,23 @@ function LayoutContent() {
     };
   }, [pathname]);
 
+  // #687 — Start offline queue sync listener on app launch.
+  React.useEffect(() => {
+    const cleanup = initOfflineSync();
+    return cleanup;
+  }, []);
+
   React.useEffect(() => {
     async function setupNotifications() {
       await initNotificationCategoriesAsync();
 
       const enabled = await getStoredNotificationPreference();
       if (enabled) {
-        await registerForPushNotificationsAsync();
+        // Cold start must never surface the native permission dialog itself —
+        // first-time consent is asked contextually from the Home screen. This
+        // only silently refreshes the Expo push token for a user who has
+        // already granted permission in a previous session.
+        await registerForPushNotificationsAsync({ requestIfUndetermined: false });
       }
     }
 
