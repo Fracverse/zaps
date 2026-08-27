@@ -454,3 +454,42 @@ fn test_admin_emergency_exit_rescues_reserves() {
     assert_eq!(token_client.balance(&owner), amount);
     assert_eq!(client.total_assets(), 0);
 }
+
+#[cfg(test)]
+mod fuzz_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_fuzz_asset_to_share_math(
+            deposit1 in 1_000i128..10_000_000_000,
+            yield_amount in 0i128..5_000_000_000,
+            deposit2 in 1_000i128..10_000_000_000,
+        ) {
+            let (env, client, _contract_id, owner, depositor1, token) = setup();
+
+            let token_admin_client = token::StellarAssetClient::new(&env, &token);
+
+            token_admin_client.mint(&depositor1, &deposit1);
+            client.deposit(&depositor1, &deposit1);
+
+            if yield_amount > 0 {
+                client.mock_protocol_supply(&owner, &yield_amount);
+            }
+
+            let depositor2 = Address::generate(&env);
+            token_admin_client.mint(&depositor2, &deposit2);
+
+            client.deposit(&depositor2, &deposit2);
+            let shares2 = client.shares_of(&depositor2);
+
+            let total_assets = client.total_assets();
+            let total_shares = client.total_shares();
+
+            let assets_out = shares2 * (total_assets + VIRTUAL_OFFSET) / (total_shares + VIRTUAL_OFFSET);
+
+            prop_assert!(assets_out <= deposit2, "rounding behavior granted excess shares");
+        }
+    }
+}
