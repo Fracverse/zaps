@@ -1,25 +1,32 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, String, Symbol,
+    contract, contractimpl, contracttype, symbol_short, token, xdr::ToXdr, Address, Bytes, BytesN,
+    Env, String, Symbol,
 };
 
 #[contract]
 pub struct UserRegistryContract;
 
+/// Persistent-entry TTL (in ledgers) below which a lookup triggers an
+/// extension. ~100,000 ledgers ≈ 5.8 days at Stellar's ~5s ledger close time.
+const TTL_THRESHOLD: u32 = 100_000;
+/// TTL (in ledgers) a lookup extends an entry to once `TTL_THRESHOLD` is
+/// crossed. ~500,000 ledgers ≈ 29 days.
+const TTL_EXTEND_TO: u32 = 500_000;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
-    User(Address),       // Maps Address -> Username (String)
-    Username(String),    // Maps Username (String) -> Address
-    Avatar(Address),     // Maps Address -> Avatar URI (String)
-    PrivyDid(String),    // Maps Privy DID -> wallet Address
-    WalletDid(Address),  // Maps wallet Address -> Privy DID (reverse index)
-    Admin,               // Stores the contract admin Address
-    PrivyVerifierKey,    // Ed25519 public key trusted to attest DID <-> wallet links
-    ReservationToken,    // Stores Naira token contract Address
-    ReservationAmount,   // Stores required reservation amount (i128)
+    User(Address),        // Maps Address -> Username (String)
+    Username(String),     // Maps Username (String) -> Address
+    Avatar(Address),      // Maps Address -> Avatar URI (String)
+    PrivyDid(String),     // Maps Privy DID -> wallet Address
+    WalletDid(Address),   // Maps wallet Address -> Privy DID (reverse index)
+    Admin,                // Stores the contract admin Address
+    PrivyVerifierKey,     // Ed25519 public key trusted to attest DID <-> wallet links
+    ReservationToken,     // Stores Naira token contract Address
+    ReservationAmount,    // Stores required reservation amount (i128)
     UserDeposit(Address), // Stores deposited reservation amount per user (i128)
 }
 
@@ -37,6 +44,21 @@ pub struct UsernameToAddressKey {
 
 #[contractimpl]
 impl UserRegistryContract {
+    /// Load the configured admin address, extending its persistent TTL on
+    /// every lookup so a dormant contract's admin key doesn't get archived
+    /// between admin actions.
+    fn require_admin(env: &Env) -> Address {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("admin not set"));
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+        admin
+    }
+
     fn validate_username(username: &String) {
         let len = username.len();
         if len < 3 || len > 15 {
@@ -70,11 +92,7 @@ impl UserRegistryContract {
             panic!("reservation amount cannot be negative");
         }
 
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("admin not set"));
+        let admin = Self::require_admin(&env);
         admin.require_auth();
 
         env.storage()
@@ -83,6 +101,16 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::ReservationAmount, &amount);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ReservationToken,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::ReservationAmount,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
     }
 
     /// Register a username mapping to the sender's address
@@ -115,6 +143,16 @@ impl UserRegistryContract {
             .persistent()
             .get(&DataKey::ReservationAmount)
             .unwrap_or_else(|| panic!("reservation amount not configured"));
+        env.storage().persistent().extend_ttl(
+            &DataKey::ReservationToken,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::ReservationAmount,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
 
         if reservation_amount > 0 {
             let token_client = token::Client::new(&env, &reservation_token);
@@ -134,6 +172,27 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::UserDeposit(user.clone()), &reservation_amount);
+        env.storage()
+            .persistent()
+            .extend_ttl(&user_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage()
+            .persistent()
+            .extend_ttl(&username_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage().persistent().extend_ttl(
+            &DataKey::User(user.clone()),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::Username(username.clone()),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::UserDeposit(user.clone()),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
 
         // #542: publish so the off-chain indexer can sync this registration
         // to the `users` table. Without this, on-chain registration and the
@@ -145,19 +204,29 @@ impl UserRegistryContract {
     /// Retrieve the Address associated with a username
     pub fn get_address(env: Env, username: String) -> Address {
         let username_key = UsernameToAddressKey { username };
-        env.storage()
+        let address = env
+            .storage()
             .persistent()
             .get(&username_key)
-            .unwrap_or_else(|| panic!("username not found"))
+            .unwrap_or_else(|| panic!("username not found"));
+        env.storage()
+            .persistent()
+            .extend_ttl(&username_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        address
     }
 
     /// Retrieve the username associated with an Address
     pub fn get_username(env: Env, user: Address) -> String {
         let user_key = AddressToUsernameKey { address: user };
-        env.storage()
+        let username = env
+            .storage()
             .persistent()
             .get(&user_key)
-            .unwrap_or_else(|| panic!("address not registered"))
+            .unwrap_or_else(|| panic!("address not registered"));
+        env.storage()
+            .persistent()
+            .extend_ttl(&user_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        username
     }
 
     /// Best-effort username lookup for callers (e.g. other contracts resolving
@@ -166,6 +235,11 @@ impl UserRegistryContract {
     /// `get_avatar`'s fallback behavior below.
     pub fn username_or_empty(env: Env, user: Address) -> String {
         let user_key = AddressToUsernameKey { address: user };
+        if env.storage().persistent().has(&user_key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&user_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
         env.storage()
             .persistent()
             .get(&user_key)
@@ -178,6 +252,11 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::Avatar(user.clone()), &avatar_uri);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Avatar(user.clone()),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
 
         env.events().publish(
             (soroban_sdk::symbol_short!("prof_upd"),),
@@ -187,25 +266,32 @@ impl UserRegistryContract {
 
     /// Retrieve the avatar URI associated with an Address
     pub fn get_avatar(env: Env, user: Address) -> String {
+        let key = DataKey::Avatar(user);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        }
         env.storage()
             .persistent()
-            .get(&DataKey::Avatar(user))
+            .get(&key)
             .unwrap_or_else(|| String::from_str(&env, ""))
     }
 
     /// Set (or rotate) the trusted Ed25519 public key used to verify Privy DID
     /// link attestations. Only the contract admin may call this.
     pub fn set_privy_verifier(env: Env, caller: Address, pubkey: BytesN<32>) {
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("admin not set"));
+        let admin = Self::require_admin(&env);
         admin.require_auth();
         assert!(caller == admin, "only admin");
         env.storage()
             .persistent()
             .set(&DataKey::PrivyVerifierKey, &pubkey);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PrivyVerifierKey,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
     }
 
     /// Register a Privy DID -> wallet address mapping.
@@ -223,6 +309,11 @@ impl UserRegistryContract {
             .persistent()
             .get(&DataKey::PrivyVerifierKey)
             .unwrap_or_else(|| panic!("privy verifier not configured"));
+        env.storage().persistent().extend_ttl(
+            &DataKey::PrivyVerifierKey,
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
 
         let message: Bytes = (did.clone(), wallet.clone()).to_xdr(&env);
         env.crypto()
@@ -236,6 +327,14 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::WalletDid(wallet.clone()), &did);
+        env.storage()
+            .persistent()
+            .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage().persistent().extend_ttl(
+            &DataKey::WalletDid(wallet.clone()),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
 
         env.events()
             .publish((symbol_short!("did_reg"),), (wallet, did));
@@ -263,24 +362,24 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage()
+            .persistent()
+            .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage().persistent().extend_ttl(
+            &DataKey::WalletDid(new_wallet),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
     }
 
     /// Admin recovery: reassign a DID mapping to a new wallet.
     /// Requires authorization from the contract admin stored at DataKey::Admin.
     pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("admin not set"));
+        let admin = Self::require_admin(&env);
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
         // Remove old reverse mapping if present
-        if let Some(old_wallet) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, Address>(&did_key)
-        {
+        if let Some(old_wallet) = env.storage().persistent().get::<DataKey, Address>(&did_key) {
             env.storage()
                 .persistent()
                 .remove(&DataKey::WalletDid(old_wallet));
@@ -289,14 +388,28 @@ impl UserRegistryContract {
         env.storage()
             .persistent()
             .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage()
+            .persistent()
+            .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage().persistent().extend_ttl(
+            &DataKey::WalletDid(new_wallet),
+            TTL_THRESHOLD,
+            TTL_EXTEND_TO,
+        );
     }
 
     /// Get the wallet address registered for a Privy DID
     pub fn get_wallet_for_did(env: Env, did: String) -> Address {
+        let key = DataKey::PrivyDid(did);
+        let wallet = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("DID not registered"));
         env.storage()
             .persistent()
-            .get(&DataKey::PrivyDid(did))
-            .unwrap_or_else(|| panic!("DID not registered"))
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        wallet
     }
 
     /// Issue #754: Remove a user's profile data (username and avatar URI) from storage.
@@ -325,10 +438,8 @@ impl UserRegistryContract {
             .persistent()
             .remove(&DataKey::Avatar(user.clone()));
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("prof_del"),),
-            (user, username),
-        );
+        env.events()
+            .publish((soroban_sdk::symbol_short!("prof_del"),), (user, username));
     }
 
     /// Issue #758: Upgrade the contract WASM to a new hash.
@@ -339,11 +450,7 @@ impl UserRegistryContract {
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
 
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic!("admin not set"));
+        let admin = Self::require_admin(&env);
         assert!(caller == admin, "only admin can upgrade");
 
         // Reject an all-zero hash: it signals an uninitialised or null value
@@ -356,8 +463,7 @@ impl UserRegistryContract {
             new_wasm_hash.clone(),
         );
 
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
     /// Unregister a user's profile and mapping
@@ -394,6 +500,11 @@ impl UserRegistryContract {
                 .persistent()
                 .get(&DataKey::ReservationToken)
                 .unwrap_or_else(|| panic!("reservation token not configured"));
+            env.storage().persistent().extend_ttl(
+                &DataKey::ReservationToken,
+                TTL_THRESHOLD,
+                TTL_EXTEND_TO,
+            );
             let token_client = token::Client::new(&env, &reservation_token);
             token_client.transfer(&env.current_contract_address(), &user, &reservation_amount);
         }
@@ -557,11 +668,15 @@ mod tests {
                 "DataKey::User must be removed"
             );
             assert!(
-                !env.storage().persistent().has(&DataKey::Username(username.clone())),
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Username(username.clone())),
                 "DataKey::Username must be removed"
             );
             assert!(
-                !env.storage().persistent().has(&DataKey::Avatar(user.clone())),
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Avatar(user.clone())),
                 "DataKey::Avatar must be removed"
             );
         });
@@ -571,7 +686,10 @@ mod tests {
     fn delete_profile_clears_avatar() {
         let (env, client, user, _username) = setup_with_user();
 
-        client.update_profile(&user, &String::from_str(&env, "https://img.example.com/a.png"));
+        client.update_profile(
+            &user,
+            &String::from_str(&env, "https://img.example.com/a.png"),
+        );
         client.delete_profile(&user);
 
         assert_eq!(
