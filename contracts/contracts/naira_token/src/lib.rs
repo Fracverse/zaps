@@ -398,4 +398,45 @@ mod tests {
         assert_eq!(client.allowance(&user, &spender), 200);
         assert_eq!(client.total_supply(), 600);
     }
+
+    #[test]
+    #[should_panic(expected = "AddressBlacklisted")]
+    fn test_blacklisted_address_cannot_transfer() {
+        let (env, client, admin, user) = setup();
+        env.mock_all_auths();
+
+        // Mint tokens to the user
+        client.mint(&user, &1000);
+
+        // Admin blacklists the user
+        client.blacklist(&user);
+
+        // Verify the user is blacklisted
+        assert!(client.is_blacklisted(&user), "User should be blacklisted");
+
+        // Attempt transfer from blacklisted address → should panic with "AddressBlacklisted"
+        client.transfer(&user, &admin, &100);
+    }
+
+    #[test]
+    fn test_unblacklisted_address_can_transfer() {
+        let (env, client, admin, user) = setup();
+        env.mock_all_auths();
+
+     // Mint tokens to the user
+        client.mint(&user, &1000);
+
+        // Blacklist then unblacklist
+        client.blacklist(&user);
+        client.unblacklist(&user);
+
+        // User should not be blacklisted anymore
+        assert!(!client.is_blacklisted(&user), "User should not be blacklisted");
+
+        // Transfer should succeed
+        client.transfer(&user, &admin, &100);
+
+        assert_eq!(client.balance(&user), 900);
+        assert_eq!(client.balance(&admin), 100);
+    }
 }
