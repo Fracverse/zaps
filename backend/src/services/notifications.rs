@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::db::r#yield::get_current_yield_rate;
 use crate::services::yield_calc::SECONDS_PER_YEAR;
 
-const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
-const EXPO_PUSH_BATCH_SIZE: usize = 100;
+pub const EXPO_PUSH_API_URL: &str = "https://exp.host/--/api/v2/push/send";
+pub const EXPO_PUSH_BATCH_SIZE: usize = 100;
 /// Permanently failing push/webhook dispatches land in `failed_webhook_dlq`
 /// after this many attempts (#806).
 const MAX_WEBHOOK_RETRIES: u32 = 5;
@@ -60,13 +60,30 @@ struct YieldReportCandidate {
     push_tokens: Vec<String>,
 }
 
-#[derive(Serialize)]
-struct ExpoPushMessage {
-    to: String,
-    title: &'static str,
-    body: String,
-    data: serde_json::Value,
-    sound: &'static str,
+#[derive(Clone, Debug, Serialize)]
+pub struct ExpoPushMessage {
+    pub to: String,
+    pub title: String,
+    pub body: String,
+    pub data: serde_json::Value,
+    pub sound: String,
+}
+
+impl ExpoPushMessage {
+    pub fn new(
+        to: impl Into<String>,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Self {
+        Self {
+            to: to.into(),
+            title: title.into(),
+            body: body.into(),
+            data,
+            sound: "default".to_string(),
+        }
+    }
 }
 
 /// BE-032/BE-056: Fire daily and weekly yield summary push notifications at
@@ -93,8 +110,7 @@ pub async fn run(pool: PgPool, config: NotificationSchedulerConfig) {
         return;
     }
 
-    if let Err(err) =
-        schedule_cadence(&scheduler, &pool, &config, YieldReportCadence::Weekly).await
+    if let Err(err) = schedule_cadence(&scheduler, &pool, &config, YieldReportCadence::Weekly).await
     {
         tracing::error!("Failed to schedule weekly yield report job: {err:?}");
         return;
@@ -148,6 +164,73 @@ impl NotificationSchedulerConfig {
     }
 }
 
+/// Sends queued notifications to Expo in API-sized batches.
+///
+/// The Expo Push API accepts at most 100 messages per request. Keeping the
+/// batching and retry behavior here gives transfer-completion and yield-payout
+/// producers one asynchronous delivery path instead of making each producer
+/// know about Expo's transport limits.
+pub struct ExpoPushWorker {
+    client: reqwest::Client,
+    access_token: Option<String>,
+}
+
+impl ExpoPushWorker {
+    pub fn new(access_token: Option<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            access_token,
+        }
+    }
+
+    /// Dispatch all messages, posting one JSON array for every group of 100.
+    ///
+    /// Every batch is attempted even if an earlier batch fails. The returned
+    /// error therefore indicates that at least one batch was persisted to the
+    /// DLQ after retries, while successful batches are not sent a second time.
+    pub async fn dispatch(
+        &self,
+        pool: &PgPool,
+        messages: &[ExpoPushMessage],
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+        let mut dispatched = 0usize;
+        let mut failed_batches = 0usize;
+        let mut first_error = None;
+
+        for (batch_index, batch) in expo_push_batches(messages).enumerate() {
+            match dispatch_expo_push_with_retries(
+                pool,
+                &self.client,
+                batch,
+                self.access_token.as_deref(),
+            )
+            .await
+            {
+                Ok(()) => dispatched += batch.len(),
+                Err(err) => {
+                    failed_batches += 1;
+                    first_error.get_or_insert_with(|| err.to_string());
+                    tracing::warn!(
+                        batch_number = batch_index + 1,
+                        batch_size = batch.len(),
+                        error = ?err,
+                        "Expo push notification batch exhausted retries"
+                    );
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(format!(
+                "{failed_batches} Expo notification batch(es) failed after retries: {error}"
+            )
+            .into());
+        }
+
+        Ok(dispatched)
+    }
+}
+
 async fn send_yield_reports(
     pool: &PgPool,
     config: &NotificationSchedulerConfig,
@@ -193,37 +276,20 @@ async fn send_yield_reports(
         });
 
         for token in candidate.push_tokens {
-            messages.push(ExpoPushMessage {
-                to: token,
+            messages.push(ExpoPushMessage::new(
+                token,
                 title,
-                body: body.clone(),
-                data: data.clone(),
-                sound: "default",
-            });
+                body.clone(),
+                data.clone(),
+            ));
         }
 
         report_user_ids.push(candidate.user_id);
         sent += 1;
     }
 
-    let client = reqwest::Client::new();
-    for (batch_index, batch) in expo_push_batches(&messages).enumerate() {
-        if let Err(err) = dispatch_expo_push_with_retries(
-            pool,
-            &client,
-            batch,
-            config.expo_access_token.as_deref(),
-        )
-        .await
-        {
-            tracing::warn!(
-                batch_number = batch_index + 1,
-                batch_size = batch.len(),
-                error = ?err,
-                "Yield report push notification batch exhausted retries"
-            );
-        }
-    }
+    let worker = ExpoPushWorker::new(config.expo_access_token.clone());
+    worker.dispatch(pool, &messages).await?;
 
     for user_id in report_user_ids {
         mark_report_sent(pool, user_id, cadence, now).await?;
@@ -337,7 +403,7 @@ fn build_expo_push_request(
     messages: &[ExpoPushMessage],
     access_token: Option<&str>,
 ) -> reqwest::RequestBuilder {
-    let mut request = client.post(EXPO_PUSH_URL).json(messages);
+    let mut request = client.post(EXPO_PUSH_API_URL).json(messages);
     if let Some(token) = access_token.filter(|t| !t.is_empty()) {
         request = request.bearer_auth(token);
     }
@@ -370,7 +436,7 @@ async fn dispatch_expo_push_with_retries(
                 tracing::warn!(
                     attempt = attempts,
                     max = MAX_WEBHOOK_RETRIES,
-                    destination = EXPO_PUSH_URL,
+                    destination = EXPO_PUSH_API_URL,
                     error = %last_error,
                     "Webhook/push dispatch attempt failed"
                 );
@@ -381,11 +447,8 @@ async fn dispatch_expo_push_with_retries(
         }
     }
 
-    record_failed_webhook_dlq(pool, EXPO_PUSH_URL, &payload, &last_error, attempts).await?;
-    Err(format!(
-        "webhook permanently failed after {attempts} retries: {last_error}"
-    )
-    .into())
+    record_failed_webhook_dlq(pool, EXPO_PUSH_API_URL, &payload, &last_error, attempts).await?;
+    Err(format!("webhook permanently failed after {attempts} retries: {last_error}").into())
 }
 
 /// Dispatch a generic HTTP webhook with the same 5-attempt budget, then DLQ.
@@ -424,10 +487,7 @@ pub async fn dispatch_http_webhook(
     }
 
     record_failed_webhook_dlq(pool, destination, payload, &last_error, attempts).await?;
-    Err(format!(
-        "webhook permanently failed after {attempts} retries: {last_error}"
-    )
-    .into())
+    Err(format!("webhook permanently failed after {attempts} retries: {last_error}").into())
 }
 
 /// Persist a permanently failing push/webhook so operators can inspect or replay it.
@@ -488,10 +548,11 @@ async fn send_expo_push_batch(
             {
                 if let Some(msg) = messages.get(i) {
                     let token = &msg.to;
-                    if let Err(e) = sqlx::query("DELETE FROM user_push_tokens WHERE expo_push_token = $1")
-                        .bind(token)
-                        .execute(pool)
-                        .await
+                    if let Err(e) =
+                        sqlx::query("DELETE FROM user_push_tokens WHERE expo_push_token = $1")
+                            .bind(token)
+                            .execute(pool)
+                            .await
                     {
                         tracing::error!("Failed to delete invalid push token {token}: {e:?}");
                     } else {
@@ -614,12 +675,11 @@ mod tests {
     }
 
     fn test_message(to: String) -> ExpoPushMessage {
-        ExpoPushMessage {
+        ExpoPushMessage::new(
             to,
-            title: "Test notification",
-            body: "Test body".to_string(),
-            data: json!({ "target": "home" }),
-            sound: "default",
-        }
+            "Test notification",
+            "Test body",
+            json!({ "target": "home" }),
+        )
     }
 }
