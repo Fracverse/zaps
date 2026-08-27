@@ -117,7 +117,7 @@ export function registerSessionExpiredHandler(handler: () => void): void {
  * - On a 401 response, clears the stored session and fires the expiry handler
  *   so the app can redirect to login.
  */
-async function apiFetch(
+export async function apiFetch(
   input: string,
   init?: RequestInit
 ): Promise<Response> {
