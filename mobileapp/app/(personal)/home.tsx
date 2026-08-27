@@ -31,6 +31,7 @@ import Svg, {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -40,6 +41,13 @@ import {
   fetchFeed,
 } from "../../src/services/socialService";
 import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
+import {
+  markNotificationPromptDismissed,
+  registerForPushNotificationsAsync,
+  requestNotificationPermissionsAsync,
+  saveNotificationPreference,
+  shouldShowNotificationConsentPrompt,
+} from "../../src/services/notificationService";
 
 interface FeedItem {
   id: string;
@@ -148,6 +156,8 @@ export default function HomeScreen() {
   const [autoEarnTooltipVisible, setAutoEarnTooltipVisible] = useState(false);
   const [autoEarnDescModalVisible, setAutoEarnDescModalVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [notifPromptVisible, setNotifPromptVisible] = useState(false);
+  const [notifRequesting, setNotifRequesting] = useState(false);
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
@@ -274,6 +284,48 @@ export default function HomeScreen() {
   useEffect(() => {
     void loadYieldData();
   }, [loadYieldData]);
+
+  // Home is the app's one first-ask moment for push notification consent —
+  // app boot (see _layout.tsx) deliberately does NOT trigger the native
+  // permission dialog so it isn't burned before the user sees any context.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const shouldShow = await shouldShowNotificationConsentPrompt();
+      if (!cancelled) {
+        setNotifPromptVisible(shouldShow);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleEnableNotifications = useCallback(async () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+    setNotifRequesting(true);
+    try {
+      const status = await requestNotificationPermissionsAsync();
+      if (status === Notifications.PermissionStatus.GRANTED) {
+        await saveNotificationPreference(true);
+        // Fetches the Expo push token and registers it with the backend
+        // (POST /api/notifications/register) now that the user has consented.
+        await registerForPushNotificationsAsync();
+      }
+    } finally {
+      await markNotificationPromptDismissed();
+      setNotifRequesting(false);
+      setNotifPromptVisible(false);
+    }
+  }, []);
+
+  const handleDismissNotifPrompt = useCallback(() => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    void markNotificationPromptDismissed();
+    setNotifPromptVisible(false);
+  }, []);
 
   useEffect(() => {
     const shimmerLoop = Animated.loop(
@@ -684,6 +736,47 @@ export default function HomeScreen() {
           />
         }
       >
+        {/* Notification Permission Soft-Ask */}
+        {notifPromptVisible && (
+          <View style={styles.notifPromptCard}>
+            <View style={styles.notifPromptIconWrap}>
+              <Ionicons
+                name="notifications-outline"
+                size={20}
+                color={COLORS.primary}
+              />
+            </View>
+            <View style={styles.notifPromptTextWrap}>
+              <Text style={styles.notifPromptTitle}>Stay in the loop</Text>
+              <Text style={styles.notifPromptSubtitle}>
+                Get notified when you receive payments and earn yield.
+              </Text>
+              <View style={styles.notifPromptActions}>
+                <TouchableOpacity
+                  style={styles.notifPromptDismissBtn}
+                  onPress={handleDismissNotifPrompt}
+                  disabled={notifRequesting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss notification prompt"
+                >
+                  <Text style={styles.notifPromptDismissText}>Not now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.notifPromptEnableBtn}
+                  onPress={handleEnableNotifications}
+                  disabled={notifRequesting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Enable notifications"
+                >
+                  <Text style={styles.notifPromptEnableText}>
+                    {notifRequesting ? "Enabling…" : "Enable"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Balance Card */}
         <View style={styles.balanceCard}>
           {/* Available Balance Section */}
@@ -1538,6 +1631,66 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.03,
     shadowRadius: 10,
     elevation: 2,
+  },
+  notifPromptCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: COLORS.white,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    padding: 14,
+    marginBottom: 16,
+    gap: 12,
+  },
+  notifPromptIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F0FDF4",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  notifPromptTextWrap: {
+    flex: 1,
+  },
+  notifPromptTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#111827",
+  },
+  notifPromptSubtitle: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  notifPromptActions: {
+    flexDirection: "row",
+    marginTop: 10,
+    gap: 10,
+  },
+  notifPromptDismissBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: "#F5F5F5",
+  },
+  notifPromptDismissText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#6B7280",
+  },
+  notifPromptEnableBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: COLORS.primary,
+  },
+  notifPromptEnableText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.secondary,
   },
   balanceSection: {
     marginBottom: 16,

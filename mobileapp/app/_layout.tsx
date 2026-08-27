@@ -129,7 +129,11 @@ function LayoutContent() {
 
       const enabled = await getStoredNotificationPreference();
       if (enabled) {
-        await registerForPushNotificationsAsync();
+        // Cold start must never surface the native permission dialog itself —
+        // first-time consent is asked contextually from the Home screen. This
+        // only silently refreshes the Expo push token for a user who has
+        // already granted permission in a previous session.
+        await registerForPushNotificationsAsync({ requestIfUndetermined: false });
       }
     }
 
