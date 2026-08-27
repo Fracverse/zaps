@@ -210,7 +210,7 @@ fn execute_payment(
     let receiver_username = resolve_username(&env, &receiver);
 
     env.events().publish(
-        (Symbol::new(&env, "SocialPaymentEvent"),),
+        (Symbol::new(&env, "pay"), sender.clone(), visibility),
         SocialPaymentEvent {
             sender,
             receiver,
@@ -492,7 +492,11 @@ impl SocialPaymentContract {
             .get(&FEE_COEFF_KEY)
             .unwrap_or(10u32);
         let batch_fee = total_volume * (fee_coef as i128) / 10000;
-        let batch_fee = if batch_fee == 0 && total_volume > 0 { 1 } else { batch_fee };
+        let batch_fee = if batch_fee == 0 && total_volume > 0 {
+            1
+        } else {
+            batch_fee
+        };
 
         let total_required = total_volume
             .checked_add(batch_fee)
@@ -580,13 +584,19 @@ impl SocialPaymentContract {
             .instance()
             .get(&ADMIN_KEY)
             .expect("not initialized");
-        assert!(admin == stored_admin, "only admin can refund stuck balances");
+        assert!(
+            admin == stored_admin,
+            "only admin can refund stuck balances"
+        );
         assert!(amount > 0, "refund amount must be positive");
 
         let contract_addr = env.current_contract_address();
         let token_client = soroban_sdk::token::Client::new(&env, &token);
         let balance = token_client.balance(&contract_addr);
-        assert!(balance >= amount, "insufficient contract balance for refund");
+        assert!(
+            balance >= amount,
+            "insufficient contract balance for refund"
+        );
 
         token_client.transfer(&contract_addr, &recipient, &amount);
 
@@ -735,10 +745,20 @@ mod tests {
         assert_eq!(token_client.balance(&sender), 9_000);
 
         let events = env.events().all();
-        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let topic: Val = Symbol::new(&env, "pay").into_val(&env);
+        let sender_topic: Val = sender.clone().into_val(&env);
+        let visibility_topic: Val = Visibility::Public.into_val(&env);
         let mut found = false;
         for item in events.iter() {
             if item.1.contains(topic) {
+                assert!(
+                    item.1.contains(sender_topic),
+                    "sender must be indexed in topic"
+                );
+                assert!(
+                    item.1.contains(visibility_topic),
+                    "visibility must be indexed in topic"
+                );
                 let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
                 assert_eq!(ev.sender, sender);
                 assert_eq!(ev.receiver, receiver);
@@ -1328,7 +1348,7 @@ mod tests {
         );
 
         let events = env.events().all();
-        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let topic: Val = Symbol::new(&env, "pay").into_val(&env);
         let mut found = false;
         for item in events.iter() {
             if item.1.contains(topic) {
@@ -1359,7 +1379,7 @@ mod tests {
         );
 
         let events = env.events().all();
-        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let topic: Val = Symbol::new(&env, "pay").into_val(&env);
         let mut found = false;
         for item in events.iter() {
             if item.1.contains(topic) {
@@ -1393,7 +1413,7 @@ mod tests {
         );
 
         let events = env.events().all();
-        let topic: Val = Symbol::new(&env, "SocialPaymentEvent").into_val(&env);
+        let topic: Val = Symbol::new(&env, "pay").into_val(&env);
         let mut found = false;
         for item in events.iter() {
             if item.1.contains(topic) {
