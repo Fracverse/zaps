@@ -5,6 +5,7 @@ import { format } from "date-fns";
 import StatCard from "@/components/StatCard";
 import { api, type AdminAuditLog } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
+import { useSuperAdmin } from "@/lib/auth-context";
 
 function fmtUsdc(value: number): string {
   return (
@@ -40,6 +41,9 @@ function downloadCSV(rows: string[], filename: string): void {
 }
 
 export default function OverviewPage() {
+  // #786 — only superadmins may trigger destructive / sensitive actions
+  const isSuperAdmin = useSuperAdmin();
+
   const { data: feedData, loading: feedLoading, error: feedError } = usePolling(
     () => api.socialFeed(),
     15000,
@@ -105,7 +109,11 @@ export default function OverviewPage() {
         </div>
         <button
           onClick={handleExportUsers}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
+          disabled={!isSuperAdmin}
+          title={!isSuperAdmin ? "Superadmin access required" : undefined}
+          aria-disabled={!isSuperAdmin}
+          data-testid="export-users-btn"
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
           Export Users (CSV)
