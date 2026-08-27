@@ -163,6 +163,13 @@ fn resolve_username(env: &Env, addr: &Address) -> String {
     }
 }
 
+fn calculate_fee(amount: i128, fee_coef: u32) -> i128 {
+    let fee_coef = fee_coef as i128;
+    let fee = (amount / 10_000) * fee_coef
+        + (amount % 10_000) * fee_coef / 10_000;
+    if fee == 0 { 1 } else { fee }
+}
+
 fn execute_payment(
     env: Env,
     sender: Address,
@@ -194,8 +201,7 @@ fn execute_payment(
             .instance()
             .get(&FEE_COEFF_KEY)
             .unwrap_or(10u32);
-        let fee = amount * (fee_coef as i128) / 10000;
-        let fee = if fee == 0 { 1 } else { fee };
+        let fee = calculate_fee(amount, fee_coef);
         let receiver_amount = amount - fee;
         token_client.transfer(&sender, &receiver, &receiver_amount);
         if fee > 0 {
@@ -768,6 +774,30 @@ mod tests {
             }
         }
         assert!(found, "SocialPaymentEvent not emitted");
+    }
+
+    #[test]
+    fn test_public_payment_fee_rounding_preserves_funds_at_boundaries() {
+        for amount in [1i128, 1_000, i128::MAX] {
+            let (env, client, admin, treasury, sender, receiver) = setup();
+            let token = mint_token(&env, &admin, &sender, amount);
+            client.set_naira_token(&token);
+            let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+            client.pay(
+                &sender,
+                &receiver,
+                &token,
+                &amount,
+                &String::from_str(&env, "Rounding boundary"),
+                &Visibility::Public,
+            );
+
+            let payout = token_client.balance(&receiver);
+            let fee = token_client.balance(&treasury);
+            let deducted = amount - token_client.balance(&sender);
+            assert_eq!(fee + payout, deducted);
+        }
     }
 
     // ── Private payment: no fee, full amount ─────────────────────────────────
