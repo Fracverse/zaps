@@ -426,3 +426,31 @@ fn test_apply_apy_rejects_without_pending_change() {
     let res = client.try_apply_apy(&owner);
     assert!(res.is_err(), "apply_apy must fail with no pending change");
 }
+
+#[test]
+fn test_admin_emergency_exit_rescues_reserves() {
+    let (env, client, _contract_id, owner, _depositor, token) = setup();
+    let amount = 5_000_000i128;
+
+    // Mint tokens to the owner (admin)
+    let token_admin_client = token::StellarAssetClient::new(&env, &token);
+    token_admin_client.mint(&owner, &amount);
+
+    // Admin deposits into the vault
+    client.deposit(&owner, &amount);
+
+    // Pause the vault
+    client.pause(&owner);
+
+    // Reset the budget tracker to defaults as per guidance
+    env.budget().reset_default();
+
+    // Admin triggers emergency_exit
+    client.emergency_exit(&owner);
+
+    // Assert that the admin received the total vault reserves and shares are burned
+    assert_eq!(client.shares_of(&owner), 0);
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&owner), amount);
+    assert_eq!(client.total_assets(), 0);
+}
