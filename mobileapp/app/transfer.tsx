@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { ErrorBoundary } from "../src/components/ErrorBoundary";
+// #699 — Contact Lookup Integration
+import {
+  fetchMatchedContacts,
+  type MatchedContact,
+} from "../src/services/contacts";
 import {
   View,
   Text,
@@ -321,6 +326,11 @@ function TransferScreen() {
   const [batchErrors, setBatchErrors] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
 
+  // #699 — Contact lookup state
+  const [matchedContacts, setMatchedContacts] = useState<MatchedContact[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+  const [contactsLoaded, setContactsLoaded] = useState(false);
+
   const searchUsers = useCallback(async (query: string) => {
     if (!query || query.length < 2) {
       setSearchResults([]);
@@ -420,6 +430,45 @@ function TransferScreen() {
     // User selected from search results → definitely registered
     setUsernameStatus("registered");
   }, []);
+
+  // #699 — Select a matched contact as the recipient
+  const handleSelectContact = useCallback((contact: MatchedContact) => {
+    setRecipient(contact.username);
+    setSelectedUser({
+      username: contact.username,
+      address: contact.address,
+      avatar_url: contact.avatarUrl ?? null,
+      isVerified: false,
+    } as ZapsUser);
+    setSearchResults([]);
+    setShowDropdown(false);
+    setUsernameStatus("registered");
+  }, []);
+
+  // #699 — Load matched contacts on first ZAPS-mode step (lazy load, once)
+  const loadContacts = useCallback(async () => {
+    if (contactsLoaded || loadingContacts) return;
+    setLoadingContacts(true);
+    try {
+      const token = await AsyncStorage.getItem("auth_token");
+      const matches = await fetchMatchedContacts({
+        authToken: token ?? undefined,
+      });
+      setMatchedContacts(matches);
+    } catch {
+      // Non-fatal — contacts are a convenience feature.
+    } finally {
+      setLoadingContacts(false);
+      setContactsLoaded(true);
+    }
+  }, [contactsLoaded, loadingContacts]);
+
+  // Trigger contact load when user navigates to ZAPS recipient step.
+  useEffect(() => {
+    if (transferType === "ZAPS" && step === 1) {
+      loadContacts();
+    }
+  }, [transferType, step, loadContacts]);
 
   useEffect(() => {
     (async () => {
@@ -731,6 +780,58 @@ function TransferScreen() {
               </View>
             )}
         </View>
+
+        {/* ── #699 — Matched contacts from device phone book ─────────── */}
+        {transferType === "ZAPS" &&
+          recipient.length < 2 &&
+          !showDropdown &&
+          (loadingContacts || matchedContacts.length > 0) && (
+            <View
+              style={styles.dropdownContainer}
+              testID="contacts-section"
+            >
+              <View style={styles.contactsSectionHeader}>
+                <Ionicons name="people-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.dropdownHeader}>Phone contacts on Zaps</Text>
+                {loadingContacts && (
+                  <ActivityIndicator
+                    size="small"
+                    color={COLORS.primary}
+                    style={{ marginLeft: 6 }}
+                  />
+                )}
+              </View>
+
+              {matchedContacts.slice(0, 6).map((contact) => (
+                <TouchableOpacity
+                  key={contact.username}
+                  style={styles.dropdownItem}
+                  onPress={() => handleSelectContact(contact)}
+                  activeOpacity={0.75}
+                  testID={`contact-item-${contact.username}`}
+                >
+                  <View style={styles.dropdownAvatar}>
+                    <Text style={styles.dropdownAvatarText}>
+                      {contact.contactName.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.dropdownInfo}>
+                    <Text style={styles.dropdownUsername}>
+                      {contact.contactName}
+                    </Text>
+                    <Text style={styles.dropdownAddress} numberOfLines={1}>
+                      @{contact.username}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color="#BDBDBD"
+                  />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
         {/* ── Registry status warning banners (ZAPS mode only) ──────── */}
         {transferType === "ZAPS" && recipient.length >= 3 && (
@@ -1813,6 +1914,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_600SemiBold",
     color: "#555",
+  },
+  contactsSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#F8F9FA",
   },
   dropdownItem: {
     flexDirection: "row",

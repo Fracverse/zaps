@@ -12,10 +12,21 @@
  *    by the `apiFetch` wrapper.
  *  - A 401 response automatically clears the cached session and invokes the
  *    optional `onSessionExpired` callback so the app can redirect to login.
+ *
+ * #687 — Offline Transaction Queue & Sync Engine
+ *  - `sendTransactionWithOfflineSupport` wraps any outgoing Zap transaction
+ *    request: if the device is offline (NetInfo) or the request fails with a
+ *    network error, the payload is enqueued via `offlineQueue.enqueueTransaction`
+ *    for automatic replay upon reconnection.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import NetInfo from "@react-native-community/netinfo";
+import {
+  enqueueTransaction,
+  startOfflineQueueSync,
+} from "./offlineQueue";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -363,4 +374,103 @@ export async function resolveUsernameAsZapsUser(username: string): Promise<{
     avatar_url: null, // resolve endpoint doesn't include avatar
     isVerified: false, // placeholder as noted in ZapsUser interface
   };
+}
+
+// ── #687 — Offline Transaction Queue Integration ──────────────────────────────
+
+export interface TransactionPayload {
+  endpoint: string;
+  method?: string;
+  body: Record<string, unknown>;
+}
+
+export interface OfflineSendResult {
+  /** true → request went through immediately; false → queued for later sync */
+  sent: boolean;
+  /** present when the request was sent and the server responded */
+  response?: Response;
+  /** present when the payload was enqueued rather than sent */
+  queued?: boolean;
+}
+
+/**
+ * Send a Zap transaction request with offline-queue fallback (#687).
+ *
+ * Checks device connectivity via NetInfo before attempting the request:
+ *  - **Online** → fires the request directly via `apiFetch`.  If the request
+ *    itself fails with a network error, falls back to queuing automatically.
+ *  - **Offline** → skips the network attempt entirely and enqueues the
+ *    payload in AsyncStorage so it is replayed on reconnection.
+ *
+ * In both cases the caller receives an `OfflineSendResult` that indicates
+ * whether the transaction was transmitted immediately or queued.
+ *
+ * @example
+ * const { sent, queued } = await sendTransactionWithOfflineSupport({
+ *   endpoint: `${API_BASE}/api/v1/transfer`,
+ *   method: "POST",
+ *   body: { recipient: "tolu.zaps", amount: "500", currency: "USDC" },
+ * });
+ *
+ * if (queued) {
+ *   showToast("You're offline. Your transaction will be sent when you reconnect.");
+ * }
+ */
+export async function sendTransactionWithOfflineSupport(
+  payload: TransactionPayload
+): Promise<OfflineSendResult> {
+  // Check current connectivity before attempting the request.
+  const networkState = await NetInfo.fetch();
+  const isConnected = networkState.isConnected === true;
+
+  if (!isConnected) {
+    // Offline path: persist for later sync.
+    const authToken = await getSessionToken();
+    await enqueueTransaction({
+      endpoint: payload.endpoint,
+      method: payload.method ?? "POST",
+      body: payload.body,
+      authToken: authToken ?? undefined,
+    });
+    return { sent: false, queued: true };
+  }
+
+  // Online path: attempt the request directly.
+  try {
+    const response = await apiFetch(payload.endpoint, {
+      method: payload.method ?? "POST",
+      body: JSON.stringify(payload.body),
+    });
+    return { sent: true, response };
+  } catch {
+    // Network error despite NetInfo reporting online (race condition or
+    // transient connectivity drop). Enqueue for later replay.
+    const authToken = await getSessionToken();
+    await enqueueTransaction({
+      endpoint: payload.endpoint,
+      method: payload.method ?? "POST",
+      body: payload.body,
+      authToken: authToken ?? undefined,
+    });
+    return { sent: false, queued: true };
+  }
+}
+
+/**
+ * Start the offline queue sync listener.
+ *
+ * Should be called once from the root layout so the queue is processed
+ * automatically whenever the device reconnects to the internet.
+ *
+ * @returns Cleanup function — call on unmount / logout.
+ *
+ * @example
+ * // In _layout.tsx:
+ * useEffect(() => {
+ *   const cleanup = initOfflineSync();
+ *   return cleanup;
+ * }, []);
+ */
+export function initOfflineSync(): () => void {
+  return startOfflineQueueSync();
 }
