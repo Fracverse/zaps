@@ -19,6 +19,7 @@ const PROTO_BAL_KEY: Symbol = symbol_short!("p_bal");
 const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
 const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
 const PAUSED_KEY: Symbol = symbol_short!("paused");
+const USER_CAP_KEY: Symbol = symbol_short!("user_cap");
 const MAX_APY_BPS: u32 = 2_000;
 
 /// SC-053: Minimum delay (in seconds) between queuing an APY change and applying it.
@@ -156,6 +157,8 @@ enum DataKey {
     /// Reentrancy lock for withdraw. Held in temporary storage for the
     /// duration of the token transfer so a callback cannot re-enter.
     Locked,
+    /// Track cumulative active deposited principal for each user.
+    UserDeposit(Address),
 }
 
 #[contract]
@@ -274,6 +277,15 @@ impl YieldVaultContract {
         // the vault cannot accept deposits while paused.
         Self::require_not_paused(&env);
 
+        let max_user_cap = Self::max_user_cap(env.clone());
+        let user_dep_key = DataKey::UserDeposit(depositor.clone());
+        let user_deposit: i128 = env.storage().persistent().get(&user_dep_key).unwrap_or(0);
+
+        if max_user_cap > 0 {
+            let total_user_deposit = user_deposit.checked_add(amount).expect("overflow");
+            assert!(total_user_deposit <= max_user_cap, "UserCapExceeded");
+        }
+
         // Pull tokens from depositor into vault
         token::Client::new(&env, &token_addr).transfer(&depositor, &vault_addr, &amount);
         // Simulate routing liquidity into an external lending protocol adapter.
@@ -302,6 +314,11 @@ impl YieldVaultContract {
         env.storage()
             .persistent()
             .set(&user_key, &(prev_shares + shares));
+
+        // Update user deposit
+        env.storage()
+            .persistent()
+            .set(&user_dep_key, &(user_deposit + amount));
 
         // Update totals
         env.storage()
@@ -401,6 +418,24 @@ impl YieldVaultContract {
             .publish((Symbol::new(&env, "PauseToggled"),), (false,));
     }
 
+    /// Set the maximum cumulative deposit allowed per individual user.
+    /// Only the owner may call this entrypoint. Setting `cap` to 0 disables the cap.
+    pub fn set_max_user_cap(env: Env, caller: Address, cap: i128) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(cap >= 0, "cap must be non-negative");
+        env.storage().instance().set(&USER_CAP_KEY, &cap);
+        env.events().publish(
+            (Symbol::new(&env, "MaxUserCapUpdated"),),
+            (cap,),
+        );
+    }
+
+    /// Set the maximum cumulative deposit allowed per individual user (alias for `set_max_user_cap`).
+    pub fn set_user_cap(env: Env, caller: Address, cap: i128) {
+        Self::set_max_user_cap(env, caller, cap);
+    }
+
     /// Emergency exit for users to rescue assets directly by redeeming all their shares.
     pub fn emergency_exit(env: Env, user: Address) {
         user.require_auth();
@@ -427,6 +462,9 @@ impl YieldVaultContract {
         sandbox_protocol::redeem(&env, assets_out);
 
         env.storage().persistent().set(&user_key, &0i128);
+        env.storage()
+            .persistent()
+            .set(&DataKey::UserDeposit(user.clone()), &0i128);
         env.storage()
             .instance()
             .set(&SHARES_KEY, &(tot_shares - shares).max(0));
@@ -474,6 +512,20 @@ impl YieldVaultContract {
         env.storage()
             .persistent()
             .set(&user_key, &(user_shares - shares));
+        let user_dep_key = DataKey::UserDeposit(user.clone());
+        let prev_deposit: i128 = env.storage().persistent().get(&user_dep_key).unwrap_or(0);
+        let dep_reduction = if user_shares > 0 {
+            prev_deposit
+                .checked_mul(shares)
+                .expect("overflow")
+                .checked_div(user_shares)
+                .expect("divide by zero")
+        } else {
+            0
+        };
+        env.storage()
+            .persistent()
+            .set(&user_dep_key, &(prev_deposit.saturating_sub(dep_reduction)));
         env.storage()
             .instance()
             .set(&SHARES_KEY, &(tot_shares - shares).max(0));
@@ -527,6 +579,21 @@ impl YieldVaultContract {
         env.storage()
             .persistent()
             .set(&user_key, &(user_shares - shares));
+
+        let user_dep_key = DataKey::UserDeposit(user.clone());
+        let prev_deposit: i128 = env.storage().persistent().get(&user_dep_key).unwrap_or(0);
+        let dep_reduction = if user_shares > 0 {
+            prev_deposit
+                .checked_mul(shares)
+                .expect("overflow")
+                .checked_div(user_shares)
+                .expect("divide by zero")
+        } else {
+            0
+        };
+        env.storage()
+            .persistent()
+            .set(&user_dep_key, &(prev_deposit.saturating_sub(dep_reduction)));
 
         // Update totals (clamp to zero to guard against rounding drift)
         env.storage()
@@ -614,6 +681,24 @@ impl YieldVaultContract {
     /// Returns the currently active APY in basis points.
     pub fn apy(env: Env) -> u32 {
         env.storage().instance().get(&APY_KEY).unwrap_or(0)
+    }
+
+    /// Returns the configured maximum deposit cap per user (0 if uncapped).
+    pub fn max_user_cap(env: Env) -> i128 {
+        env.storage().instance().get(&USER_CAP_KEY).unwrap_or(0)
+    }
+
+    /// Returns the configured maximum deposit cap per user (alias for `max_user_cap`).
+    pub fn user_cap(env: Env) -> i128 {
+        Self::max_user_cap(env)
+    }
+
+    /// Returns the current active deposit principal for `user`.
+    pub fn user_deposit(env: Env, user: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserDeposit(user))
+            .unwrap_or(0)
     }
 
     // ─── SC-024: Emit YieldAccrued event on compound ──────────────────────────
