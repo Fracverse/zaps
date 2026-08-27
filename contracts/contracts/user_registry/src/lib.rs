@@ -196,12 +196,12 @@ impl UserRegistryContract {
     /// Set (or rotate) the trusted Ed25519 public key used to verify Privy DID
     /// link attestations. Only the contract admin may call this.
     pub fn set_privy_verifier(env: Env, caller: Address, pubkey: BytesN<32>) {
-        caller.require_auth();
         let admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
             .unwrap_or_else(|| panic!("admin not set"));
+        admin.require_auth();
         assert!(caller == admin, "only admin");
         env.storage()
             .persistent()
