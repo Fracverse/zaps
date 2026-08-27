@@ -1,23 +1,161 @@
 #![no_std]
 #![allow(unexpected_cfgs)]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 // ─── SC-016: Storage keys & configuration ────────────────────────────────────
 
 const OWNER_KEY: Symbol = symbol_short!("owner");
 const TOKEN_KEY: Symbol = symbol_short!("token");
 const APY_KEY: Symbol = symbol_short!("apy");
+const PROPOSED_APY_KEY: Symbol = symbol_short!("prop_apy");
+const APY_ACTIVATION_KEY: Symbol = symbol_short!("apy_act");
 const SHARES_KEY: Symbol = symbol_short!("tot_shr");
 const ASSETS_KEY: Symbol = symbol_short!("tot_ast");
 const IDX_KEY: Symbol = symbol_short!("yld_idx");
 const IDX_LED_KEY: Symbol = symbol_short!("idx_led");
+const PROTO_BAL_KEY: Symbol = symbol_short!("p_bal");
+const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
+const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
+const PAUSED_KEY: Symbol = symbol_short!("paused");
+const MAX_APY_BPS: u32 = 2_000;
+
+/// SC-053: Minimum delay (in seconds) between queuing an APY change and applying it.
+const APY_TIMELOCK_SECS: u64 = 86_400; // 24 hours
 
 /// Precision factor used in all fixed-point math (1e8).
 const PRECISION: i128 = 100_000_000;
 
+/// SC-051: Virtual offset (1e8) added to both shares and assets in exchange rate
+/// calculations to prevent the ERC-4626 inflation attack.
+const VIRTUAL_OFFSET: i128 = 100_000_000;
+
+/// Mock lending protocol annualized reward rate (basis points).
+#[cfg(any(feature = "mock-protocol", test))]
+const MOCK_PROTOCOL_REWARD_BPS: i128 = 650; // 6.50%
+
+#[cfg(any(feature = "mock-protocol", test))]
+mod sandbox_protocol {
+    use super::{
+        Env, Symbol, MOCK_PROTOCOL_REWARD_BPS, PROTO_BAL_KEY, PROTO_LED_KEY, PROTO_REW_KEY,
+    };
+
+    const LEDGERS_PER_YEAR: i128 = 6_307_200; // ~5s per ledger
+
+    fn checkpoint(env: &Env) {
+        let now = env.ledger().sequence();
+        let last: u32 = env.storage().instance().get(&PROTO_LED_KEY).unwrap_or(now);
+        let delta = (now - last) as i128;
+        if delta > 0 {
+            let supplied: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+            if supplied > 0 {
+                let accrued = supplied
+                    .checked_mul(MOCK_PROTOCOL_REWARD_BPS)
+                    .expect("overflow")
+                    .checked_mul(delta)
+                    .expect("overflow")
+                    / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
+                if accrued > 0 {
+                    let rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+                    env.storage()
+                        .instance()
+                        .set(&PROTO_REW_KEY, &(rewards + accrued));
+                }
+            }
+        }
+        env.storage().instance().set(&PROTO_LED_KEY, &now);
+    }
+
+    pub fn supply(env: &Env, amount: i128) {
+        if amount <= 0 {
+            return;
+        }
+        checkpoint(env);
+        let current: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&PROTO_BAL_KEY, &(current + amount));
+        env.events().publish(
+            (Symbol::new(env, "MockSupply"),),
+            (amount, current + amount),
+        );
+    }
+
+    pub fn redeem(env: &Env, amount: i128) -> i128 {
+        if amount <= 0 {
+            return 0;
+        }
+        checkpoint(env);
+        let current: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        let redeemed = if amount > current { current } else { amount };
+        env.storage()
+            .instance()
+            .set(&PROTO_BAL_KEY, &(current - redeemed));
+        env.events().publish(
+            (Symbol::new(env, "MockRedeem"),),
+            (amount, redeemed, current - redeemed),
+        );
+        redeemed
+    }
+
+    pub fn pending_rewards(env: &Env) -> i128 {
+        let now = env.ledger().sequence();
+        let last: u32 = env.storage().instance().get(&PROTO_LED_KEY).unwrap_or(now);
+        let delta = (now - last) as i128;
+        let supplied: i128 = env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0);
+        let current_rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+        if delta <= 0 || supplied <= 0 {
+            return current_rewards;
+        }
+        let incremental = supplied
+            .checked_mul(MOCK_PROTOCOL_REWARD_BPS)
+            .expect("overflow")
+            .checked_mul(delta)
+            .expect("overflow")
+            / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
+        current_rewards + incremental
+    }
+
+    pub fn claim_rewards(env: &Env) -> i128 {
+        checkpoint(env);
+        let rewards: i128 = env.storage().instance().get(&PROTO_REW_KEY).unwrap_or(0);
+        env.storage().instance().set(&PROTO_REW_KEY, &0i128);
+        env.events()
+            .publish((Symbol::new(env, "MockClaim"),), (rewards,));
+        rewards
+    }
+
+    pub fn supplied_balance(env: &Env) -> i128 {
+        env.storage().instance().get(&PROTO_BAL_KEY).unwrap_or(0)
+    }
+}
+
+#[cfg(not(any(feature = "mock-protocol", test)))]
+mod sandbox_protocol {
+    use super::Env;
+
+    pub fn supply(_env: &Env, _amount: i128) {}
+    pub fn redeem(_env: &Env, amount: i128) -> i128 {
+        amount
+    }
+    pub fn pending_rewards(_env: &Env) -> i128 {
+        0
+    }
+    pub fn claim_rewards(_env: &Env) -> i128 {
+        0
+    }
+    pub fn supplied_balance(_env: &Env) -> i128 {
+        0
+    }
+}
+
 #[contracttype]
 enum DataKey {
     UserShares(Address),
+    /// Reentrancy lock for withdraw. Held in temporary storage for the
+    /// duration of the token transfer so a callback cannot re-enter.
+    Locked,
 }
 
 #[contract]
@@ -25,6 +163,36 @@ pub struct YieldVaultContract;
 
 #[contractimpl]
 impl YieldVaultContract {
+    fn require_owner(env: &Env, caller: &Address) {
+        let owner: Address = env
+            .storage()
+            .instance()
+            .get(&OWNER_KEY)
+            .expect("not initialized");
+        assert!(caller == &owner, "only owner");
+    }
+
+    fn is_paused(env: &Env) -> bool {
+        env.storage().instance().get(&PAUSED_KEY).unwrap_or(false)
+    }
+
+    fn require_not_paused(env: &Env) {
+        assert!(!Self::is_paused(env), "deposits paused");
+    }
+
+    /// Read the withdraw reentrancy lock from temporary storage.
+    fn is_locked(env: &Env) -> bool {
+        env.storage()
+            .temporary()
+            .get(&DataKey::Locked)
+            .unwrap_or(false)
+    }
+
+    /// Set or clear the withdraw reentrancy lock (`DataKey::Locked`).
+    fn set_locked(env: &Env, locked: bool) {
+        env.storage().temporary().set(&DataKey::Locked, &locked);
+    }
+
     /// SC-016: One-time initializer. Sets owner, token address, and initial APY.
     /// `apy_bps` is the annual percentage yield in basis points (e.g. 500 = 5%).
     pub fn initialize(env: Env, owner: Address, token: Address, apy_bps: u32) {
@@ -33,12 +201,21 @@ impl YieldVaultContract {
         }
         env.storage().instance().set(&OWNER_KEY, &owner);
         env.storage().instance().set(&TOKEN_KEY, &token);
+        assert!(apy_bps <= MAX_APY_BPS, "apy out of bounds");
         env.storage().instance().set(&APY_KEY, &apy_bps);
+        env.storage().instance().set(&PAUSED_KEY, &false);
         // Yield index starts at 1.0 (represented as PRECISION)
         env.storage().instance().set(&IDX_KEY, &PRECISION);
-        env.storage().instance().set(&IDX_LED_KEY, &env.ledger().sequence());
+        env.storage()
+            .instance()
+            .set(&IDX_LED_KEY, &env.ledger().sequence());
         env.storage().instance().set(&SHARES_KEY, &0i128);
         env.storage().instance().set(&ASSETS_KEY, &0i128);
+        env.storage().instance().set(&PROTO_BAL_KEY, &0i128);
+        env.storage().instance().set(&PROTO_REW_KEY, &0i128);
+        env.storage()
+            .instance()
+            .set(&PROTO_LED_KEY, &env.ledger().sequence());
     }
 
     // ─── SC-019: Yield compounding math ──────────────────────────────────────
@@ -58,8 +235,10 @@ impl YieldVaultContract {
         }
         // Scaled addition; all intermediate values stay within i128 for realistic APYs and time windows
         let accrued = old_index
-            .checked_mul(apy_bps as i128).expect("overflow")
-            .checked_mul(delta).expect("overflow")
+            .checked_mul(apy_bps as i128)
+            .expect("overflow")
+            .checked_mul(delta)
+            .expect("overflow")
             / (10_000i128.checked_mul(LEDGERS_PER_YEAR).expect("overflow"));
         old_index.checked_add(accrued).expect("overflow")
     }
@@ -68,7 +247,9 @@ impl YieldVaultContract {
     fn checkpoint_index(env: &Env) {
         let idx = Self::current_index(env);
         env.storage().instance().set(&IDX_KEY, &idx);
-        env.storage().instance().set(&IDX_LED_KEY, &env.ledger().sequence());
+        env.storage()
+            .instance()
+            .set(&IDX_LED_KEY, &env.ledger().sequence());
     }
 
     // ─── SC-017: Deposit ──────────────────────────────────────────────────────
@@ -82,40 +263,246 @@ impl YieldVaultContract {
 
         Self::checkpoint_index(&env);
 
-        let token_addr: Address = env.storage().instance().get(&TOKEN_KEY).expect("not initialized");
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
         let vault_addr = env.current_contract_address();
+
+        // SC-052: Enforce pause check immediately before token transfer to ensure
+        // the vault cannot accept deposits while paused.
+        Self::require_not_paused(&env);
 
         // Pull tokens from depositor into vault
         token::Client::new(&env, &token_addr).transfer(&depositor, &vault_addr, &amount);
+        // Simulate routing liquidity into an external lending protocol adapter.
+        sandbox_protocol::supply(&env, amount);
 
         let index = Self::current_index(&env);
-        let shares = amount.checked_mul(PRECISION).expect("overflow") / index;
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+
+        // SC-051: Use virtual shares/assets offset to prevent inflation attack.
+        // shares_minted = amount * (total_shares + VIRTUAL_OFFSET) / (total_assets + VIRTUAL_OFFSET)
+        // At genesis (both zero) this simplifies to amount * 1, identical to the prior formula.
+        let virtual_shares = tot_shares + VIRTUAL_OFFSET;
+        let virtual_assets = tot_assets + VIRTUAL_OFFSET;
+        let shares = amount
+            .checked_mul(virtual_shares)
+            .expect("overflow")
+            .checked_div(virtual_assets)
+            .expect("divide by zero");
+        let _ = index; // index still used by withdraw path; not needed here with virtual formula
         assert!(shares > 0, "deposit too small");
 
         // Update user shares
         let user_key = DataKey::UserShares(depositor.clone());
         let prev_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
-        env.storage().persistent().set(&user_key, &(prev_shares + shares));
+        env.storage()
+            .persistent()
+            .set(&user_key, &(prev_shares + shares));
 
         // Update totals
-        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
-        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
-        env.storage().instance().set(&SHARES_KEY, &(tot_shares + shares));
-        env.storage().instance().set(&ASSETS_KEY, &(tot_assets + amount));
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares + shares));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets + amount));
 
         env.events().publish(
-            (Symbol::new(&env, "Deposited"),),
+            (Symbol::new(&env, "YieldDeposited"),),
             (depositor, amount, shares),
+        );
+    }
+
+    /// Queue a vault target APY change in basis points.
+    /// Only the owner may call this entrypoint. The change is not applied
+    /// immediately; it becomes active only after the 24-hour time-lock delay
+    /// has elapsed, at which point `apply_apy` must be called.
+    pub fn update_apy(env: Env, caller: Address, new_apy_bps: u32) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(new_apy_bps <= MAX_APY_BPS, "apy out of bounds");
+
+        let activation = env
+            .ledger()
+            .timestamp()
+            .saturating_add(APY_TIMELOCK_SECS);
+        env.storage()
+            .instance()
+            .set(&PROPOSED_APY_KEY, &new_apy_bps);
+        env.storage()
+            .instance()
+            .set(&APY_ACTIVATION_KEY, &activation);
+        env.events().publish(
+            (Symbol::new(&env, "ApyQueued"),),
+            (new_apy_bps, activation),
+        );
+    }
+
+    /// Apply a previously queued APY change once the 24-hour time-lock delay
+    /// has elapsed. Only the owner may call this entrypoint.
+    pub fn apply_apy(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
+        let proposed: u32 = env
+            .storage()
+            .instance()
+            .get(&PROPOSED_APY_KEY)
+            .expect("no pending apy change");
+        let activation: u64 = env
+            .storage()
+            .instance()
+            .get(&APY_ACTIVATION_KEY)
+            .expect("no pending apy change");
+
+        let now = env.ledger().timestamp();
+        assert!(
+            now >= activation,
+            "apy change not yet active; time-lock still in effect"
+        );
+
+        Self::checkpoint_index(&env);
+        let old_apy: u32 = env.storage().instance().get(&APY_KEY).unwrap_or(0);
+        env.storage().instance().set(&APY_KEY, &proposed);
+        env.storage().instance().remove(&PROPOSED_APY_KEY);
+        env.storage().instance().remove(&APY_ACTIVATION_KEY);
+        env.events()
+            .publish((Symbol::new(&env, "ApyUpdated"),), (old_apy, proposed));
+    }
+
+    /// Toggle paused state. While paused, new deposits are rejected.
+    pub fn set_paused(env: Env, caller: Address, paused: bool) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &paused);
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (paused,));
+    }
+
+    /// Pause vault deposits in case of security incidents.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &true);
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (true,));
+    }
+
+    /// Unpause vault deposits.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&PAUSED_KEY, &false);
+        env.events()
+            .publish((Symbol::new(&env, "PauseToggled"),), (false,));
+    }
+
+    /// Emergency exit for users to rescue assets directly by redeeming all their shares.
+    pub fn emergency_exit(env: Env, user: Address) {
+        user.require_auth();
+        let user_key = DataKey::UserShares(user.clone());
+        let shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
+        assert!(shares > 0, "no shares to withdraw");
+
+        Self::checkpoint_index(&env);
+
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+
+        let assets_out = if tot_shares > 0 {
+            shares
+                .checked_mul(tot_assets + VIRTUAL_OFFSET)
+                .expect("overflow")
+                .checked_div(tot_shares + VIRTUAL_OFFSET)
+                .expect("divide by zero")
+        } else {
+            shares
+        };
+        assert!(assets_out > 0, "withdrawal too small");
+
+        sandbox_protocol::redeem(&env, assets_out);
+
+        env.storage().persistent().set(&user_key, &0i128);
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
+        let vault_addr = env.current_contract_address();
+        token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+
+        env.events().publish(
+            (Symbol::new(&env, "EmergencyExit"),),
+            (user, assets_out, shares),
+        );
+    }
+
+    /// Emergency withdraw path for the owner to recover shares for a user.
+    pub fn emergency_withdraw(env: Env, caller: Address, user: Address, shares: i128) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(shares > 0, "shares must be positive");
+
+        let user_key = DataKey::UserShares(user.clone());
+        let user_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
+        assert!(user_shares >= shares, "insufficient shares");
+
+        Self::checkpoint_index(&env);
+
+        let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
+        let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+        let assets_out = shares
+            .checked_mul(tot_assets + VIRTUAL_OFFSET)
+            .expect("overflow")
+            .checked_div(tot_shares + VIRTUAL_OFFSET)
+            .expect("divide by zero");
+        assert!(assets_out > 0, "withdrawal too small");
+
+        sandbox_protocol::redeem(&env, assets_out);
+
+        env.storage()
+            .persistent()
+            .set(&user_key, &(user_shares - shares));
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
+        let vault_addr = env.current_contract_address();
+        token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+
+        env.events().publish(
+            (Symbol::new(&env, "YieldWithdrawn"),),
+            (user, assets_out, shares, 0i128),
         );
     }
 
     // ─── SC-018: Withdraw ─────────────────────────────────────────────────────
 
     /// Burn `shares` from `user` and return the equivalent tokens (principal + yield).
-    /// assets_out = shares * current_index / PRECISION
+    /// SC-051: assets_out = shares * (total_assets + VIRTUAL_OFFSET) / (total_shares + VIRTUAL_OFFSET)
     pub fn withdraw(env: Env, user: Address, shares: i128) {
         user.require_auth();
         assert!(shares > 0, "shares must be positive");
+        assert!(!Self::is_locked(&env), "reentrancy");
 
         Self::checkpoint_index(&env);
 
@@ -123,33 +510,93 @@ impl YieldVaultContract {
         let user_shares: i128 = env.storage().persistent().get(&user_key).unwrap_or(0);
         assert!(user_shares >= shares, "insufficient shares");
 
-        let index = Self::current_index(&env);
-        let assets_out = shares.checked_mul(index).expect("overflow") / PRECISION;
-        assert!(assets_out > 0, "withdrawal too small");
-
-        // Deduct shares
-        env.storage().persistent().set(&user_key, &(user_shares - shares));
-
-        // Update totals (clamp to zero to guard against rounding drift)
         let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
         let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
-        env.storage().instance().set(&SHARES_KEY, &(tot_shares - shares).max(0));
-        env.storage().instance().set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
 
-        let token_addr: Address = env.storage().instance().get(&TOKEN_KEY).expect("not initialized");
+        // SC-051: virtual offset prevents share price manipulation
+        let assets_out = shares
+            .checked_mul(tot_assets + VIRTUAL_OFFSET)
+            .expect("overflow")
+            .checked_div(tot_shares + VIRTUAL_OFFSET)
+            .expect("divide by zero");
+        assert!(assets_out > 0, "withdrawal too small");
+        // Simulate retrieving liquidity from the external lending protocol adapter.
+        sandbox_protocol::redeem(&env, assets_out);
+
+        // Deduct shares
+        env.storage()
+            .persistent()
+            .set(&user_key, &(user_shares - shares));
+
+        // Update totals (clamp to zero to guard against rounding drift)
+        env.storage()
+            .instance()
+            .set(&SHARES_KEY, &(tot_shares - shares).max(0));
+        env.storage()
+            .instance()
+            .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
         let vault_addr = env.current_contract_address();
+
+        // Lock before the external transfer so a token callback cannot
+        // re-enter withdraw. Release after the transfer completes.
+        Self::set_locked(&env, true);
         token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+        Self::set_locked(&env, false);
 
         env.events().publish(
-            (Symbol::new(&env, "Withdrawn"),),
-            (user, shares, assets_out),
+            (Symbol::new(&env, "YieldWithdrawn"),),
+            (user, assets_out, shares, 0i128),
         );
+    }
+
+    // ─── Mock protocol adapter interface ──────────────────────────────────────
+
+    /// Owner-controlled mock protocol supply entrypoint for sandbox/testing use.
+    pub fn mock_protocol_supply(env: Env, caller: Address, amount: i128) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(amount > 0, "amount must be positive");
+        sandbox_protocol::supply(&env, amount);
+    }
+
+    /// Owner-controlled mock protocol redeem entrypoint for sandbox/testing use.
+    pub fn mock_protocol_redeem(env: Env, caller: Address, amount: i128) -> i128 {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(amount > 0, "amount must be positive");
+        sandbox_protocol::redeem(&env, amount)
+    }
+
+    /// Returns current pending simulated rewards from the mock protocol.
+    pub fn mock_protocol_pending_rewards(env: Env) -> i128 {
+        sandbox_protocol::pending_rewards(&env)
+    }
+
+    /// Claims accrued simulated rewards from the mock protocol.
+    pub fn mock_protocol_claim_rewards(env: Env, caller: Address) -> i128 {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        sandbox_protocol::claim_rewards(&env)
+    }
+
+    /// Returns the amount currently supplied to the mock protocol.
+    pub fn mock_protocol_supplied_balance(env: Env) -> i128 {
+        sandbox_protocol::supplied_balance(&env)
     }
 
     // ─── View helpers ─────────────────────────────────────────────────────────
 
     pub fn shares_of(env: Env, user: Address) -> i128 {
-        env.storage().persistent().get(&DataKey::UserShares(user)).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get(&DataKey::UserShares(user))
+            .unwrap_or(0)
     }
 
     pub fn total_shares(env: Env) -> i128 {
@@ -163,4 +610,92 @@ impl YieldVaultContract {
     pub fn yield_index(env: Env) -> i128 {
         Self::current_index(&env)
     }
+
+    /// Returns the currently active APY in basis points.
+    pub fn apy(env: Env) -> u32 {
+        env.storage().instance().get(&APY_KEY).unwrap_or(0)
+    }
+
+    // ─── SC-024: Emit YieldAccrued event on compound ──────────────────────────
+
+    /// Accrue yield, persist the updated index, and broadcast a `YieldAccrued`
+    /// event.  Callers (e.g. a keeper) invoke this periodically to compound
+    /// interest for all depositors.
+    ///
+    /// Event payload: `(elapsed_ledgers: u32, added_yield: i128, new_index: i128)`
+    pub fn accrue_yield(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
+        let old_index: i128 = env.storage().instance().get(&IDX_KEY).unwrap_or(PRECISION);
+        let last_ledger: u32 = env
+            .storage()
+            .instance()
+            .get(&IDX_LED_KEY)
+            .unwrap_or_else(|| env.ledger().sequence());
+
+        let now = env.ledger().sequence();
+        let elapsed = now.saturating_sub(last_ledger);
+
+        // Persist the new index using the existing checkpoint helper.
+        Self::checkpoint_index(&env);
+
+        let new_index: i128 = env.storage().instance().get(&IDX_KEY).unwrap_or(PRECISION);
+        let added_yield = new_index.saturating_sub(old_index);
+
+        // Claim any rewards that have accrued in the mock protocol.
+        let rewards = sandbox_protocol::claim_rewards(&env);
+        if rewards > 0 {
+            // Re-supply rewards back into the protocol to compound.
+            sandbox_protocol::supply(&env, rewards);
+            let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&ASSETS_KEY, &(tot_assets + rewards));
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "YieldAccrued"),),
+            (elapsed, added_yield, new_index),
+        );
+    }
+
+    // ─── SC-025: Administrative token salvage ────────────────────────────────
+
+    /// Sweep any unsupported token accidentally sent to the vault back to the
+    /// `treasury` address.
+    ///
+    /// Panics if `rescue_token` equals the vault's primary deposit token (to
+    /// prevent draining depositor funds).
+    pub fn salvage_token(env: Env, caller: Address, rescue_token: Address, treasury: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
+        let deposit_token: Address = env
+            .storage()
+            .instance()
+            .get(&TOKEN_KEY)
+            .expect("not initialized");
+
+        assert!(
+            rescue_token != deposit_token,
+            "cannot salvage the primary deposit token"
+        );
+
+        let vault_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &rescue_token);
+        let balance = token_client.balance(&vault_addr);
+
+        assert!(balance > 0, "no balance to salvage");
+
+        token_client.transfer(&vault_addr, &treasury, &balance);
+
+        env.events().publish(
+            (Symbol::new(&env, "TokenSalvaged"),),
+            (rescue_token, treasury, balance),
+        );
+    }
 }
+
+#[cfg(test)]
+mod test;

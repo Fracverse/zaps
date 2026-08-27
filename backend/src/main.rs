@@ -6,23 +6,92 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use chrono::Utc;
+use redis;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
 use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod api;
-mod config;
-mod db;
-mod indexer;
-mod services;
+// Bring modules in from the library crate (defined in src/lib.rs)
+use zaps_backend::api;
+use zaps_backend::config;
+use zaps_backend::db;
+use zaps_backend::indexer;
+use zaps_backend::services;
 
-// Rate limiter state: token bucket per client (IP address)
+// ── Health check types ────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct HealthState {
+    pool: sqlx::PgPool,
+    stellar_rpc_url: String,
+    redis_url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DbHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct YieldDbHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_yield_accounts: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    yield_rate_bps: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RpcHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_ledger: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RedisHealth {
+    status: &'static str,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HealthComponents {
+    database: DbHealth,
+    yield_db: YieldDbHealth,
+    soroban_rpc: RpcHealth,
+    redis: RedisHealth,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    /// "ok" when all components are healthy; "degraded" otherwise.
+    status: &'static str,
+    components: HealthComponents,
+    checked_at: String,
+}
+
+// ── Rate limiter state: token bucket per client (IP address) ──────────────────
+
 #[derive(Clone)]
 struct RateLimiter {
     buckets: Arc<Mutex<HashMap<String, (i64, std::time::Instant)>>>,
@@ -116,22 +185,116 @@ async fn main() {
     // Initialize rate limiter: 5 requests per second, max 10 tokens
     let rate_limiter = RateLimiter::new(5, 10);
 
+    // #561 — Session Refresh & Auth Middleware
+    // Build the shared in-memory token cache.  Validated JWT tokens are cached
+    // for TOKEN_CACHE_TTL (5 min) to avoid a DB round-trip on every request.
+    let auth_cache = api::AuthTokenCache::new();
+
+    // Spawn the background sweep task that evicts expired entries every 10 min.
+    api::spawn_cache_sweep(auth_cache.clone());
+
+    // BE-061: Redis pool backing the yield cache. Shared by the API (read-through)
+    // and the indexer (eviction on yield events). Absent REDIS_URL — or an
+    // unusable one — yield reads simply fall through to Postgres.
+    let yield_cache = match config.redis_url.as_deref() {
+        Some(url) => match api::r#yield::YieldCache::connect(url) {
+            Ok(cache) => {
+                tracing::info!("Yield cache enabled against Redis");
+                Some(cache)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to initialize Redis yield cache, continuing without it: {e}"
+                );
+                None
+            }
+        },
+        None => {
+            tracing::warn!("REDIS_URL not set; yield cache disabled");
+            None
+        }
+    };
+
+    // #544: Redis-backed username->address cache, shared REDIS_URL with the
+    // yield cache above. Absent/unusable REDIS_URL simply falls through to
+    // Postgres on every username resolution.
+    let username_address_cache = match config.redis_url.as_deref() {
+        Some(url) => match services::redis_cache::UsernameAddressCache::connect(url) {
+            Ok(cache) => {
+                tracing::info!("Username->address cache enabled against Redis");
+                Some(cache)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to initialize username->address cache, continuing without it: {e}"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     // Bridge state: shares the DB pool and the Allbridge API client.
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
 
+    // Health check state: pool + Soroban RPC URL + Redis for live component probing.
+    let health_state = HealthState {
+        pool: pool.clone(),
+        stellar_rpc_url: config.stellar_rpc_url.clone(),
+        redis_url: config.redis_url.clone(),
+    };
+
     // Setup routes
-    let public_routes = Router::new().route("/health", get(health_check));
+    let public_routes = Router::new()
+        .route("/health", get(health_check))
+        .route("/healthz", get(liveness_probe))
+        .route("/readyz", get(readiness_probe))
+        .route("/api/v1/config", get(app_config))
+        .with_state(health_state);
 
     let sensitive_routes = Router::new()
-        .nest("/api/auth", api::auth_routes(pool.clone()))
-        .nest("/api/users", api::user_routes(pool.clone()));
+        .nest(
+            "/api/auth",
+            api::auth_routes_with_state(api::auth::AuthState {
+                pool: pool.clone(),
+                privy: Arc::new(api::privy_jwks::PrivyJwksClient::new(
+                    config.privy_jwks_url.clone(),
+                )),
+                privy_app_id: config.privy_app_id.clone(),
+            }),
+        )
+        .nest(
+            "/api/users",
+            api::user_routes_with_state(api::user::UserState::new(
+                pool.clone(),
+                username_address_cache.clone(),
+            )),
+        )
+        .nest("/admin", api::admin_routes(pool.clone()));
 
-    let other_routes = Router::new()
-        .nest("/api/feed", api::feed_routes(pool.clone()))
-        .nest("/api/social", api::social_routes(pool.clone()))
-        .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
-        .nest("/api/yield", api::yield_routes(pool.clone()));
+
+    // #561 — routes that require a valid Privy JWT are wrapped with the auth
+    // middleware so the token is validated (and cached) before any handler runs.
+    let auth_required_routes = api::protected_routes(
+        Router::new()
+            .nest("/api/feed", api::feed_routes(pool.clone()))
+            .nest("/api/social", api::social_routes(pool.clone()))
+            .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
+            .nest("/api/registry", api::registry_routes(pool.clone()))
+            .nest(
+                "/api/yield",
+                api::yield_routes_with_state(api::r#yield::YieldState::new(
+                    pool.clone(),
+                    yield_cache.clone(),
+                )),
+            )
+            .nest("/api/payouts", api::payout_routes(pool.clone())),
+        pool.clone(),
+        auth_cache.clone(),
+    );
+
+    let other_routes = auth_required_routes;
 
     let app = Router::new()
         .merge(public_routes)
@@ -181,27 +344,318 @@ async fn main() {
                 ),
         );
 
+    // #726 — Track background worker tasks so they can be allowed to finish
+    // their current batch item before the process exits on shutdown.
+    let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
     // Spawn indexer in the background
     let indexer_pool = pool.clone();
     let indexer_rpc_url = config.stellar_rpc_url.clone();
-    tokio::spawn(async move {
-        if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url).await {
+    let indexer_cache = yield_cache.clone();
+    worker_handles.push(tokio::spawn(async move {
+        if let Err(e) = indexer::worker::run(indexer_pool, indexer_rpc_url, indexer_cache).await {
             tracing::error!("Stellar Indexer background worker failed: {:?}", e);
         }
-    });
+    }));
 
     // Spawn the bridge status poller to periodically refresh pending cross-chain deposits.
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         api::bridge::run_status_poller(bridge_state).await;
-    });
+    }));
+
+    // BE-029: Auto-sweep idle stablecoins for users with auto-earn enabled.
+    let sweep_pool = pool.clone();
+    let sweep_config = services::sweep_worker::SweepWorkerConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::sweep_worker::run(sweep_pool, sweep_config).await;
+    }));
+
+    // BE-547: Hourly APY checkpoints into yield_rates_history, so the series
+    // every yield estimate is priced against has a guaranteed cadence.
+    let checkpoint_pool = pool.clone();
+    let checkpoint_config = services::sweep_worker::YieldCheckpointConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::sweep_worker::run_yield_checkpoints(checkpoint_pool, checkpoint_config).await;
+    }));
+
+    // BE-032: Daily / weekly yield report push notifications.
+    let notification_pool = pool.clone();
+    let notification_config = services::notifications::NotificationSchedulerConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::notifications::run(notification_pool, notification_config).await;
+    }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    // `into_make_service_with_connect_info` populates `ConnectInfo<SocketAddr>`
+    // on every request so IP-based rate limiting (auth::auth_rate_limit,
+    // rate_limiter_middleware) has a real peer address to fall back on when
+    // there's no `X-Forwarded-For` header (i.e. no reverse proxy in front).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+// ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────
+
+#[derive(Serialize)]
+struct AppConfigResponse {
+    minimum_required_version: String,
+    ios_store_url: String,
+    android_store_url: String,
+}
+
+async fn app_config() -> Json<AppConfigResponse> {
+    Json(AppConfigResponse {
+        minimum_required_version: std::env::var("MIN_APP_VERSION")
+            .unwrap_or_else(|_| "1.0.0".into()),
+        ios_store_url: std::env::var("IOS_STORE_URL")
+            .unwrap_or_else(|_| "https://apps.apple.com/app/zaps".into()),
+        android_store_url: std::env::var("ANDROID_STORE_URL")
+            .unwrap_or_else(|_| {
+                "https://play.google.com/store/apps/details?id=app.zaps".into()
+            }),
+    })
+}
+
+// ── /health handler ───────────────────────────────────────────────────────────
+
+async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
+    // Run all probes concurrently so latencies don't stack.
+    let (db, yield_db, rpc, redis) = tokio::join!(
+        probe_database(&state.pool),
+        probe_yield_db(&state.pool),
+        probe_soroban_rpc(&state.stellar_rpc_url),
+        probe_redis(state.redis_url.as_deref()),
+    );
+
+    let all_ok = db.status == "ok"
+        && yield_db.status == "ok"
+        && rpc.status == "ok"
+        && redis.status == "ok";
+
+    let body = HealthResponse {
+        status: if all_ok { "ok" } else { "degraded" },
+        components: HealthComponents {
+            database: db,
+            yield_db,
+            soroban_rpc: rpc,
+            redis,
+        },
+        checked_at: Utc::now().to_rfc3339(),
+    };
+
+    let code = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (code, Json(body))
+}
+
+/// GET /healthz — lightweight liveness probe for Kubernetes.
+/// Returns 200 if the process is alive; does not check dependencies.
+async fn liveness_probe() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// GET /readyz — Kubernetes readiness probe.
+/// Verifies DB and Redis are reachable; returns HTTP 200 only when both pass.
+async fn readiness_probe(State(state): State<HealthState>) -> impl IntoResponse {
+    let (db, redis) = tokio::join!(
+        probe_database(&state.pool),
+        probe_redis(state.redis_url.as_deref()),
+    );
+
+    let db_ok = db.status == "ok";
+    let redis_ok = redis.status == "ok" || state.redis_url.is_none();
+
+    let status = if db_ok && redis_ok { "ok" } else { "not ready" };
+    let code = if db_ok && redis_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let mut body = serde_json::json!({
+        "status": status,
+        "db": db_ok,
+        "redis": redis_ok,
+    });
+
+    if let Some(e) = &db.error {
+        body["db_error"] = serde_json::json!(e);
+    }
+    if let Some(e) = &redis.error {
+        body["redis_error"] = serde_json::json!(e);
+    }
+
+    (code, Json(body))
+}
+
+// ── Component probes ──────────────────────────────────────────────────────────
+
+/// Basic Postgres connectivity: a single round-trip to the DB pool.
+async fn probe_database(pool: &sqlx::PgPool) -> DbHealth {
+    let start = Instant::now();
+    match sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(pool)
+        .await
+    {
+        Ok(_) => DbHealth {
+            status: "ok",
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: None,
+        },
+        Err(e) => DbHealth {
+            status: "error",
+            latency_ms: start.elapsed().as_millis() as u64,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Yield-specific DB probe: verifies `user_yield_balances` and
+/// `yield_rates_history` are reachable and returns live metrics.
+async fn probe_yield_db(pool: &sqlx::PgPool) -> YieldDbHealth {
+    let start = Instant::now();
+
+    let result: Result<(i64, Option<i32>), sqlx::Error> = async {
+        let active_yield_accounts: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM user_yield_balances")
+                .fetch_one(pool)
+                .await?;
+
+        let yield_rate_bps: Option<i32> = sqlx::query_scalar(
+            "SELECT apy FROM yield_rates_history ORDER BY created_at DESC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        Ok((active_yield_accounts, yield_rate_bps))
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok((count, rate)) => YieldDbHealth {
+            status: "ok",
+            latency_ms,
+            active_yield_accounts: Some(count),
+            yield_rate_bps: rate,
+            error: None,
+        },
+        Err(e) => YieldDbHealth {
+            status: "error",
+            latency_ms,
+            active_yield_accounts: None,
+            yield_rate_bps: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Soroban RPC probe: issues a real `getLatestLedger` JSON-RPC call.
+/// Fails if the node is unreachable, returns a non-2xx status, or the
+/// response shape is unexpected.
+async fn probe_soroban_rpc(rpc_url: &str) -> RpcHealth {
+    let start = Instant::now();
+
+    let result: Result<u32, String> = async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestLedger",
+            "params": {}
+        });
+
+        let res = client
+            .post(rpc_url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !res.status().is_success() {
+            return Err(format!("RPC returned HTTP {}", res.status()));
+        }
+
+        let body: serde_json::Value = res.json().await.map_err(|e| e.to_string())?;
+
+        body["result"]["sequence"]
+            .as_u64()
+            .map(|n| n as u32)
+            .ok_or_else(|| "unexpected RPC response shape".to_string())
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(ledger) => RpcHealth {
+            status: "ok",
+            latency_ms,
+            latest_ledger: Some(ledger),
+            error: None,
+        },
+        Err(e) => RpcHealth {
+            status: "error",
+            latency_ms,
+            latest_ledger: None,
+            error: Some(e),
+        },
+    }
+}
+
+/// Redis PING probe. Returns "ok" when Redis responds with PONG.
+async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
+    let start = Instant::now();
+
+    let Some(url) = redis_url else {
+        return RedisHealth {
+            status: "skipped",
+            latency_ms: 0,
+            error: None,
+        };
+    };
+
+    let result: Result<(), String> = async {
+        let client = redis::Client::open(url).map_err(|e| e.to_string())?;
+        let mut conn = redis::aio::ConnectionManager::new(client)
+            .await
+            .map_err(|e| e.to_string())?;
+        redis::cmd("PING")
+            .query_async::<String>(&mut conn)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    .await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(()) => RedisHealth {
+            status: "ok",
+            latency_ms,
+            error: None,
+        },
+        Err(e) => RedisHealth {
+            status: "error",
+            latency_ms,
+            error: Some(e),
+        },
+    }
 }

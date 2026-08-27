@@ -1,22 +1,22 @@
 "use client";
 import { useMemo } from "react";
 import { usePolling } from "@/lib/use-polling";
-import { api, Transaction } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  LineChart, Line,
 } from "recharts";
-import { format, parseISO, startOfDay } from "date-fns";
+import { format, parseISO, startOfDay, startOfMonth } from "date-fns";
 
 const COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"];
 
 export default function AnalyticsPage() {
   const { data: txs, loading } = usePolling(() => api.transactions(), 30000);
 
-  const { dailyVolume, statusDist, assetDist } = useMemo(() => {
-    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [] };
+  const { dailyVolume, statusDist, assetDist, monthlyYield } = useMemo(() => {
+    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [], monthlyYield: [] };
 
-    // Daily volume (last 30 days)
     const byDay: Record<string, number> = {};
     txs.forEach((t) => {
       const day = format(startOfDay(parseISO(t.created_at)), "MMM d");
@@ -26,17 +26,23 @@ export default function AnalyticsPage() {
       .slice(-30)
       .map(([date, volume]) => ({ date, volume: Number(volume.toFixed(2)) }));
 
-    // Status distribution
     const bySt: Record<string, number> = {};
     txs.forEach((t) => { bySt[t.status] = (bySt[t.status] ?? 0) + 1; });
     const statusDist = Object.entries(bySt).map(([name, value]) => ({ name, value }));
 
-    // Asset distribution
     const byAsset: Record<string, number> = {};
     txs.forEach((t) => { byAsset[t.send_asset] = (byAsset[t.send_asset] ?? 0) + t.send_amount / 1_000_000; });
     const assetDist = Object.entries(byAsset).map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }));
 
-    return { dailyVolume, statusDist, assetDist };
+    const completed = txs.filter((t) => t.status === "completed");
+    const byMonth: Record<string, number> = {};
+    completed.forEach((t) => {
+      const month = format(startOfMonth(parseISO(t.created_at)), "MMM yyyy");
+      byMonth[month] = (byMonth[month] ?? 0) + t.send_amount / 1_000_000;
+    });
+    const monthlyYield = Object.entries(byMonth).map(([month, yield_]) => ({ month, yield: Number(yield_.toFixed(2)) }));
+
+    return { dailyVolume, statusDist, assetDist, monthlyYield };
   }, [txs]);
 
   if (loading && !txs) {
@@ -103,6 +109,20 @@ export default function AnalyticsPage() {
                 {assetDist.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Bar>
             </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Yield Distribution over Time */}
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm lg:col-span-2">
+          <h2 className="font-semibold text-slate-800 mb-4">Yield Distribution Over Time (Monthly)</h2>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={monthlyYield}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => [Number(v).toLocaleString(), "Yield"]} />
+              <Line type="monotone" dataKey="yield" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+            </LineChart>
           </ResponsiveContainer>
         </div>
 

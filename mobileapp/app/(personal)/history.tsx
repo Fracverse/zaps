@@ -38,12 +38,33 @@ function typeIcon(type: Transaction["type"]) {
       return { name: "arrow-up" as const, bg: "#FFEBEE", color: "#EF4444" };
     case "received":
       return { name: "arrow-down" as const, bg: "#E8F5E9", color: "#22C55E" };
+    case "yield":
+      return { name: "trending-up" as const, bg: "#F0FDF4", color: "#16A34A" };
+    case "mass_payout":
+      return {
+        name: "people" as const,
+        bg: "#EDE9FE",
+        color: "#7C3AED",
+      };
     default:
       return {
         name: "swap-horizontal" as const,
         bg: "#E3F2FD",
         color: "#2196F3",
       };
+  }
+}
+
+function yieldTagLabel(yieldType: Transaction["yieldType"]): string {
+  switch (yieldType) {
+    case "interest":
+      return "Interest";
+    case "reward":
+      return "Reward";
+    case "apy":
+      return "APY";
+    default:
+      return "Yield";
   }
 }
 
@@ -59,7 +80,8 @@ function hasActiveFilters(f: TransactionFilters): boolean {
     !!f.dateFrom ||
     !!f.dateTo ||
     !!f.amountMin ||
-    !!f.amountMax
+    !!f.amountMax ||
+    !!f.yieldOnly
   );
 }
 
@@ -74,6 +96,8 @@ const TransactionRow = React.memo(function TransactionRow({
 }) {
   const icon = typeIcon(item.type);
   const isOutgoing = item.type === "sent";
+  const isYield = item.type === "yield";
+  const isMassPayout = item.type === "mass_payout";
   const label = item.addressLabel ?? truncateAddress(item.address);
   const time = formatDate(item.timestamp, {
     month: "short",
@@ -97,11 +121,34 @@ const TransactionRow = React.memo(function TransactionRow({
 
       {/* Info */}
       <View style={styles.txInfo}>
-        <Text style={styles.txLabel} numberOfLines={1}>
-          {label}
-        </Text>
+        {/* Label row with optional Mass Payout badge */}
+        <View style={styles.txLabelRow}>
+          <Text style={styles.txLabel} numberOfLines={1}>
+            {isMassPayout && item.senderName ? item.senderName : label}
+          </Text>
+          {isMassPayout && (
+            <View style={styles.massPayoutBadge}>
+              <Ionicons name="people" size={10} color="#7C3AED" />
+              <Text style={styles.massPayoutBadgeText}>Mass Payout</Text>
+            </View>
+          )}
+        </View>
+        {/* Anchor/sender info for SDP disbursements */}
+        {isMassPayout && item.senderAnchor && (
+          <Text style={styles.senderAnchor} numberOfLines={1}>
+            via {item.senderAnchor}
+          </Text>
+        )}
         <View style={styles.txMeta}>
           <Text style={styles.txTime}>{time}</Text>
+          {isYield && (
+            <View style={styles.yieldTag}>
+              <Ionicons name="trending-up" size={10} color="#16A34A" />
+              <Text style={styles.yieldTagText}>
+                {yieldTagLabel(item.yieldType)}
+              </Text>
+            </View>
+          )}
           {item.status !== "completed" && (
             <View
               style={[
@@ -127,7 +174,13 @@ const TransactionRow = React.memo(function TransactionRow({
         <Text
           style={[
             styles.txAmountText,
-            { color: isOutgoing ? COLORS.black : "#22C55E" },
+            {
+              color: isOutgoing
+                ? COLORS.black
+                : isMassPayout
+                  ? "#7C3AED"
+                  : "#22C55E",
+            },
           ]}
         >
           {isOutgoing ? "−" : "+"}
@@ -151,15 +204,26 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+function MassPayoutSectionHeader() {
+  return (
+    <View style={styles.massPayoutSectionHeader}>
+      <Ionicons name="people" size={13} color="#7C3AED" />
+      <Text style={styles.massPayoutSectionHeaderText}>Mass Payouts</Text>
+    </View>
+  );
+}
+
 // ── Group transactions by date ────────────────────────────────────────────────
 
 type ListItem =
   | { kind: "header"; key: string; title: string }
+  | { kind: "mass_payout_header"; key: string }
   | { kind: "tx"; key: string; tx: Transaction };
 
 function groupByDate(txs: Transaction[]): ListItem[] {
   const result: ListItem[] = [];
   let lastDate = "";
+  let massPayoutHeaderShownForDate = false;
 
   for (const tx of txs) {
     const d = new Date(tx.timestamp);
@@ -182,8 +246,17 @@ function groupByDate(txs: Transaction[]): ListItem[] {
 
     if (label !== lastDate) {
       lastDate = label;
+      massPayoutHeaderShownForDate = false;
       result.push({ kind: "header", key: `hdr_${label}`, title: label });
     }
+
+    // Insert a "Mass Payouts" sub-section header the first time we encounter
+    // a mass_payout transaction within each date group.
+    if (tx.type === "mass_payout" && !massPayoutHeaderShownForDate) {
+      massPayoutHeaderShownForDate = true;
+      result.push({ kind: "mass_payout_header", key: `mp_hdr_${label}` });
+    }
+
     result.push({ kind: "tx", key: tx.id, tx });
   }
 
@@ -247,6 +320,9 @@ export default function HistoryScreen() {
     ({ item }: { item: ListItem }) => {
       if (item.kind === "header") {
         return <SectionHeader title={item.title} />;
+      }
+      if (item.kind === "mass_payout_header") {
+        return <MassPayoutSectionHeader />;
       }
       return (
         <TransactionRow
@@ -329,6 +405,81 @@ export default function HistoryScreen() {
             </TouchableOpacity>
           )}
         </View>
+      </View>
+
+      {/* Quick filters row — Yield only & Mass Payouts */}
+      <View style={styles.quickFilterRow}>
+        <TouchableOpacity
+          style={[
+            styles.quickFilterChip,
+            filters.yieldOnly && styles.quickFilterChipActive,
+          ]}
+          onPress={() =>
+            applyFilters({
+              ...filters,
+              yieldOnly: !filters.yieldOnly,
+              search: searchText,
+            })
+          }
+          activeOpacity={0.8}
+          accessibilityRole="switch"
+          accessibilityLabel="Filter by yield only"
+          accessibilityState={{ checked: !!filters.yieldOnly }}
+        >
+          <Ionicons
+            name="trending-up"
+            size={14}
+            color={filters.yieldOnly ? COLORS.secondary : "#16A34A"}
+            style={{ marginRight: 6 }}
+          />
+          <Text
+            style={[
+              styles.quickFilterChipText,
+              filters.yieldOnly && styles.quickFilterChipTextActive,
+            ]}
+          >
+            Yield only
+          </Text>
+        </TouchableOpacity>
+
+        {/* Quick filter — Mass Payouts (SDP disbursements) */}
+        <TouchableOpacity
+          style={[
+            styles.quickFilterChipMassPayout,
+            filters.type === "mass_payout" &&
+              styles.quickFilterChipMassPayoutActive,
+          ]}
+          onPress={() =>
+            applyFilters({
+              ...filters,
+              type: filters.type === "mass_payout" ? "all" : "mass_payout",
+              yieldOnly: false,
+              search: searchText,
+            })
+          }
+          activeOpacity={0.8}
+          accessibilityRole="switch"
+          accessibilityLabel="Filter by mass payouts"
+          accessibilityState={{ checked: filters.type === "mass_payout" }}
+        >
+          <Ionicons
+            name="people"
+            size={14}
+            color={
+              filters.type === "mass_payout" ? COLORS.secondary : "#7C3AED"
+            }
+            style={{ marginRight: 6 }}
+          />
+          <Text
+            style={[
+              styles.quickFilterChipMassPayoutText,
+              filters.type === "mass_payout" &&
+                styles.quickFilterChipMassPayoutTextActive,
+            ]}
+          >
+            Mass Payouts
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Summary row */}
@@ -473,6 +624,22 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
+  // Mass Payout sub-section header
+  massPayoutSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 4,
+    paddingTop: 12,
+    paddingBottom: 6,
+    gap: 5,
+  },
+  massPayoutSectionHeaderText: {
+    fontSize: 12,
+    fontFamily: "Outfit_700Bold",
+    color: "#7C3AED",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   // Transaction row
   txRow: {
     flexDirection: "row",
@@ -492,10 +659,38 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   txInfo: { flex: 1, marginRight: 8 },
+  txLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 3,
+  },
   txLabel: {
     fontSize: 14,
     fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
+    flexShrink: 1,
+  },
+  massPayoutBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 100,
+    backgroundColor: "#EDE9FE",
+    gap: 3,
+  },
+  massPayoutBadgeText: {
+    fontSize: 9,
+    fontFamily: "Outfit_700Bold",
+    color: "#7C3AED",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  senderAnchor: {
+    fontSize: 11,
+    fontFamily: "Outfit_500Medium",
+    color: "#7C3AED",
     marginBottom: 3,
   },
   txMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
@@ -513,6 +708,68 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: "Outfit_600SemiBold",
     textTransform: "capitalize",
+  },
+  yieldTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 100,
+    backgroundColor: "#F0FDF4",
+    gap: 3,
+  },
+  yieldTagText: {
+    fontSize: 10,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  quickFilterRow: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  quickFilterChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#16A34A",
+    backgroundColor: "#F0FDF4",
+  },
+  quickFilterChipActive: {
+    backgroundColor: "#16A34A",
+  },
+  quickFilterChipText: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  quickFilterChipTextActive: {
+    color: COLORS.secondary,
+  },
+  quickFilterChipMassPayout: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#7C3AED",
+    backgroundColor: "#EDE9FE",
+  },
+  quickFilterChipMassPayoutActive: {
+    backgroundColor: "#7C3AED",
+  },
+  quickFilterChipMassPayoutText: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#7C3AED",
+  },
+  quickFilterChipMassPayoutTextActive: {
+    color: COLORS.secondary,
   },
   txAmount: { alignItems: "flex-end" },
   txAmountText: {

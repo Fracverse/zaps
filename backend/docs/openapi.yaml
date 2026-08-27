@@ -21,6 +21,8 @@ tags:
     description: Likes and comments on payments
   - name: Bridge
     description: Cross-chain token quote, submission, and status tracking
+  - name: Yield
+    description: Yield vault balance, transaction history, deposit, withdraw, and auto-earn toggle
 
 components:
   securitySchemes:
@@ -29,6 +31,33 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: JWT obtained from POST /api/auth/verify
+
+  responses:
+    BadRequest:
+      description: Bad Request - Invalid input, missing required fields, or malformed data
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Invalid signature format (must be hex or base64)
+
+    Unauthorized:
+      description: Unauthorized - Missing or invalid JWT / authentication credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Missing authorization header
+
+    TooManyRequests:
+      description: Too Many Requests - Rate limit exceeded; retry after a short delay
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: Too many requests, please try again later.
 
   schemas:
     ErrorResponse:
@@ -123,6 +152,27 @@ components:
         avatar_url:
           type: string
           nullable: true
+
+    UserSuggestionsResponse:
+      type: object
+      properties:
+        query:
+          type: string
+          description: The normalised (lowercased, trimmed) prefix that was matched.
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchUser'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+          format: int64
+          description: Total matches for the prefix, ignoring limit/offset.
+        has_more:
+          type: boolean
 
     FriendUser:
       type: object
@@ -335,6 +385,176 @@ components:
           type: integer
           description: Number of confirmations observed on the source chain
 
+    YieldBalanceResponse:
+      type: object
+      required:
+        - available_balance
+        - earning_balance
+        - accrued_interest
+        - total_earning_balance
+        - apy
+        - auto_earn_enabled
+      properties:
+        available_balance:
+          type: integer
+          format: int64
+          description: Idle balance not yet deposited into the vault (micro-units)
+        earning_balance:
+          type: integer
+          format: int64
+          description: Balance currently deposited and earning yield (micro-units)
+        accrued_interest:
+          type: integer
+          format: int64
+          description: Interest accrued since the last on-chain sync (micro-units)
+        total_earning_balance:
+          type: integer
+          format: int64
+          description: earning_balance plus live accrued_interest (micro-units)
+        apy:
+          type: number
+          format: double
+          description: "Current APY as a percentage (e.g. 5.0 for 5%)"
+        auto_earn_enabled:
+          type: boolean
+          description: Whether idle available balance is automatically swept into the vault
+
+    YieldHistoryItem:
+      type: object
+      required:
+        - id
+        - tx_hash
+        - type
+        - amount
+        - created_at
+      properties:
+        id:
+          type: string
+          description: UUID of the yield transaction record
+        tx_hash:
+          type: string
+          description: On-chain or internal reference hash for the operation
+        type:
+          type: string
+          enum:
+            - DEPOSIT
+            - WITHDRAW
+            - INTEREST
+          description: Transaction type
+        amount:
+          type: integer
+          format: int64
+          description: Transaction amount in micro-units
+        created_at:
+          type: string
+          format: date-time
+          description: ISO8601 timestamp of the transaction
+
+    YieldHistoryResponse:
+      type: object
+      required:
+        - items
+        - limit
+        - offset
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/YieldHistoryItem'
+        limit:
+          type: integer
+          format: int64
+          description: Page size used for this response (1–100)
+        offset:
+          type: integer
+          format: int64
+          description: Number of records skipped
+        total:
+          type: integer
+          format: int64
+          description: Total number of yield transactions for the authenticated user
+
+    DepositRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Amount to move from available to earning balance (micro-units; must be > 0)
+
+    DepositResponse:
+      type: object
+      required:
+        - available_balance
+        - earning_balance
+        - envelope_xdr
+      properties:
+        available_balance:
+          type: integer
+          format: int64
+          description: Updated available balance after the deposit (micro-units)
+        earning_balance:
+          type: integer
+          format: int64
+          description: Updated earning balance after the deposit (micro-units)
+        envelope_xdr:
+          type: string
+          description: Base64-encoded Stellar XDR transaction envelope for the client wallet to sign and submit
+
+    WithdrawRequest:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Amount to move from earning to available balance (micro-units; must be > 0). Pass the full earning_balance to withdraw everything.
+
+    WithdrawResponse:
+      type: object
+      required:
+        - available_balance
+        - earning_balance
+        - envelope_xdr
+      properties:
+        available_balance:
+          type: integer
+          format: int64
+          description: Updated available balance after the withdrawal (micro-units)
+        earning_balance:
+          type: integer
+          format: int64
+          description: Updated earning balance after the withdrawal (micro-units)
+        envelope_xdr:
+          type: string
+          description: Base64-encoded Stellar XDR transaction envelope for the client wallet to sign and submit
+
+    ToggleAutoEarnRequest:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Set to true to enable automatic sweep of idle balance into the yield vault
+
+    ToggleAutoEarnResponse:
+      type: object
+      required:
+        - auto_earn_enabled
+        - message
+      properties:
+        auto_earn_enabled:
+          type: boolean
+          description: The updated auto-earn preference that was persisted
+        message:
+          type: string
+          description: Human-readable confirmation of the new setting
+
 paths:
   /health:
     get:
@@ -366,6 +586,8 @@ paths:
                 $ref: '#/components/schemas/ChallengeResponse'
               example:
                 challenge: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /api/auth/verify:
     post:
@@ -402,6 +624,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: Signature verification failed
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -434,6 +658,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: Missing authorization header
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -469,6 +695,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -488,9 +716,31 @@ paths:
         - name: q
           in: query
           required: true
-          description: Search term matched against username and address (ILIKE)
+          description: >-
+            Prefix matched case-insensitively against username, and
+            case-sensitively against address. LIKE metacharacters are escaped
+            and matched literally.
           schema:
             type: string
+            minLength: 1
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped to 1-50.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
+        - name: offset
+          in: query
+          required: false
+          description: Rows to skip; negative values are clamped to 0.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         '200':
           description: Matching users
@@ -500,12 +750,82 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/SearchUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           description: Missing or invalid JWT
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/users/suggestions:
+    get:
+      tags:
+        - Users
+      summary: Username autocomplete suggestions (paginated)
+      description: >-
+        Username-only prefix search for autocomplete. Unlike /api/users/search
+        this validates `q` as a username prefix (lowercase alphanumeric, at most
+        15 characters) and returns a paginated envelope with the total number of
+        matches alongside each profile's avatar.
+      operationId: suggestUsernames
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: >-
+            Username prefix. Lowercased before matching; rejected with 400 if it
+            is empty, longer than 15 characters, or contains anything other than
+            lowercase letters and digits.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 15
+        - name: limit
+          in: query
+          required: false
+          description: Page size, clamped to 1-25.
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 25
+        - name: offset
+          in: query
+          required: false
+          description: Rows to skip; negative values are clamped to 0.
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: Paginated username suggestions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSuggestionsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -536,6 +856,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -583,6 +905,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           description: Internal server error
           content:
@@ -638,11 +962,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/FeedItem'
         '401':
-          description: Missing or invalid JWT
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/Unauthorized'
         '500':
           description: Internal server error
           content:
@@ -668,11 +988,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/FeedItem'
         '401':
-          description: Missing or invalid JWT
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          $ref: '#/components/responses/Unauthorized'
         '500':
           description: Internal server error
           content:
@@ -913,6 +1229,230 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/yield/balance:
+    get:
+      tags:
+        - Yield
+      summary: Get yield vault balance for the authenticated user
+      operationId: getYieldBalance
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current yield balance and live accrued interest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YieldBalanceResponse'
+              example:
+                available_balance: 1000000
+                earning_balance: 5000000
+                accrued_interest: 1234
+                total_earning_balance: 5001234
+                apy: 5.0
+                auto_earn_enabled: true
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Missing authorization header
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Failed to retrieve yield balance
+
+  /api/yield/history:
+    get:
+      tags:
+        - Yield
+      summary: Get paginated yield transaction history for the authenticated user
+      operationId: getYieldHistory
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: "Number of records to return (1–100, default: 20)"
+          schema:
+            type: integer
+            format: int64
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          description: "Number of records to skip (default: 0)"
+          schema:
+            type: integer
+            format: int64
+            default: 0
+            minimum: 0
+      responses:
+        '200':
+          description: Paginated list of yield transactions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/YieldHistoryResponse'
+              example:
+                items:
+                  - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    tx_hash: "zaps-yield-deposit-3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    type: DEPOSIT
+                    amount: 5000000
+                    created_at: "2026-06-27T10:00:00Z"
+                limit: 20
+                offset: 0
+                total: 1
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/yield/deposit:
+    post:
+      tags:
+        - Yield
+      summary: Deposit from available balance into the yield vault
+      operationId: yieldDeposit
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositRequest'
+            example:
+              amount: 5000000
+      responses:
+        '200':
+          description: Deposit processed; updated balances and Stellar XDR envelope returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositResponse'
+        '400':
+          description: Amount is zero or negative, or insufficient available balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                non_positive:
+                  summary: Non-positive amount
+                  value:
+                    error: Amount must be greater than zero
+                insufficient:
+                  summary: Insufficient available balance
+                  value:
+                    error: Insufficient available balance
+                    available: 1000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/yield/withdraw:
+    post:
+      tags:
+        - Yield
+      summary: Withdraw from the yield vault back to available balance
+      operationId: yieldWithdraw
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+            example:
+              amount: 2000000
+      responses:
+        '200':
+          description: Withdrawal processed; updated balances and Stellar XDR envelope returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawResponse'
+        '400':
+          description: Amount is zero or negative, or insufficient earning balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                non_positive:
+                  summary: Non-positive amount
+                  value:
+                    error: Amount must be greater than zero
+                insufficient:
+                  summary: Insufficient earning balance
+                  value:
+                    error: Insufficient earning balance
+                    earning: 1000000
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/yield/toggle-auto:
+    post:
+      tags:
+        - Yield
+      summary: Enable or disable automatic sweeping of idle balance into the yield vault
+      operationId: toggleAutoEarn
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToggleAutoEarnRequest'
+            example:
+              enabled: true
+      responses:
+        '200':
+          description: Auto-earn preference updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToggleAutoEarnResponse'
+              example:
+                auto_earn_enabled: true
+                message: "Auto-earn enabled. Idle stablecoins will be swept into the yield vault."
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '500':
           description: Internal server error
           content:

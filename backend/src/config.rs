@@ -3,6 +3,14 @@ pub struct Config {
     pub stellar_rpc_url: String,
     pub allbridge_api_url: String,
     pub jwt_secret: String,
+    /// Redis connection URL for the yield cache. `None` disables caching.
+    pub redis_url: Option<String>,
+    /// Privy app ID; expected as the `aud` claim on Privy session JWTs.
+    pub privy_app_id: String,
+    /// JWKS endpoint used to verify Privy session JWTs. Defaults to Privy's
+    /// per-app endpoint derived from `privy_app_id`; override with
+    /// `PRIVY_JWKS_URL` (e.g. to point at a mock server in tests).
+    pub privy_jwks_url: String,
 }
 
 impl Config {
@@ -17,6 +25,23 @@ impl Config {
                 .unwrap_or_else(|_| "https://core-api.allbridge.io".into()),
             jwt_secret: std::env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into()),
+            redis_url: std::env::var("REDIS_URL")
+                .ok()
+                .filter(|url| !url.trim().is_empty()),
+            privy_app_id: {
+                let app_id = std::env::var("PRIVY_APP_ID").unwrap_or_default();
+                if app_id.is_empty() {
+                    tracing::warn!(
+                        "PRIVY_APP_ID not set; Privy JWT verification will reject all tokens \
+                         (audience check can never match)"
+                    );
+                }
+                app_id
+            },
+            privy_jwks_url: std::env::var("PRIVY_JWKS_URL").unwrap_or_else(|_| {
+                let app_id = std::env::var("PRIVY_APP_ID").unwrap_or_default();
+                format!("https://auth.privy.io/api/v1/apps/{app_id}/jwks.json")
+            }),
         }
     }
 }
