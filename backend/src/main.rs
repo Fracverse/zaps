@@ -254,7 +254,16 @@ async fn main() {
         .with_state(health_state);
 
     let sensitive_routes = Router::new()
-        .nest("/api/auth", api::auth_routes(pool.clone()))
+        .nest(
+            "/api/auth",
+            api::auth_routes_with_state(api::auth::AuthState {
+                pool: pool.clone(),
+                privy: Arc::new(api::privy_jwks::PrivyJwksClient::new(
+                    config.privy_jwks_url.clone(),
+                )),
+                privy_app_id: config.privy_app_id.clone(),
+            }),
+        )
         .nest(
             "/api/users",
             api::user_routes_with_state(api::user::UserState::new(
@@ -380,37 +389,16 @@ async fn main() {
     tracing::info!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-
-    // #726 — Graceful shutdown: run the HTTP server until it stops OR a
-    // SIGTERM/ctrl-c is received.  On shutdown we stop accepting new work and
-    // let the tracked background workers finish their current batch item
-    // (and flush DB connections) before exiting.
-    tokio::select! {
-        result = axum::serve(listener, app) => {
-            if let Err(e) = result {
-                tracing::error!("HTTP server terminated with error: {e}");
-            }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!(
-                "Shutdown signal received; completing active worker tasks before exit"
-            );
-        }
-    }
-
-    let join_workers = tokio::spawn(async move {
-        for handle in worker_handles {
-            let _ = handle.await;
-        }
-    });
-    if tokio::time::timeout(std::time::Duration::from_secs(30), join_workers)
-        .await
-        .is_err()
-    {
-        tracing::warn!("Some worker tasks did not finish within the grace period");
-    }
-
-    tracing::info!("Shutdown complete");
+    // `into_make_service_with_connect_info` populates `ConnectInfo<SocketAddr>`
+    // on every request so IP-based rate limiting (auth::auth_rate_limit,
+    // rate_limiter_middleware) has a real peer address to fall back on when
+    // there's no `X-Forwarded-For` header (i.e. no reverse proxy in front).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 // ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────

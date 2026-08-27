@@ -740,7 +740,7 @@ mod tests {
     /// Verify that an empty pending list produces no SQL (early return path).
     #[test]
     fn bulk_insert_empty_slice_is_noop() {
-        let pending: Vec<PendingPayment> = vec![];
+        let pending: Vec<i32> = vec![];
         // The function returns immediately for an empty slice; confirming the
         // placeholder loop produces no output is sufficient as a unit guard.
         const COLS: usize = 7;
