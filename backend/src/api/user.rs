@@ -200,10 +200,11 @@ pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 }
 
 pub async fn update_profile(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<UserState>,
     auth: AuthUser,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
+    let pool = &state.pool;
     let row = match sqlx::query(
         r#"
         UPDATE users
@@ -232,14 +233,17 @@ pub async fn update_profile(
         }
     };
 
-    Json(ProfileResponse {
+    let profile = ProfileResponse {
         address: row.get("address"),
         username: row.get("username"),
         display_name: row.get("display_name"),
         bio: row.get("bio"),
         avatar_url: row.get("avatar_url"),
-    })
-    .into_response()
+    };
+    if let Some(cache) = &state.cache {
+        cache.invalidate(&profile.username).await;
+    }
+    Json(profile).into_response()
 }
 
 /// Longest accepted `q` on /search. Sized for a Stellar address (56 chars),
