@@ -24,6 +24,7 @@ pub enum DataKey {
     PrivyDid(String),     // Maps Privy DID -> wallet Address
     WalletDid(Address),   // Maps wallet Address -> Privy DID (reverse index)
     Admin,                // Stores the contract admin Address
+    PendingAdmin,         // Stores the proposed successor admin (2-step transfer, issue #776)
     PrivyVerifierKey,     // Ed25519 public key trusted to attest DID <-> wallet links
     ReservationToken,     // Stores Naira token contract Address
     ReservationAmount,    // Stores required reservation amount (i128)
@@ -111,6 +112,46 @@ impl UserRegistryContract {
             TTL_THRESHOLD,
             TTL_EXTEND_TO,
         );
+    }
+
+    /// Admin-only: propose a successor admin as part of a 2-step ownership
+    /// transfer (issue #776). The current admin keeps full privileges until
+    /// the proposed address claims ownership via `claim_admin`. Calling this
+    /// only updates the pending admin; it does not change `DataKey::Admin`.
+    pub fn propose_admin(env: Env, caller: Address, new_admin: Address) {
+        caller.require_auth();
+        let admin = Self::require_admin(&env);
+        assert!(caller == admin, "only admin can propose new admin");
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::PendingAdmin, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        env.events()
+            .publish((symbol_short!("adm_prop"),), (admin, new_admin));
+    }
+
+    /// Complete a 2-step ownership transfer. Only the address previously
+    /// proposed via `propose_admin` may call this; once called, ownership
+    /// (`DataKey::Admin`) moves to the caller and the pending proposal is
+    /// cleared.
+    pub fn claim_admin(env: Env, caller: Address) {
+        caller.require_auth();
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or_else(|| panic!("no pending admin proposal"));
+        assert!(caller == pending, "only the proposed admin can claim");
+        env.storage().persistent().set(&DataKey::Admin, &caller);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Admin, TTL_THRESHOLD, TTL_EXTEND_TO);
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
+
+        env.events().publish((symbol_short!("admin_xfr"),), caller);
     }
 
     /// Register a username mapping to the sender's address.
