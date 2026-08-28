@@ -400,6 +400,13 @@ async fn main() {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
     }));
 
+    // #737: Alert the operations channel when a user's auto-sweep keeps failing.
+    let sweep_alert_pool = pool.clone();
+    let sweep_alert_config = services::sweep_scheduler::SweepSchedulerConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::sweep_scheduler::run(sweep_alert_pool, sweep_alert_config).await;
+    }));
+
     // BE-547: Hourly APY checkpoints into yield_rates_history, so the series
     // every yield estimate is priced against has a guaranteed cadence.
     let checkpoint_pool = pool.clone();
