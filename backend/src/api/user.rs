@@ -219,7 +219,7 @@ pub async fn update_profile(
     .bind(payload.bio)
     .bind(payload.avatar_url)
     .bind(auth.id)
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     {
         Ok(r) => r,
@@ -876,7 +876,7 @@ pub async fn get_user_by_did(
         SELECT id, address, username, display_name, privy_did, privy_linked_at
         FROM users
         WHERE privy_did = $1
-        "#
+        "#,
     )
     .bind(&did)
     .fetch_optional(pool)
@@ -982,9 +982,18 @@ mod tests {
     #[test]
     fn accepts_dot_separated_usernames_but_not_edge_dots() {
         assert_eq!(validate_username("test.zaps"), Ok(()));
-        assert_eq!(validate_username(".test"), Err(UsernameError::InvalidCharacters));
-        assert_eq!(validate_username("test."), Err(UsernameError::InvalidCharacters));
-        assert_eq!(validate_username("test..zaps"), Err(UsernameError::InvalidCharacters));
+        assert_eq!(
+            validate_username(".test"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test."),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test..zaps"),
+            Err(UsernameError::InvalidCharacters)
+        );
     }
 
     #[test]
