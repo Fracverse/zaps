@@ -340,34 +340,68 @@ fn test_salvage_token_rejects_non_owner() {
 }
 
 #[test]
-fn test_full_lifecycle_deposit_yield_withdraw() {
-    let (env, client, _contract_id, owner, depositor, token) = setup();
-    let amount = 5_000_000i128;
+fn test_full_yield_vault_lifecycle() {
+    let (env, client, contract_id, owner, depositor, token) = setup();
+    let deposit_amount = 5_000_000i128;
+    let initial_user_balance = DEPOSIT_AMOUNT;
+    let initial_apy = client.apy();
 
-    client.deposit(&depositor, &amount);
-    let shares = client.shares_of(&depositor);
+    // Deposit and verify both external funds and the newly-created position.
+    let balance_before_deposit = token::Client::new(&env, &token).balance(&depositor);
+    client.deposit(&depositor, &deposit_amount);
+    let shares_after_deposit = client.shares_of(&depositor);
+    assert_eq!(balance_before_deposit - deposit_amount, DEPOSIT_AMOUNT - deposit_amount);
+    assert_eq!(token::Client::new(&env, &token).balance(&contract_id), deposit_amount);
+    assert_eq!(shares_after_deposit, deposit_amount);
+    assert_eq!(client.user_deposit(&depositor), deposit_amount);
+    assert_eq!(client.total_assets(), deposit_amount);
 
+    // Queue and apply an APY change through the production timelocked path.
+    let updated_apy = 1_000;
+    client.update_apy(&owner, &updated_apy);
+    assert_eq!(client.apy(), initial_apy);
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.apy(), updated_apy);
+
+    // Advance both ledger dimensions before explicitly realizing yield.
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    advance_timestamp(&env, 5 * YIELD_TEST_LEDGERS as u64);
+    let index_before_accrual = client.yield_index();
     client.accrue_yield(&owner);
+    let index_after_accrual = client.yield_index();
+    let assets_after_accrual = client.total_assets();
+    assert!(index_after_accrual > index_before_accrual);
+    assert!(assets_after_accrual > deposit_amount);
 
-    let index = client.yield_index();
-    assert!(
-        index > PRECISION,
-        "yield should compound after ledger advance"
-    );
+    // Withdraw half the position and retain the remainder for emergency exit.
+    let partial_shares = shares_after_deposit / 2;
+    let expected_partial = partial_shares
+        * (assets_after_accrual + VIRTUAL_OFFSET)
+        / (client.total_shares() + VIRTUAL_OFFSET);
+    let balance_before_partial = token::Client::new(&env, &token).balance(&depositor);
+    client.withdraw(&depositor, &partial_shares);
+    let balance_after_partial = token::Client::new(&env, &token).balance(&depositor);
+    assert_eq!(balance_after_partial - balance_before_partial, expected_partial);
+    assert_eq!(client.shares_of(&depositor), shares_after_deposit - partial_shares);
+    assert!(client.shares_of(&depositor) > 0);
 
-    let half_shares = shares / 2;
-    let tot_shares = client.total_shares();
-    let tot_assets = client.total_assets();
-    // SC-051: expected_out uses virtual offset formula
-    let expected_out = half_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
-    client.withdraw(&depositor, &half_shares);
+    // Exit the remaining position and assert the complete final balance state.
+    let remaining_shares = client.shares_of(&depositor);
+    let assets_before_exit = client.total_assets();
+    let expected_exit = remaining_shares
+        * (assets_before_exit + VIRTUAL_OFFSET)
+        / (client.total_shares() + VIRTUAL_OFFSET);
+    let balance_before_exit = token::Client::new(&env, &token).balance(&depositor);
+    client.emergency_exit(&depositor);
+    let final_user_balance = token::Client::new(&env, &token).balance(&depositor);
 
-    let token_client = token::Client::new(&env, &token);
-    let withdrawn = token_client.balance(&depositor) - (DEPOSIT_AMOUNT - amount);
-    assert_eq!(withdrawn, expected_out);
-    assert_eq!(client.shares_of(&depositor), shares - half_shares);
-    assert!(client.total_assets() > 0);
+    assert_eq!(final_user_balance, balance_before_exit + expected_exit);
+    assert_eq!(final_user_balance, initial_user_balance - deposit_amount + expected_partial + expected_exit);
+    assert_eq!(client.shares_of(&depositor), 0);
+    assert_eq!(client.user_deposit(&depositor), 0);
+    assert_eq!(client.total_shares(), 0);
+    assert_eq!(client.total_assets(), 0);
 }
 
 #[test]
