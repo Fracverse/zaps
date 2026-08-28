@@ -20,6 +20,7 @@ import {
   type BatchRecipient,
   type Payout,
   type SdpDisbursement,
+  type SdpStatusResponse,
 } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 
@@ -1076,6 +1077,91 @@ function fileBasename(name: string): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// SDP Status Integration Indicator (#794)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Stellar Disbursement Platform (SDP) server sync status indicator.
+ * Polls `api.getSdpStatus()` and displays real-time sync badge.
+ */
+export function SdpStatusIndicator() {
+  const { data, loading, error } = usePolling<SdpStatusResponse>(
+    () => api.getSdpStatus(),
+    30000,
+  );
+
+  const isSynced =
+    !error &&
+    data &&
+    (data.status?.toLowerCase() === "operational" ||
+      data.status?.toLowerCase() === "synced" ||
+      data.status?.toLowerCase() === "ok");
+
+  const isSyncing =
+    !error && data && data.status?.toLowerCase() === "syncing";
+
+  const isDegraded =
+    !error && data && data.status?.toLowerCase() === "degraded";
+
+  return (
+    <div
+      data-testid="sdp-status-indicator"
+      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs shadow-xs transition-colors dark:border-slate-800 dark:bg-slate-900"
+      title={
+        loading && !data
+          ? "Checking Stellar Disbursement Platform sync status…"
+          : isSynced
+            ? `SDP Server Synced${data?.synced_at ? ` · Last sync: ${format(new Date(data.synced_at), "HH:mm:ss")}` : ""}`
+            : error
+              ? `SDP Server Offline: ${error}`
+              : `SDP Status: ${data?.status ?? "Unknown"}`
+      }
+    >
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        SDP
+      </span>
+      <span
+        aria-hidden="true"
+        className={`inline-block h-2 w-2 rounded-full ${
+          loading && !data
+            ? "animate-pulse bg-slate-300"
+            : isSynced
+              ? "bg-emerald-500 ring-2 ring-emerald-100"
+              : isSyncing
+                ? "animate-pulse bg-amber-400 ring-2 ring-amber-100"
+                : isDegraded
+                  ? "bg-amber-500 ring-2 ring-amber-100"
+                  : "bg-red-500 ring-2 ring-red-100"
+        }`}
+      />
+      <span
+        className={`font-medium ${
+          loading && !data
+            ? "text-slate-500"
+            : isSynced
+              ? "text-emerald-700"
+              : isSyncing
+                ? "text-amber-700"
+                : isDegraded
+                  ? "text-amber-700"
+                  : "text-red-600"
+        }`}
+      >
+        {loading && !data
+          ? "Checking…"
+          : isSynced
+            ? "Synced"
+            : isSyncing
+              ? "Syncing"
+              : isDegraded
+                ? "Degraded"
+                : "Offline"}
+      </span>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Main page
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1146,7 +1232,7 @@ export default function PayoutsPage() {
       </div>
 
       {/* ── Tab nav ─────────────────────────────────────────────────────── */}
-      <div className="mb-6 border-b border-slate-200">
+      <div className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-0 sm:flex-row sm:items-center sm:justify-between">
         <nav className="-mb-px flex space-x-8 overflow-x-auto">
           {TABS.map((tab) => (
             <button
@@ -1165,6 +1251,9 @@ export default function PayoutsPage() {
             </button>
           ))}
         </nav>
+        <div className="flex items-center pb-2 sm:pb-0">
+          <SdpStatusIndicator />
+        </div>
       </div>
 
       {/* ── Payout History ──────────────────────────────────────────────── */}
