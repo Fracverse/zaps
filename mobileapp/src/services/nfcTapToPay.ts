@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import NfcManager, { NfcEvents, NfcTech } from "react-native-nfc-manager";
+import { Ndef } from "react-native-nfc-manager";
 
 export interface NfcTapToPayResult {
   raw: string;
@@ -8,6 +9,33 @@ export interface NfcTapToPayResult {
 export interface NfcTapToPayOptions {
   timeoutMs?: number;
   onScan?: (raw: string) => void;
+}
+
+export interface NfcPaymentPayload {
+  destination: string;
+  amount: string;
+  assetCode?: string;
+  assetIssuer?: string;
+}
+
+/** Build the URI and NDEF records used by NFC HCE/payment terminals. */
+export function formatNfcPaymentPayload(payload: NfcPaymentPayload) {
+  if (!payload.destination.trim()) throw new Error("A destination is required");
+  if (!/^\d+(?:\.\d+)?$/.test(payload.amount) || Number(payload.amount) <= 0) {
+    throw new Error("Amount must be a positive decimal");
+  }
+
+  const query = [
+    ["address", payload.destination.trim()],
+    ["amount", payload.amount],
+    payload.assetCode && ["asset_code", payload.assetCode],
+    payload.assetIssuer && ["asset_issuer", payload.assetIssuer],
+  ]
+    .filter((entry): entry is [string, string] => Boolean(entry))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+  const uri = `zaps://pay?${query}`;
+  return { uri, ndefMessage: Ndef.encodeMessage([Ndef.uriRecord(uri)]) };
 }
 
 function timeoutPromise(ms: number, message: string) {
