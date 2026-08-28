@@ -11,6 +11,9 @@ pub struct Config {
     /// per-app endpoint derived from `privy_app_id`; override with
     /// `PRIVY_JWKS_URL` (e.g. to point at a mock server in tests).
     pub privy_jwks_url: String,
+    /// Comma-separated list of frontend origins allowed to call the API
+    /// cross-origin. Used to build the Tower CORS middleware whitelist.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Config {
@@ -42,6 +45,25 @@ impl Config {
                 let app_id = std::env::var("PRIVY_APP_ID").unwrap_or_default();
                 format!("https://auth.privy.io/api/v1/apps/{app_id}/jwks.json")
             }),
+            cors_allowed_origins: {
+                let raw = std::env::var("CORS_ALLOWED_ORIGINS")
+                    .map(|v| v.trim().to_string())
+                    .ok()
+                    .filter(|v| !v.is_empty());
+                match raw {
+                    Some(list) => list
+                        .split(',')
+                        .map(|origin| origin.trim().to_string())
+                        .filter(|origin| !origin.is_empty())
+                        .collect::<Vec<_>>(),
+                    None => {
+                        tracing::warn!(
+                            "CORS_ALLOWED_ORIGINS not set; defaulting to http://localhost:3000"
+                        );
+                        vec!["http://localhost:3000".to_string()]
+                    }
+                }
+            },
         }
     }
 }
