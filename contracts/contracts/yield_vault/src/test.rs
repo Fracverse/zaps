@@ -368,14 +368,22 @@ fn test_full_yield_vault_lifecycle() {
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
     advance_timestamp(&env, 5 * YIELD_TEST_LEDGERS as u64);
     let index_before_accrual = client.yield_index();
+    let assets_before_accrual = client.total_assets();
     client.accrue_yield(&owner);
     let index_after_accrual = client.yield_index();
     let assets_after_accrual = client.total_assets();
-    assert!(index_after_accrual > index_before_accrual);
+    let expected_index = index_before_accrual
+        + index_before_accrual * updated_apy as i128 * YIELD_TEST_LEDGERS as i128
+            / (10_000 * LEDGERS_PER_YEAR as i128);
+    let expected_protocol_rewards = deposit_amount * 650i128 * YIELD_TEST_LEDGERS as i128
+        / (10_000 * LEDGERS_PER_YEAR as i128);
+    assert_eq!(index_after_accrual, expected_index);
+    assert_eq!(assets_after_accrual, assets_before_accrual + expected_protocol_rewards);
     assert!(assets_after_accrual > deposit_amount);
 
     // Withdraw half the position and retain the remainder for emergency exit.
     let partial_shares = shares_after_deposit / 2;
+    assert!(partial_shares > 0 && partial_shares < shares_after_deposit);
     let expected_partial = partial_shares
         * (assets_after_accrual + VIRTUAL_OFFSET)
         / (client.total_shares() + VIRTUAL_OFFSET);
@@ -402,6 +410,7 @@ fn test_full_yield_vault_lifecycle() {
     assert_eq!(client.user_deposit(&depositor), 0);
     assert_eq!(client.total_shares(), 0);
     assert_eq!(client.total_assets(), 0);
+    assert_eq!(token::Client::new(&env, &token).balance(&contract_id), 0);
 }
 
 #[test]
