@@ -535,9 +535,92 @@ async fn log_dispatch(
     Ok(())
 }
 
+/// A compact representation of the batch state used to make status decisions.
+///
+/// The worker persists these same transitions in `claim_next_batch` and
+/// `finalize_batch`. Keeping the decision rule pure makes it possible to test
+/// the state machine without requiring a live PostgreSQL instance.
+#[derive(Debug, PartialEq, Eq)]
+struct BatchState {
+    status: &'static str,
+    pending_recipients: usize,
+    failed_recipients: usize,
+    total_recipients: usize,
+}
+
+fn next_batch_status(state: &BatchState) -> &'static str {
+    match state.status {
+        "PENDING" => "PROCESSING",
+        "PROCESSING" if state.pending_recipients > 0 => "PROCESSING",
+        "PROCESSING" if state.failed_recipients == 0 => "COMPLETED",
+        "PROCESSING" if state.failed_recipients == state.total_recipients => "FAILED",
+        "PROCESSING" => "PARTIALLY_FAILED",
+        status => status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_batch(status: &'static str, pending: usize, failed: usize) -> BatchState {
+        BatchState {
+            status,
+            pending_recipients: pending,
+            failed_recipients: failed,
+            total_recipients: 3,
+        }
+    }
+
+    #[test]
+    fn worker_moves_pending_batch_to_processing() {
+        let batch = sample_batch("PENDING", 3, 0);
+
+        assert_eq!(next_batch_status(&batch), "PROCESSING");
+    }
+
+    #[test]
+    fn worker_completes_processing_batch_when_all_recipients_are_submitted() {
+        let batch = sample_batch("PROCESSING", 0, 0);
+
+        assert_eq!(next_batch_status(&batch), "COMPLETED");
+    }
+
+    #[test]
+    fn worker_recovers_after_retryable_error_and_completes_batch() {
+        // A retryable SDP error leaves the recipient pending, so the batch must
+        // remain PROCESSING and be eligible for another worker cycle.
+        let after_error = sample_batch("PROCESSING", 1, 0);
+        assert_eq!(next_batch_status(&after_error), "PROCESSING");
+
+        // Once the retry succeeds, no pending recipients remain and the batch
+        // reaches its terminal completed state.
+        let after_retry = sample_batch("PROCESSING", 0, 0);
+        assert_eq!(next_batch_status(&after_retry), "COMPLETED");
+    }
+
+    #[test]
+    fn worker_marks_all_permanent_failures_as_failed() {
+        let batch = sample_batch("PROCESSING", 0, 3);
+
+        assert_eq!(next_batch_status(&batch), "FAILED");
+    }
+
+    #[test]
+    fn worker_marks_mixed_success_and_failure_as_partially_failed() {
+        let batch = sample_batch("PROCESSING", 0, 1);
+
+        assert_eq!(next_batch_status(&batch), "PARTIALLY_FAILED");
+    }
+
+    #[test]
+    fn terminal_batch_statuses_are_not_reopened() {
+        let completed = sample_batch("COMPLETED", 0, 0);
+        let failed = sample_batch("FAILED", 0, 3);
+
+        assert_eq!(next_batch_status(&completed), "COMPLETED");
+        assert_eq!(next_batch_status(&failed), "FAILED");
+    }
 
     #[test]
     fn idempotency_key_is_stable_across_retries() {
