@@ -248,11 +248,20 @@ impl YieldVaultContract {
 
     /// Persist the latest yield index and reset the reference ledger.
     fn checkpoint_index(env: &Env) {
-        let idx = Self::current_index(env);
-        env.storage().instance().set(&IDX_KEY, &idx);
+        let old_index: i128 = env.storage().instance().get(&IDX_KEY).unwrap_or(PRECISION);
+        let new_index = Self::current_index(env);
+        let total_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
+        
+        env.storage().instance().set(&IDX_KEY, &new_index);
         env.storage()
             .instance()
             .set(&IDX_LED_KEY, &env.ledger().sequence());
+        
+        // Publish event when interest index compounds
+        env.events().publish(
+            (Symbol::new(env, "accrue_yield"),),
+            (old_index, new_index, total_assets),
+        );
     }
 
     // ─── SC-017: Deposit ──────────────────────────────────────────────────────
