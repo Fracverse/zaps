@@ -296,8 +296,17 @@ export const api = {
     fetch(`${BASE}/health`)
       .then((res) => res.json() as Promise<HealthResponse>),
 
+  // ── SDP Status (#794) ───────────────────────────────────────────────────
+  /** Fetch SDP server status / sync state (#794). */
+  getSdpStatus: () =>
+    sdpReq<SdpStatusResponse>("/api/status"),
+
   // ── SDP (Stellar Disbursement Platform) ───────────────────────────────────
   sdp: {
+    /** Fetch SDP server sync and operational status. */
+    getStatus: () =>
+      sdpReq<SdpStatusResponse>("/api/status"),
+
     /**
      * Upload a CSV file to create a new SDP disbursement batch.
      * The Authorization header carries the admin Bearer token;
@@ -654,3 +663,16 @@ export interface SdpExecutionLog {
   metadata?: Record<string, unknown>;
   created_at: string;
 }
+
+/**
+ * SDP server operational and sync status response.
+ */
+export interface SdpStatusResponse {
+  status: "operational" | "synced" | "syncing" | "degraded" | "error" | string;
+  version?: string;
+  network?: string;
+  synced_at?: string;
+  latest_ledger?: number;
+  details?: Record<string, unknown>;
+}
+
