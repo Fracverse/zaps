@@ -68,6 +68,8 @@ const MOCK_TRANSACTIONS: Transaction[] = [
     timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
     stellarTxHash:
       "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+    stellarTxXdr:
+      "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
     fee: "0.00001",
     feeAsset: "XLM",
     network: "Stellar",
@@ -154,6 +156,8 @@ const MOCK_TRANSACTIONS: Transaction[] = [
     timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
     stellarTxHash:
       "b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4",
+    stellarTxXdr:
+      "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
     fee: "0.00001",
     feeAsset: "XLM",
     network: "Stellar",
@@ -259,6 +263,8 @@ const MOCK_TRANSACTIONS: Transaction[] = [
     timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
     stellarTxHash:
       "o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4",
+    stellarTxXdr:
+      "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
     memo: "Emergency relief batch",
     fee: "0.00001",
     feeAsset: "XLM",

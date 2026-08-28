@@ -18,8 +18,39 @@ import { useTransactions } from "../../src/hooks/useTransactions";
 import { TransactionFilterSheet } from "../../src/components/TransactionFilterSheet";
 import { Transaction, TransactionFilters } from "../../src/types/transaction";
 import { formatDate } from "../../src/utils/formatting";
+import {
+  speedUpTransaction,
+  getLocalKeypair,
+  checkFreighter,
+} from "../../src/services/stellarWallet";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** A pending transaction is considered "stuck" (and eligible to Speed Up) once
+ *  it has been pending longer than this, in milliseconds. */
+const STUCK_PENDING_MS = 60 * 1000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * A pending transaction can be sped up once it has been pending for more than a
+ * minute and we hold the original envelope XDR needed to build a fee bump.
+ */
+function canSpeedUp(tx: Transaction): boolean {
+  if (tx.status !== "pending" || !tx.stellarTxXdr) return false;
+  return Date.now() - new Date(tx.timestamp).getTime() > STUCK_PENDING_MS;
+}
+
+/** Resolve the currently connected wallet backend, preferring the local
+ *  keypair (this app's bundled demo wallet) and falling back to Freighter. */
+async function resolveWalletSource(): Promise<
+  "freighter" | "albedo" | "local"
+> {
+  const kp = await getLocalKeypair();
+  if (kp) return "local";
+  if (await checkFreighter()) return "freighter";
+  return "local";
+}
 
 function statusColor(status: Transaction["status"]): string {
   switch (status) {
@@ -90,9 +121,13 @@ function hasActiveFilters(f: TransactionFilters): boolean {
 const TransactionRow = React.memo(function TransactionRow({
   item,
   onPress,
+  onSpeedUp,
+  speedingUp,
 }: {
   item: Transaction;
   onPress: () => void;
+  onSpeedUp: (tx: Transaction) => void;
+  speedingUp: boolean;
 }) {
   const icon = typeIcon(item.type);
   const isOutgoing = item.type === "sent";
@@ -105,6 +140,7 @@ const TransactionRow = React.memo(function TransactionRow({
     hour: "2-digit",
     minute: "2-digit",
   });
+  const showSpeedUp = canSpeedUp(item);
 
   return (
     <TouchableOpacity
@@ -167,6 +203,30 @@ const TransactionRow = React.memo(function TransactionRow({
             </View>
           )}
         </View>
+        {showSpeedUp && (
+          <TouchableOpacity
+            style={styles.speedUpBtn}
+            onPress={() => onSpeedUp(item)}
+            disabled={speedingUp}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={`Speed up ${item.amount} ${item.asset}`}
+          >
+            {speedingUp ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons
+                  name="speedometer-outline"
+                  size={13}
+                  color="#fff"
+                  style={{ marginRight: 5 }}
+                />
+                <Text style={styles.speedUpBtnText}>Speed up</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Amount */}
@@ -287,6 +347,29 @@ export default function HistoryScreen() {
     typeof setTimeout
   > | null>(null);
 
+  // Id of the transaction currently being sped up (for per-row loading state).
+  const [speedingUpId, setSpeedingUpId] = useState<string | null>(null);
+
+  const handleSpeedUp = useCallback(
+    async (tx: Transaction) => {
+      if (!tx.stellarTxXdr) return;
+      setSpeedingUpId(tx.id);
+      try {
+        const source = await resolveWalletSource();
+        await speedUpTransaction(tx.stellarTxXdr, source);
+        if (global.toast) global.toast.success("Transaction sped up");
+        // Reflect the new on-chain state.
+        reload();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not speed up";
+        if (global.toast) global.toast.error(msg);
+      } finally {
+        setSpeedingUpId(null);
+      }
+    },
+    [reload]
+  );
+
   // Initial load
   useEffect(() => {
     reload();
@@ -328,10 +411,12 @@ export default function HistoryScreen() {
         <TransactionRow
           item={item.tx}
           onPress={() => router.push(`/transaction/${item.tx.id}` as any)}
+          onSpeedUp={handleSpeedUp}
+          speedingUp={speedingUpId === item.tx.id}
         />
       );
     },
-    [router]
+    [router, handleSpeedUp, speedingUpId]
   );
 
   const ListFooter = () => {
@@ -703,6 +788,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 100,
+  },
+  speedUpBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+    backgroundColor: COLORS.primary,
+    minWidth: 92,
+    justifyContent: "center",
+  },
+  speedUpBtnText: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#fff",
+    textTransform: "capitalize",
   },
   statusPillText: {
     fontSize: 11,
