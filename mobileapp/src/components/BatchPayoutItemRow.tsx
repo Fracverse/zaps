@@ -16,7 +16,7 @@ export default function BatchPayoutItemRow({ item }: { item: BatchPayoutItem }) 
   const status = STATUS_STYLES[item.status];
 
   return (
-    <View style={styles.row}>
+    <View style={styles.row} testID={`batch-payout-item-${item.id}`}>
       <View style={styles.info}>
         <Text style={styles.name}>{item.recipientName}</Text>
         <Text style={styles.address}>{item.recipientAddress}</Text>
@@ -25,7 +25,10 @@ export default function BatchPayoutItemRow({ item }: { item: BatchPayoutItem }) 
         <Text style={styles.amount}>
           {item.amount} {item.currency}
         </Text>
-        <View style={[styles.badge, { backgroundColor: status.bg }]}>
+        <View
+          style={[styles.badge, { backgroundColor: status.bg }]}
+          testID={`batch-payout-status-${item.id}`}
+        >
           <Text style={[styles.badgeText, { color: status.text }]}>
             {status.label}
           </Text>
