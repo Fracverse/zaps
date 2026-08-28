@@ -474,3 +474,80 @@ export async function sendTransactionWithOfflineSupport(
 export function initOfflineSync(): () => void {
   return startOfflineQueueSync();
 }
+
+// ── Privy Social Recovery ──────────────────────────────────────────────────────
+
+export interface PrivyRecoveryResult {
+  privy_did: string;
+  username: string;
+  address: string;
+  display_name?: string;
+}
+
+/**
+ * Verify a Privy token and exchange it for the linked user's wallet details.
+ *
+ * This is the entry point for Issue #706's social-auth recovery flow:
+ *   1. User completes Privy social login (handled by PrivySocialButtons).
+ *   2. Caller supplies the Privy JWT access token.
+ *   3. This helper verifies the token with the backend and resolves the
+ *      Privy DID to the registered Stellar wallet address.
+ *
+ * @param privyToken - The Privy access token obtained from the social auth flow.
+ * @returns The linked user's wallet details.
+ * @throws Error if the token is invalid or no wallet is linked.
+ */
+export async function recoverWalletViaPrivy(
+  privyToken: string
+): Promise<PrivyRecoveryResult> {
+  if (!privyToken) {
+    throw new Error("Privy token is required for social recovery.");
+  }
+
+  const res = await apiFetch(`${API_BASE}/api/auth/privy`, {
+    method: "POST",
+    body: JSON.stringify({
+      privy_token: privyToken,
+      privy_did: "",
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "Unknown error");
+    throw new Error(`Privy verification failed: ${text}`);
+  }
+
+  const data = await res.json();
+
+  if (!data?.privy_did) {
+    throw new Error("Privy identity could not be resolved.");
+  }
+
+  const didRes = await apiFetch(
+    `${API_BASE}/api/users/did/${encodeURIComponent(data.privy_did)}`
+  );
+
+  if (didRes.status === 404) {
+    throw new Error(
+      "No Zaps wallet is linked to this social identity. Please create an account first."
+    );
+  }
+
+  if (!didRes.ok) {
+    const text = await didRes.text().catch(() => "Unknown error");
+    throw new Error(`User lookup failed: ${text}`);
+  }
+
+  const user = await didRes.json();
+
+  if (!user?.address) {
+    throw new Error("Linked account has no wallet address.");
+  }
+
+  return {
+    privy_did: user.privy_did,
+    username: user.username,
+    address: user.address,
+    display_name: user.display_name,
+  };
+}
