@@ -1,7 +1,7 @@
 use axum::{
     body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -255,6 +255,61 @@ pub async fn get_batch_detail(
 
     Json(BatchDetailResponse { batch, recipients })
     .into_response()
+}
+
+/// GET /api/payouts/batch/:id/export
+/// Export the recipient results as a CSV download.
+pub async fn export_batch(
+    State(pool): State<PgPool>,
+    axum::extract::Path(batch_id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let batch_id: Uuid = match batch_id.parse() {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Invalid batch ID format").into_response(),
+    };
+
+    let rows = match sqlx::query(
+        "SELECT destination_address, amount, status, tx_hash FROM batch_recipients WHERE batch_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(batch_id)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, %batch_id, "Failed to export payout batch");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to export payout batch").into_response();
+        }
+    };
+
+    let mut csv = String::from("recipient,amount,status,tx_hash\n");
+    for row in rows {
+        let recipient: Option<String> = row.try_get("destination_address").unwrap_or(None);
+        let amount: i64 = row.try_get("amount").unwrap_or_default();
+        let status: String = row.try_get("status").unwrap_or_default();
+        let tx_hash: Option<String> = row.try_get("tx_hash").unwrap_or(None);
+        csv.push_str(&format!(
+            "{},{},{},{}\n",
+            csv_field(recipient.as_deref().unwrap_or("")),
+            amount,
+            csv_field(&status),
+            csv_field(tx_hash.as_deref().unwrap_or("")),
+        ));
+    }
+
+    (
+        [(header::CONTENT_TYPE, "text/csv; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"payout-results.csv\"")],
+        csv,
+    )
+        .into_response()
+}
+
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
 }
 
 /// POST /api/payouts/batch
