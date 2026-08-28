@@ -125,6 +125,7 @@ pub fn payout_routes(pool: sqlx::PgPool) -> Router {
         .route("/batches", get(payouts::list_batches))
         .route("/batch", post(payouts::create_batch))
         .route("/batch/:id", get(payouts::get_batch_detail))
+        .route("/batch/:id/export", get(payouts::export_batch))
         .route("/sdp/webhook", post(payouts::sdp_reconciliation_webhook))
         // #728 — block transfers to sanctioned addresses before processing.
         .layer(middleware::from_fn(
