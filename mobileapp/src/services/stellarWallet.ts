@@ -170,6 +170,37 @@ export async function buildPaymentEnvelope(
   return transaction.toXDR();
 }
 
+/**
+ * How many times over the current network base fee we are willing to pay when
+ * speeding up a stuck transaction. A higher fee increases the chance the
+ * transaction is included in the next ledger.
+ */
+export const SPEED_UP_FEE_MULTIPLIER = 2;
+
+/**
+ * fee-bump helper — wraps an existing (stuck) transaction envelope in a
+ * `FeeBumpTransaction` that pays a higher max fee so the network prioritises
+ * resubmitting it.
+ *
+ * @param innerTxXdr base64 XDR of the stuck transaction to bump (the inner tx)
+ * @param feeSource  account id (G.../M...) that pays for the fee bump
+ * @param baseFee    max fee willing to pay per operation, in stroops
+ */
+export function buildFeeBumpEnvelope(
+  innerTxXdr: string,
+  feeSource: string,
+  baseFee: string
+): StellarSdk.FeeBumpTransaction {
+  const innerTx = new StellarSdk.Transaction(innerTxXdr, networkPassphrase);
+
+  return StellarSdk.TransactionBuilder.buildFeeBumpTransaction(
+    feeSource,
+    baseFee,
+    innerTx,
+    networkPassphrase
+  );
+}
+
 export async function signAndSubmitTransaction(
   txXdr: string,
   source: "freighter" | "albedo" | "local"
@@ -194,6 +225,71 @@ export async function signAndSubmitTransaction(
   );
   const transaction = new StellarSdk.Transaction(envelope, networkPassphrase);
   const result = await server.submitTransaction(transaction);
+
+  return result.hash;
+}
+
+/**
+ * Speed up a stuck transaction by fee-bumping it with a higher max fee and
+ * resubmitting it to the Stellar network.
+ *
+ * @param txXdr    base64 XDR of the stuck transaction to bump
+ * @param source   the wallet backend used to sign the enclosing fee bump
+ * @param feeSource the account that pays for the fee bump (defaults to the
+ *                 signing wallet's own account)
+ */
+export async function speedUpTransaction(
+  txXdr: string,
+  source: "freighter" | "albedo" | "local",
+  feeSource?: string
+): Promise<string> {
+  // Resolve the fee-paying account from the active wallet if not provided.
+  let feePayer = feeSource;
+  if (!feePayer) {
+    if (source === "freighter") {
+      feePayer = (await connectFreighter()).publicKey;
+    } else if (source === "albedo") {
+      feePayer = (await connectAlbedo()).publicKey;
+    } else {
+      const kp = await getLocalKeypair();
+      if (!kp) throw new Error("No local keypair available");
+      feePayer = kp.publicKey();
+    }
+  }
+
+  // Pay a higher max fee to prioritise inclusion.
+  const baseFee = await server.fetchBaseFee();
+  const minimumFee = Number(StellarSdk.BASE_FEE) || 100;
+  const bumpedFee = Math.max(
+    baseFee * SPEED_UP_FEE_MULTIPLIER,
+    minimumFee * SPEED_UP_FEE_MULTIPLIER
+  );
+
+  const feeBumpTransaction = buildFeeBumpEnvelope(
+    txXdr,
+    feePayer,
+    bumpedFee.toString()
+  );
+
+  let signedXdr: string;
+  if (source === "freighter") {
+    signedXdr = await signWithFreighter(feeBumpTransaction.toXDR());
+  } else if (source === "albedo") {
+    signedXdr = await signWithAlbedo(feeBumpTransaction.toXDR());
+  } else {
+    const kp = await getLocalKeypair();
+    if (!kp) throw new Error("No local keypair available");
+    feeBumpTransaction.sign(kp);
+    signedXdr = feeBumpTransaction.toXDR();
+  }
+
+  // Rebuild from the signed envelope (the SDK auto-detects fee bumps) and
+  // resubmit the fee-bumped transaction to the Stellar network.
+  const submitted = StellarSdk.TransactionBuilder.fromXDR(
+    signedXdr,
+    networkPassphrase
+  );
+  const result = await server.submitTransaction(submitted);
 
   return result.hash;
 }

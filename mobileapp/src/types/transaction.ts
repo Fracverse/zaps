@@ -25,6 +25,9 @@ export interface Transaction {
   feeAsset?: string;
   network?: string;
   yieldType?: YieldType;
+  /** Base64-encoded XDR envelope of the original transaction, allowing a
+   *  stuck (pending) transaction to be re-bumped with a higher fee. */
+  stellarTxXdr?: string;
   /** Populated for mass_payout (SDP disbursement) transactions */
   senderName?: string;
   /** Anchor/organisation that issued the SDP disbursement */

@@ -91,6 +91,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
             "/profile",
             get(user::get_profile).post(user::update_profile),
         )
+        .route("/profile/avatar", post(user::upload_avatar))
         .route("/search", get(user::search_users))
         .route("/suggestions", get(user::suggest_usernames))
         .route("/autocomplete", get(user::autocomplete))

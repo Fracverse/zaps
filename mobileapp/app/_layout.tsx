@@ -12,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { PrivyProvider } from "@privy-io/expo-sdk";
+import { PrivyProvider } from "@privy-io/expo";
 import Constants from "expo-constants";
 import { COLORS } from "../src/constants/colors";
 import { useFonts } from "expo-font";
@@ -23,7 +23,7 @@ import {
   Outfit_700Bold,
 } from "@expo-google-fonts/outfit";
 import { ErrorBoundary } from "../src/components/ErrorBoundary";
-import { ToastManager } from "../src/components/Toast";
+import { ToastProvider } from "../src/components/Toast";
 import { useOfflineDetection } from "../src/hooks/useNetworkStatus";
 import {
   getStoredNotificationPreference,
@@ -246,7 +246,6 @@ function LayoutContent() {
         <Stack.Screen name="about-zaps" options={{ animation: "fade" }} />
         <Stack.Screen name="help-support" options={{ animation: "fade" }} />
       </Stack>
-      <ToastManager />
       <Modal
         visible={forceUpdate}
         transparent
@@ -338,7 +337,9 @@ export default function Layout() {
       }}
     >
       <ErrorBoundary>
-        <LayoutContent />
+        <ToastProvider>
+          <LayoutContent />
+        </ToastProvider>
       </ErrorBoundary>
     </PrivyProvider>
   );

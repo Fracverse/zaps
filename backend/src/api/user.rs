@@ -1,7 +1,8 @@
 use crate::api::feed::AuthUser;
+use crate::config::Config;
 use crate::services::redis_cache::UsernameAddressCache;
 use axum::{
-    extract::{FromRef, Path, State},
+    extract::{FromRef, Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -928,6 +929,163 @@ pub async fn get_user_by_did(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /api/users/profile/avatar
+///
+/// Authenticated multipart upload. Accepts a field named `file` (or `avatar`)
+/// containing an image (JPEG, PNG, GIF, WebP). The image is decoded, resized
+/// to 256x256, re-encoded as JPEG, and uploaded to S3. The resulting public
+/// URL is saved to `users.avatar_url`.
+pub async fn upload_avatar(
+    State(state): State<UserState>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let config = Config::from_env();
+    let bucket = match &config.aws_s3_bucket {
+        Some(b) => b.clone(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "S3 storage not configured" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Read the uploaded file bytes from the multipart form.
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" || name == "avatar" {
+            match field.bytes().await {
+                Ok(bytes) if !bytes.is_empty() => {
+                    file_bytes = Some(bytes.to_vec());
+                    break;
+                }
+                Ok(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": "Uploaded file is empty" })),
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": format!("Failed to read upload: {}", e) })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    let raw_bytes = match file_bytes {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Multipart field 'file' or 'avatar' is required" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Decode the image and resize to 256x256 (maintaining aspect ratio, then cropping to exact size).
+    let img = match image::load_from_memory(&raw_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Invalid image: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let resized = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3);
+
+    let mut jpeg_buf: Vec<u8> = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 85);
+    if let Err(e) = resized.write_with_encoder(encoder) {
+        tracing::error!("Failed to encode avatar JPEG: {:?}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to process image" })),
+        )
+            .into_response();
+    }
+
+    // Build the S3 key (always .jpg since we re-encode to JPEG).
+    let key = format!("avatars/{}.jpg", auth.id);
+
+    // Upload to S3.
+    let aws_config = aws_config::from_env()
+        .region(&config.aws_s3_region)
+        .load()
+        .await;
+    let s3_client = aws_sdk_s3::Client::new(&aws_config);
+
+    let content_type = "image/jpeg";
+
+    match s3_client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(jpeg_buf.into())
+        .content_type(&content_type)
+        .send()
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("S3 upload failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to upload avatar to storage" })),
+            )
+                .into_response();
+        }
+    }
+
+    // Build the public URL.
+    let public_url = match &config.aws_s3_public_url_base {
+        Some(base) => {
+            let base = base.trim_end_matches('/');
+            format!("{}/{}", base, key)
+        }
+        None => format!(
+            "https://{}.s3.{}.amazonaws.com/{}",
+            bucket, config.aws_s3_region, key
+        ),
+    };
+
+    // Update the user's avatar_url in the database.
+    let pool = &state.pool;
+    match sqlx::query("UPDATE users SET avatar_url = $1 WHERE id = $2")
+        .bind(&public_url)
+        .bind(auth.id)
+        .execute(pool)
+        .await
+    {
+        Ok(_) => {
+            if let Some(cache) = &state.cache {
+                cache.invalidate(&auth.username).await;
+            }
+            Json(serde_json::json!({ "avatar_url": public_url })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to update avatar_url: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to save avatar URL" })),
             )
                 .into_response()
         }

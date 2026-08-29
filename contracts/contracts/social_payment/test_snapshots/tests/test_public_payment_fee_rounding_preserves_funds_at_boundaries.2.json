@@ -39,7 +39,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 10000
+                    "lo": 1000
                   }
                 }
               ]
@@ -93,7 +93,7 @@
                   }
                 },
                 {
-                  "string": "Public payment"
+                  "string": "Rounding boundary"
                 },
                 {
                   "u32": 0
@@ -500,7 +500,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 9000
+                          "lo": 0
                         }
                       }
                     },
@@ -938,7 +938,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 10000
+                    "lo": 1000
                   }
                 }
               ]
@@ -972,7 +972,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 10000
+                "lo": 1000
               }
             }
           }
@@ -1084,7 +1084,7 @@
                   }
                 },
                 {
-                  "string": "Public payment"
+                  "string": "Rounding boundary"
                 },
                 {
                   "u32": 0
@@ -1316,7 +1316,7 @@
                     "symbol": "memo"
                   },
                   "val": {
-                    "string": "Public payment"
+                    "string": "Rounding boundary"
                   }
                 },
                 {
@@ -1535,7 +1535,7 @@
             "data": {
               "i128": {
                 "hi": 0,
-                "lo": 9000
+                "lo": 0
               }
             }
           }

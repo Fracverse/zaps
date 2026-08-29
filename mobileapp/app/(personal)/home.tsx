@@ -42,6 +42,12 @@ import {
 } from "../../src/services/socialService";
 import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
 import {
+  BalanceCurrency,
+  formatBalance,
+  formatFiatBalance,
+  fiatFromTokens,
+} from "../../src/utils/balanceDisplay";
+import {
   markNotificationPromptDismissed,
   registerForPushNotificationsAsync,
   requestNotificationPermissionsAsync,
@@ -138,8 +144,10 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [availableBalance, setAvailableBalance] = useState("₦0.00");
-  const [totalYieldEarned, setTotalYieldEarned] = useState("₦0.00");
+  const [availableBalanceXlm, setAvailableBalanceXlm] = useState(0);
+  const [totalYieldEarnedXlm, setTotalYieldEarnedXlm] = useState(0);
+  const [displayCurrency, setDisplayCurrency] =
+    useState<BalanceCurrency>("NGN");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
   const [yieldStatus, setYieldStatus] = useState<
     "loading" | "success" | "error"
@@ -184,33 +192,32 @@ export default function HomeScreen() {
   const [commentsList, setCommentsList] = useState<Comment[]>([]);
 
   const FEED_CACHE_KEY = "feed_items_cache";
+  const HOME_CURRENCY_PREF_KEY = "home_display_currency";
   const YIELD_REQUEST_TIMEOUT_MS = 4500;
 
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
     setAutoYieldEnabled(data.autoEarnEnabled);
-    
-    const formatCurr = (val: number) =>
-      `₦${val.toLocaleString("en-NG", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
 
-    // Parse numbers formatting correctly
-    const parseAPIValue = (val: string | number) => {
-      if (typeof val === "number") return formatCurr(val);
-      const strVal = String(val);
-      if (strVal.includes("₦")) return strVal;
-      const parsed = Number(strVal);
-      return isNaN(parsed) ? strVal : formatCurr(parsed);
+    // Balances are XLM token amounts; NGN is derived by multiplying by the
+    // configured rate, so keep the raw token figure around to redraw the card
+    // in either denomination when the toggle flips.
+    const parseRawBalance = (val: string | number): number => {
+      if (typeof val === "number") return val;
+      const sanitized = String(val).replace(/[^\d.-]/g, "");
+      const parsed = Number(sanitized);
+      return Number.isFinite(parsed) ? parsed : 0;
     };
 
-    const formattedYield = parseAPIValue(data.totalYieldEarned);
-    const formattedAvailable = parseAPIValue(data.availableBalance);
-    
-    setAvailableBalance(formattedAvailable);
-    setTotalYieldEarned(formattedYield);
-    
+    const availableXlm = parseRawBalance(data.availableBalance);
+    const yieldXlm = parseRawBalance(data.totalYieldEarned);
+
+    setAvailableBalanceXlm(availableXlm);
+    setTotalYieldEarnedXlm(yieldXlm);
+
+    // Yield analytics (monthly chart, compounding projection) stay in Naira.
+    const formattedYield = formatFiatBalance(fiatFromTokens(yieldXlm));
+
     return {
       apy: typeof data.apy === "number" ? `${data.apy}%` : String(data.apy).includes("%") ? String(data.apy) : `${data.apy}%`,
       totalYieldEarned: formattedYield,
@@ -252,6 +259,41 @@ export default function HomeScreen() {
       setYieldError(message);
       setYieldStatus("error");
     }
+  }, []);
+
+  // Balance figures derived from the raw XLM tokens, redrawn in the active
+  // denomination the moment the currency preference changes.
+  const availableBalanceDisplay = useMemo(
+    () => formatBalance(availableBalanceXlm, displayCurrency),
+    [availableBalanceXlm, displayCurrency]
+  );
+  const totalYieldEarnedDisplay = useMemo(
+    () => formatBalance(totalYieldEarnedXlm, displayCurrency),
+    [totalYieldEarnedXlm, displayCurrency]
+  );
+
+  const toggleCurrency = useCallback(() => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setDisplayCurrency((prev) => {
+      const next = prev === "NGN" ? "XLM" : "NGN";
+      AsyncStorage.setItem(HOME_CURRENCY_PREF_KEY, next).catch(() => undefined);
+      return next;
+    });
+  }, []);
+
+  // Restore the user's saved display currency preference across app restarts.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(HOME_CURRENCY_PREF_KEY)
+      .then((stored) => {
+        if (!cancelled && (stored === "NGN" || stored === "XLM")) {
+          setDisplayCurrency(stored);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // On mount: hydrate UI from cache instantly, then fetch fresh data and overwrite cache
@@ -894,7 +936,9 @@ export default function HomeScreen() {
           >
             <View>
               <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
+              <Text style={styles.earningAmount}>
+                {totalYieldEarnedDisplay}
+              </Text>
               <View style={styles.earningStatusRow}>
                 <Animated.View
                   style={[
@@ -934,7 +978,7 @@ export default function HomeScreen() {
               <View style={styles.earningContent}>
                 <Text style={styles.earningLabel}>Earning Balance</Text>
                 <Text style={styles.earningAmount}>
-                  {yieldData?.totalYieldEarned ?? "₦0.00"}
+                  {totalYieldEarnedDisplay}
                 </Text>
                 <Text style={styles.earningHint}>
                   Tap to view yield breakdown
@@ -1202,7 +1246,7 @@ export default function HomeScreen() {
                     Total Yield Earned
                   </Text>
                   <Text style={styles.earningsMetricValue}>
-                    {yieldData?.totalYieldEarned ?? "₦0.00"}
+                    {totalYieldEarnedDisplay}
                   </Text>
                 </View>
 
