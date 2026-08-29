@@ -725,6 +725,13 @@ function TransferScreen() {
     setStep(3);
   };
 
+  const handleKeypadPress = (value: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAmount((prev: string) =>
+      value === "backspace" ? prev.slice(0, -1) : prev + value
+    );
+  };
+
   const renderStep0 = () => (
     <View style={styles.stepContainer}>
       <Text style={styles.subtitle}>Choose how you want to send money.</Text>
@@ -1014,7 +1021,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -1025,7 +1032,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -1036,7 +1043,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -1045,19 +1052,19 @@ function TransferScreen() {
           <View style={styles.keypadRow}>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev + ".")}
+              onPress={() => handleKeypadPress(".")}
             >
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev + "0")}
+              onPress={() => handleKeypadPress("0")}
             >
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev.slice(0, -1))}
+              onPress={() => handleKeypadPress("backspace")}
             >
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>
