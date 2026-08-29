@@ -158,6 +158,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notifPromptVisible, setNotifPromptVisible] = useState(false);
   const [notifRequesting, setNotifRequesting] = useState(false);
+  const [balanceMasked, setBalanceMasked] = useState(true);
+  const MASKED_BALANCE = "••••••";
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
@@ -609,6 +611,14 @@ export default function HomeScreen() {
       maximumFractionDigits: 2,
     })}`;
 
+  const toggleBalanceMask = () => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setBalanceMasked((prev) => !prev);
+  };
+
+  const displayBalance = (amount: string) =>
+    balanceMasked ? MASKED_BALANCE : amount;
+
   const monthlyEarnings = useMemo(() => {
     const baseTotal = MONTHLY_EARNINGS.reduce(
       (sum, item) => sum + item.amount,
@@ -781,8 +791,26 @@ export default function HomeScreen() {
         <View style={styles.balanceCard}>
           {/* Available Balance Section */}
           <View style={styles.balanceSection}>
-            <Text style={styles.balanceLabel}>Available Balance</Text>
-            <Text style={styles.balanceAmount}>{availableBalance}</Text>
+            <View style={styles.balanceLabelRow}>
+              <Text style={styles.balanceLabel}>Available Balance</Text>
+              <TouchableOpacity
+                onPress={toggleBalanceMask}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  balanceMasked ? "Show balance" : "Hide balance"
+                }
+              >
+                <Ionicons
+                  name={balanceMasked ? "eye-outline" : "eye-off-outline"}
+                  size={20}
+                  color="#777"
+                />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.balanceAmount}>
+              {displayBalance(availableBalance)}
+            </Text>
           </View>
 
           {/* Earning Balance Section */}
@@ -791,7 +819,9 @@ export default function HomeScreen() {
               <View style={styles.earningDot} />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
-            <Text style={styles.earningBalanceAmount}>{totalYieldEarned}</Text>
+            <Text style={styles.earningBalanceAmount}>
+              {displayBalance(totalYieldEarned)}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -1695,11 +1725,16 @@ const styles = StyleSheet.create({
   balanceSection: {
     marginBottom: 16,
   },
+  balanceLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
   balanceLabel: {
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
     color: "#777",
-    marginBottom: 4,
   },
   balanceAmount: {
     fontSize: 34,
