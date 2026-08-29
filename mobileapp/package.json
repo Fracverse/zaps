@@ -18,7 +18,7 @@
     "@expo-google-fonts/outfit": "^0.4.3",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
-    "@privy-io/expo-sdk": "^1.14.0",
+    "@privy-io/expo": "^0.71.0",
     "@react-native-async-storage/async-storage": "^2.0.0",
     "@react-native-community/netinfo": "^11.3.1",
     "@react-navigation/native": "^7.2.5",

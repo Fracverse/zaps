@@ -12,7 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { PrivyProvider } from "@privy-io/expo-sdk";
+import { PrivyProvider } from "@privy-io/expo";
 import Constants from "expo-constants";
 import { COLORS } from "../src/constants/colors";
 import { useFonts } from "expo-font";
