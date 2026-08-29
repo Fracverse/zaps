@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: 18
           cache: npm
-          cache-dependency-path: mobileapp/package-lock.json
+          cache-dependency-path: mobileapp/package.json
 
       - name: Install dependencies
         run: npm install --legacy-peer-deps
