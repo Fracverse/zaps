@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback } from "react";
+import { format } from "date-fns";
 import StatCard from "@/components/StatCard";
-import { api } from "@/lib/api";
+import { api, type AdminAuditLog } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
+import { useSuperAdmin } from "@/lib/auth-context";
 
 function fmtUsdc(value: number): string {
   return (
@@ -39,6 +41,9 @@ function downloadCSV(rows: string[], filename: string): void {
 }
 
 export default function OverviewPage() {
+  // #786 — only superadmins may trigger destructive / sensitive actions
+  const isSuperAdmin = useSuperAdmin();
+
   const { data: feedData, loading: feedLoading, error: feedError } = usePolling(
     () => api.socialFeed(),
     15000,
@@ -52,6 +57,12 @@ export default function OverviewPage() {
   const { data: registryData, loading: registryLoading, error: registryError } = usePolling(
     () => api.registryStats(),
     30000,
+  );
+
+  // #797 — Admin audit log, descending by timestamp, refreshed every 60 s
+  const { data: logsData, loading: logsLoading, error: logsError } = usePolling(
+    () => api.adminLogs(50, 0),
+    60_000,
   );
 
   const likes = feedData?.reduce((total, feed) => total + feed.likes_count, 0) ?? 0;
@@ -98,7 +109,11 @@ export default function OverviewPage() {
         </div>
         <button
           onClick={handleExportUsers}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
+          disabled={!isSuperAdmin}
+          title={!isSuperAdmin ? "Superadmin access required" : undefined}
+          aria-disabled={!isSuperAdmin}
+          data-testid="export-users-btn"
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
           Export Users (CSV)
@@ -238,6 +253,92 @@ export default function OverviewPage() {
 
       <p className="mt-4 text-xs text-slate-400">
         Social stats refresh every 15 s · Vault stats refresh every 30 s
+      </p>
+
+      {/* ── #797 Admin Audit Log ─────────────────────────────────────────── */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold text-slate-900">Admin Audit Log</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Configuration changes and admin actions, newest first.
+        </p>
+      </div>
+
+      {logsError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {logsError} — could not load audit log
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50">
+              <tr>
+                {["Timestamp", "Admin ID", "Action", "Details", "IP Address"].map(
+                  (heading) => (
+                    <th
+                      key={heading}
+                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
+                    >
+                      {heading}
+                    </th>
+                  ),
+                )}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {logsLoading && !logsData ? (
+                Array.from({ length: 5 }).map((_, row) => (
+                  <tr key={row}>
+                    {Array.from({ length: 5 }).map((__, col) => (
+                      <td key={col} className="px-4 py-3">
+                        <div className="h-4 animate-pulse rounded bg-slate-100" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : !logsData?.logs?.length ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-4 py-10 text-center text-slate-400"
+                  >
+                    No audit log entries found
+                  </td>
+                </tr>
+              ) : (
+                // Already ordered descending by server; display as-is
+                logsData.logs.map((log: AdminAuditLog) => (
+                  <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                      {format(new Date(log.timestamp), "MMM d, yyyy HH:mm:ss")}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
+                      {log.admin_id}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="max-w-xs px-4 py-3 text-slate-600">
+                      <span className="line-clamp-2 text-xs">
+                        {log.details ?? "—"}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-500">
+                      {log.ip_address ?? "—"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="mt-2 text-xs text-slate-400">
+        Audit log refreshes every 60 s
       </p>
     </div>
   );

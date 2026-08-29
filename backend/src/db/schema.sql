@@ -115,10 +115,21 @@ CREATE TABLE IF NOT EXISTS yield_rates_history (
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS yield_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    earning_balance BIGINT NOT NULL,
+    accrued_interest BIGINT NOT NULL,
+    apy INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_yield_tx_user_id ON yield_transactions(user_id);
 CREATE INDEX IF NOT EXISTS idx_yield_tx_created_at ON yield_transactions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_yield_rates_created_at ON yield_rates_history(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_yield_snapshots_user_id ON yield_snapshots(user_id);
+CREATE INDEX IF NOT EXISTS idx_yield_snapshots_created_at ON yield_snapshots(created_at DESC);
 
 -- Bulk Disbursement Tables (BE-555)
 --
@@ -199,3 +210,16 @@ CREATE INDEX IF NOT EXISTS idx_batch_recipients_locked
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_batch ON dispatch_logs(batch_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dispatch_logs_recipient
     ON dispatch_logs(recipient_id, created_at DESC) WHERE recipient_id IS NOT NULL;
+
+-- #806: Dead-letter queue for permanently failing push/webhook dispatches.
+CREATE TABLE IF NOT EXISTS failed_webhook_dlq (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    destination TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    error_message TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 5 CHECK (retry_count >= 0),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_failed_webhook_dlq_created_at
+    ON failed_webhook_dlq(created_at DESC);

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   SafeAreaView,
   FlatList,
+  Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
@@ -153,7 +154,23 @@ function StepIndicator({ currentStep }: { currentStep: BatchStep }) {
   );
 }
 
-function ProgressBar({
+/**
+ * AnimatedProgressBar
+ *
+ * #701 — Batch Payout Progress Bar
+ *
+ * Animates the progress fill width smoothly using React Native's built-in
+ * `Animated` API (the project's existing animation approach — no reanimated).
+ *
+ * The bar is driven by a 0–100 `progress` value derived from
+ * `completedCount / itemCount` on the batch execution state.
+ *
+ * States handled:
+ *  - initial (0 %): bar starts empty, no animation until first update
+ *  - partial (0 < n < 100): fill animates to the new width on each update
+ *  - completed (100 %): bar snaps to full width with a slightly faster spring
+ */
+function AnimatedProgressBar({
   progress,
   label,
 }: {
@@ -161,14 +178,61 @@ function ProgressBar({
   label: string;
 }) {
   const pct = Math.min(100, Math.max(0, progress));
+  const isComplete = pct >= 100;
+
+  // Animated value in the 0–100 range so we can interpolate to "X%".
+  const animatedPct = useRef(new Animated.Value(0)).current;
+
+  // Track layout width of the track so we can drive the fill in pixels, which
+  // Animated supports natively without needing reanimated.
+  const [trackWidth, setTrackWidth] = useState<number>(0);
+
+  useEffect(() => {
+    // Spring to the target percentage — smooth and snappy at completion.
+    Animated.spring(animatedPct, {
+      toValue: pct,
+      useNativeDriver: false, // layout animations require JS-driven updates
+      speed: isComplete ? 20 : 12,
+      bounciness: isComplete ? 2 : 4,
+    }).start();
+  }, [pct, isComplete, animatedPct]);
+
+  // Interpolate from the 0-100 animated value to pixel width.
+  const fillWidth = trackWidth > 0
+    ? animatedPct.interpolate({
+        inputRange: [0, 100],
+        outputRange: [0, trackWidth],
+        extrapolate: "clamp",
+      })
+    : undefined;
+
+  // Fill colour transitions from primary to secondary green at completion.
+  const fillColor = animatedPct.interpolate({
+    inputRange: [0, 99, 100],
+    outputRange: [COLORS.primary, COLORS.primary, COLORS.secondary],
+    extrapolate: "clamp",
+  });
+
   return (
     <View style={styles.progressContainer}>
       <View style={styles.progressHeader}>
         <Text style={styles.progressLabel}>{label}</Text>
         <Text style={styles.progressText}>{pct.toFixed(0)}%</Text>
       </View>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${pct}%` }]} />
+      <View
+        style={styles.progressTrack}
+        onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+      >
+        <Animated.View
+          style={[
+            styles.progressFill,
+            fillWidth !== undefined
+              ? { width: fillWidth, backgroundColor: fillColor }
+              : { width: `${pct}%` as unknown as number },
+          ]}
+          accessibilityRole="progressbar"
+          accessibilityValue={{ min: 0, max: 100, now: Math.round(pct) }}
+        />
       </View>
     </View>
   );
@@ -289,7 +353,7 @@ export default function BatchDetailScreen() {
         <View style={styles.stepperCard}>
           <Text style={styles.sectionTitle}>Execution Progress</Text>
           <StepIndicator currentStep={currentStep} />
-          <ProgressBar progress={progress} label="Overall Progress" />
+          <AnimatedProgressBar progress={progress} label="Overall Progress" />
         </View>
 
         <View style={styles.statsCard}>

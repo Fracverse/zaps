@@ -2,6 +2,7 @@
 import { useMemo, useState, useCallback, useRef } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api, IdentityLink } from "@/lib/api";
+import { useSuperAdmin } from "@/lib/auth-context";
 import StatCard from "@/components/StatCard";
 import { X, Shield, AlertTriangle, Search, Copy, Check, Link2, Wallet } from "lucide-react";
 
@@ -14,6 +15,8 @@ function severityColor(severity: string) {
 
 // ── Admin panel: fee-coefficient form ─────────────────────────────────────────
 function FeeConfigPanel() {
+  // #786 — superadmin-only action
+  const isSuperAdmin = useSuperAdmin();
   const config = usePolling(() => api.contractConfig(), 30000);
   const currentFee = config.data?.fee_coefficient;
 
@@ -85,6 +88,16 @@ function FeeConfigPanel() {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* #786 — access gate notice */}
+          {!isSuperAdmin && (
+            <div
+              role="alert"
+              data-testid="fee-access-denied"
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+            >
+              🔒 Superadmin access required to update the fee coefficient.
+            </div>
+          )}
           <div>
             <label
               htmlFor="fee-coefficient-input"
@@ -105,10 +118,12 @@ function FeeConfigPanel() {
                   if (status.kind !== "idle") setStatus({ kind: "idle" });
                 }}
                 placeholder="e.g. 50"
+                disabled={!isSuperAdmin || status.kind === "submitting"}
+                aria-disabled={!isSuperAdmin}
+                title={!isSuperAdmin ? "Superadmin access required" : undefined}
                 className="w-32 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900
                            focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200
-                           disabled:opacity-50"
-                disabled={status.kind === "submitting"}
+                           disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
               />
               {percentDisplay && (
                 <span className="text-xs text-slate-500">
@@ -121,7 +136,10 @@ function FeeConfigPanel() {
           <button
             id="fee-coefficient-submit"
             type="submit"
-            disabled={!isValid || status.kind === "submitting"}
+            data-testid="fee-coefficient-submit"
+            disabled={!isSuperAdmin || !isValid || status.kind === "submitting"}
+            title={!isSuperAdmin ? "Superadmin access required" : undefined}
+            aria-disabled={!isSuperAdmin}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm
                        font-medium text-white hover:bg-indigo-700 active:bg-indigo-800
                        disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
@@ -164,6 +182,8 @@ function FeeConfigPanel() {
 
 // ── Usernames table ───────────────────────────────────────────────────────────
 function UsernamesTable() {
+  // #786 — superadmin-only action
+  const isSuperAdmin = useSuperAdmin();
   const { data, loading, error } = usePolling(() => api.registryClaims(), 30000);
   const [sortKey, setSortKey] = useState<"username" | "registered_at">("registered_at");
   const [sortAsc, setSortAsc] = useState(false);
@@ -287,13 +307,27 @@ function UsernamesTable() {
                   <td className="px-4 py-3 text-slate-500">{new Date(c.registered_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs truncate max-w-[160px]">{c.tx_hash ?? "—"}</td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => handleBlacklistClick(c.username, c.public_key)}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
-                    >
-                      <Shield size={12} />
-                      Blacklist
-                    </button>
+                    {isSuperAdmin ? (
+                      <button
+                        onClick={() => handleBlacklistClick(c.username, c.public_key)}
+                        data-testid={`blacklist-btn-${c.username}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+                      >
+                        <Shield size={12} />
+                        Blacklist
+                      </button>
+                    ) : (
+                      <button
+                        disabled
+                        aria-disabled="true"
+                        title="Superadmin access required"
+                        data-testid={`blacklist-btn-${c.username}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-slate-100 text-slate-400 cursor-not-allowed"
+                      >
+                        <Shield size={12} />
+                        Blacklist
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))

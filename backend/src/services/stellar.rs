@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use stellar_base::{
     amount::Stroops,
     network::Network,
@@ -15,14 +16,39 @@ use stellar_base::{
 
 pub struct StellarClient {
     pub rpc_url: String,
+    /// Ordered failover endpoints. The first endpoint remains `rpc_url` for
+    /// backwards compatibility with existing callers and diagnostics.
+    pub rpc_urls: Vec<String>,
     pub http_client: reqwest::Client,
+    next_endpoint: AtomicUsize,
 }
 
 impl StellarClient {
     pub fn new(rpc_url: String) -> Self {
+        Self::with_rpc_urls(vec![rpc_url])
+    }
+
+    /// Build a client with an ordered pool of Horizon/Soroban endpoints.
+    /// Requests rotate through the pool after timeout, connection, and
+    /// retryable HTTP failures.
+    pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Self {
+        let mut endpoints: Vec<String> = rpc_urls
+            .into_iter()
+            .map(|url| url.trim_end_matches('/').to_string())
+            .filter(|url| !url.is_empty())
+            .collect();
+        if endpoints.is_empty() {
+            endpoints.push("https://soroban-testnet.stellar.org".to_string());
+        }
+        let rpc_url = endpoints[0].clone();
         Self {
             rpc_url,
-            http_client: reqwest::Client::new(),
+            rpc_urls: endpoints,
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("valid reqwest client configuration"),
+            next_endpoint: AtomicUsize::new(0),
         }
     }
 
@@ -45,9 +71,11 @@ impl StellarClient {
                 "params": params
             });
 
+            let endpoint_index = self.next_endpoint.fetch_add(1, Ordering::Relaxed) % self.rpc_urls.len();
+            let endpoint = &self.rpc_urls[endpoint_index];
             let response = self
                 .http_client
-                .post(&self.rpc_url)
+                .post(endpoint)
                 .json(&payload)
                 .send()
                 .await;
@@ -58,7 +86,9 @@ impl StellarClient {
                     if status.is_success() {
                         let json_resp: Value = resp.json().await?;
                         return Ok(json_resp);
-                    } else if status.as_u16() == 503
+                    } else if status.as_u16() == 500
+                        || status.as_u16() == 502
+                        || status.as_u16() == 503
                         || status.as_u16() == 504
                         || status.as_u16() == 429
                     {
@@ -114,12 +144,33 @@ impl StellarClient {
         Ok(1234567)
     }
 
-    /// Broadcast a transaction envelope to the network
+    /// Broadcast a transaction envelope to the network.
+    ///
+    /// The actual HTTP call goes through `send_rpc_request`, which already
+    /// implements automatic retry with exponential backoff (1s, 2s, 4s) for
+    /// temporary failures — HTTP 503 and timeouts — as required by issue #729.
     pub async fn submit_transaction(
         &self,
-        _tx_envelope: &str,
+        tx_envelope: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        Ok("tx_hash_placeholder".to_string())
+        let params = json!({ "transaction": tx_envelope });
+
+        let response = self.send_rpc_request("sendTransaction", params).await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(format!("RPC error submitting transaction: {error}").into());
+        }
+
+        let hash = match response
+            .get("result")
+            .and_then(|r| r.get("hash"))
+            .and_then(|h| h.as_str())
+        {
+            Some(h) => h.to_string(),
+            None => return Err(format!("Missing transaction hash in RPC response").into()),
+        };
+
+        Ok(hash)
     }
 }
 

@@ -33,6 +33,7 @@
 //! ```
 
 use axum::{
+    body::{to_bytes, Bytes},
     extract::State,
     http::{Request, StatusCode},
     middleware::Next,
@@ -40,7 +41,7 @@ use axum::{
     Json,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -296,6 +297,83 @@ async fn resolve_user(
     .fetch_one(pool)
     .await
     .map(|(id, addr, uname)| (id, addr, uname))
+}
+
+// ── Compliance: sanctioned-address blocklist (#728) ──────────────────────────
+
+/// Process-wide cache of sanctioned (OFAC / blocked) Stellar addresses.
+///
+/// Loaded once from the `SANCTIONED_ADDRESSES` environment variable (a
+/// comma-separated list). Lookups are O(1) against the `HashSet`, so the
+/// compliance middleware can cheaply reject transfers to flagged wallets
+/// before any downstream transfer processing occurs.
+pub struct SanctionList {
+    blocked: HashSet<String>,
+}
+
+impl SanctionList {
+    /// Build the list from `SANCTIONED_ADDRESSES` (comma separated).
+    pub fn from_env() -> Self {
+        let raw = std::env::var("SANCTIONED_ADDRESSES").unwrap_or_default();
+        let blocked = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        Self { blocked }
+    }
+
+    /// Global singleton backed by a `OnceLock`.
+    pub fn global() -> &'static SanctionList {
+        static LIST: std::sync::OnceLock<SanctionList> = std::sync::OnceLock::new();
+        LIST.get_or_init(SanctionList::from_env)
+    }
+
+    /// Returns true if `address` is on the sanction list.
+    pub fn contains(&self, address: &str) -> bool {
+        self.blocked.contains(address)
+    }
+}
+
+/// Axum middleware that blocks any request whose body references a sanctioned
+/// Stellar address. The raw body is buffered, scanned for blocked addresses,
+/// and — when clean — re-injected so downstream handlers run unchanged.
+pub async fn compliance_sanitize_middleware(
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let bytes = match to_bytes(body, 1_048_576).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Unable to read request body" })),
+            )
+                .into_response();
+        }
+    };
+
+    let list = SanctionList::global();
+    if list
+        .blocked
+        .iter()
+        .any(|addr| bytes_as_str(&bytes).contains(addr.as_str()))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Transfer blocked: sanctioned address detected" })),
+        )
+            .into_response();
+    }
+
+    let request = Request::from_parts(parts, axum::body::Body::from(bytes));
+    next.run(request).await
+}
+
+/// Best-effort lossy UTF-8 view of the body for substring scanning.
+fn bytes_as_str(bytes: &Bytes) -> &str {
+    std::str::from_utf8(bytes).unwrap_or("")
 }
 
 // ── Cache sweep background task ───────────────────────────────────────────────

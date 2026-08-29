@@ -1,4 +1,4 @@
-use super::models::{UserYieldBalance, YieldRateHistory, YieldTransaction};
+use super::models::{SweepFailureRecord, UserYieldBalance, YieldRateHistory, YieldTransaction};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -370,12 +370,15 @@ pub async fn list_sweep_backoff_excluded_users(
 /// BE-053: Record a sweep failure and push the user's next retry back with
 /// exponential backoff (60s * 2^failures, capped at 1 hour) so repeated
 /// failures don't flood the logs every cycle.
+///
+/// Returns the user's updated failure count so callers can decide whether a
+/// repeated-failure alert is warranted (#737).
 pub async fn record_sweep_failure(
     pool: &PgPool,
     user_id: Uuid,
     error: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<i32, sqlx::Error> {
+    let count: i32 = sqlx::query_scalar(
         r#"
         INSERT INTO sweep_failure_history (user_id, failure_count, last_error, last_failed_at, next_retry_at)
         VALUES ($1, 1, $2, NOW(), NOW() + INTERVAL '60 seconds')
@@ -383,17 +386,20 @@ pub async fn record_sweep_failure(
         SET failure_count = sweep_failure_history.failure_count + 1,
             last_error = EXCLUDED.last_error,
             last_failed_at = NOW(),
+            -- A new failing episode re-enables alerting for this user (#737).
+            last_alerted_at = NULL,
             next_retry_at = NOW() + (
                 INTERVAL '60 seconds' * POWER(2, LEAST(sweep_failure_history.failure_count + 1, 6))
             )
+        RETURNING failure_count
         "#,
     )
     .bind(user_id)
     .bind(error)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
 
-    Ok(())
+    Ok(count)
 }
 
 /// BE-053: Clear a user's failure history after a successful sweep.
@@ -405,3 +411,124 @@ pub async fn clear_sweep_failure(pool: &PgPool, user_id: Uuid) -> Result<(), sql
 
     Ok(())
 }
+
+/// #737: Users whose sweep has failed at least `threshold` times in a row and
+/// who have not yet been alerted about the current failing episode.
+///
+/// `last_alerted_at` is reset to `NULL` by a fresh failure (see
+/// `record_sweep_failure`) so a new backoff episode always re-alerts the
+/// operations channel once.
+pub async fn list_repeated_sweep_failures(
+    pool: &PgPool,
+    threshold: i32,
+) -> Result<Vec<SweepFailureRecord>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT user_id, failure_count, last_error, last_failed_at, next_retry_at, last_alerted_at
+        FROM sweep_failure_history
+        WHERE failure_count >= $1
+          AND (last_alerted_at IS NULL OR last_alerted_at < last_failed_at)
+        ORDER BY last_failed_at ASC
+        "#,
+    )
+    .bind(threshold)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| SweepFailureRecord {
+            user_id: row.get("user_id"),
+            failure_count: row.get("failure_count"),
+            last_error: row.get("last_error"),
+            last_failed_at: row.get("last_failed_at"),
+            next_retry_at: row.get("next_retry_at"),
+            last_alerted_at: row.get("last_alerted_at"),
+        })
+        .collect())
+}
+
+/// #737: Remember that the operations channel was notified about a user's
+/// current sweep-failure episode so the next alert fires only for a new
+/// failing episode (when `record_sweep_failure` bumps the count again).
+pub async fn mark_sweep_failure_alerted(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE sweep_failure_history SET last_alerted_at = NOW() WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct UserYieldTotals {
+    pub total_deposited: i64,
+    pub total_withdrawn: i64,
+    pub total_earned: i64,
+    pub transaction_count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlatformYieldTotals {
+    pub tvl: i64,
+    pub total_available: i64,
+    pub active_accounts: i64,
+    pub auto_earn_accounts: i64,
+}
+
+pub async fn get_user_yield_totals(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<UserYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount ELSE 0 END), 0) as total_deposited,
+            COALESCE(SUM(CASE WHEN type = 'WITHDRAW' THEN amount ELSE 0 END), 0) as total_withdrawn,
+            COALESCE(SUM(CASE WHEN type = 'EARNED' THEN amount ELSE 0 END), 0) as total_earned,
+            COUNT(*) as transaction_count
+        FROM yield_transactions
+        WHERE user_id = $1
+        "#
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(UserYieldTotals {
+        total_deposited: row.get("total_deposited"),
+        total_withdrawn: row.get("total_withdrawn"),
+        total_earned: row.get("total_earned"),
+        transaction_count: row.get("transaction_count"),
+    })
+}
+
+pub async fn get_platform_yield_totals(
+    pool: &PgPool,
+) -> Result<PlatformYieldTotals, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(SUM(earning_balance), 0) as tvl,
+            COALESCE(SUM(available_balance), 0) as total_available,
+            COUNT(CASE WHEN earning_balance > 0 THEN 1 END) as active_accounts
+        FROM user_yield_balances
+        "#
+    )
+    .fetch_one(pool)
+    .await?;
+
+    let auto_earn_accounts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM users WHERE auto_earn_enabled = true"
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(PlatformYieldTotals {
+        tvl: row.get("tvl"),
+        total_available: row.get("total_available"),
+        active_accounts: row.get("active_accounts"),
+        auto_earn_accounts,
+    })
+}
+

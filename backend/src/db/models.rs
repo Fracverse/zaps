@@ -86,11 +86,22 @@ pub struct YieldTransaction {
     pub created_at: NaiveDateTime,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct YieldRateHistory {
     pub id: Uuid,
     pub apy: i32,
     pub created_at: NaiveDateTime,
+}
+
+/// #737: One row per user with a current sweep-failure backoff episode.
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SweepFailureRecord {
+    pub user_id: Uuid,
+    pub failure_count: i32,
+    pub last_error: Option<String>,
+    pub last_failed_at: NaiveDateTime,
+    pub next_retry_at: NaiveDateTime,
+    pub last_alerted_at: Option<NaiveDateTime>,
 }
 
 // ─── Bulk disbursement (BE-554 / BE-555) ─────────────────────────────────────

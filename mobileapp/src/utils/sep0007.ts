@@ -1,6 +1,9 @@
 /**
  * SEP-0007 URI parser and validator
  * https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0007.md
+ *
+ * Also supports Zaps URI schemes:
+ *   zaps://pay?address=...&amount=...&memo=...
  */
 
 export interface Sep0007PaymentParams {
@@ -58,6 +61,66 @@ export function isValidStellarDestination(destination: string): boolean {
   return isStellarAddress(destination) || isFederatedAddress(destination);
 }
 
+export function isZapsPayUri(uri: string): boolean {
+  if (!uri || typeof uri !== "string") return false;
+  const trimmed = uri.trim();
+  return trimmed.startsWith("zaps://pay?") || trimmed.startsWith("zaps://pay/");
+}
+
+export function parseZapsPayUri(uri: string): ParseResult {
+  if (!uri || typeof uri !== "string") {
+    return { valid: false, error: "Empty or invalid URI" };
+  }
+
+  const trimmed = uri.trim();
+
+  if (!trimmed.startsWith("zaps://")) {
+    return { valid: false, error: "Not a Zaps pay URI (missing zaps:// scheme)" };
+  }
+
+  const withoutScheme = trimmed.slice("zaps://".length);
+  const urlStr = `https://placeholder/${withoutScheme}`;
+
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+  } catch {
+    return { valid: false, error: "Malformed zaps URI" };
+  }
+
+  const destination = url.searchParams.get("address") || url.searchParams.get("destination");
+  if (!destination) {
+    return { valid: false, error: "Missing required field: address" };
+  }
+
+  if (!isValidStellarDestination(destination)) {
+    return {
+      valid: false,
+      error: `Invalid Stellar destination address: "${destination}"`,
+    };
+  }
+
+  const amount = url.searchParams.get("amount");
+  if (amount !== null) {
+    const parsed = parseFloat(amount);
+    if (isNaN(parsed) || parsed < 0) {
+      return { valid: false, error: `Invalid amount: "${amount}"` };
+    }
+  }
+
+  const params: Sep0007PaymentParams = {
+    destination,
+    ...(amount !== null && { amount }),
+    ...(url.searchParams.get("asset_code") && { asset_code: url.searchParams.get("asset_code")! }),
+    ...(url.searchParams.get("asset_issuer") && { asset_issuer: url.searchParams.get("asset_issuer")! }),
+    ...(url.searchParams.get("memo") && { memo: url.searchParams.get("memo")! }),
+    ...(url.searchParams.get("msg") && { msg: url.searchParams.get("msg")! }),
+    ...(url.searchParams.get("origin_domain") && { origin_domain: url.searchParams.get("origin_domain")! }),
+  };
+
+  return { valid: true, operation: "pay", params };
+}
+
 /**
  * Parse a SEP-0007 URI string.
  * Returns a typed result with valid flag.
@@ -65,6 +128,10 @@ export function isValidStellarDestination(destination: string): boolean {
 export function parseSep0007Uri(uri: string): ParseResult {
   if (!uri || typeof uri !== "string") {
     return { valid: false, error: "Empty or invalid URI" };
+  }
+
+  if (uri.trim().startsWith("zaps://")) {
+    return parseZapsPayUri(uri);
   }
 
   const trimmed = uri.trim();
@@ -198,13 +265,15 @@ export function buildSep0007PayUri(params: Sep0007PaymentParams): string {
 
 /**
  * Detect if a scanned string is a SEP-0007 URI, a plain Stellar address,
- * or something else entirely.
+ * a Zaps pay URI, or something else entirely.
  */
-export type QrContentType = "sep0007" | "stellar_address" | "unknown";
+export type QrContentType = "sep0007" | "zaps_pay" | "stellar_address" | "unknown";
 
 export function detectQrContentType(content: string): QrContentType {
   if (!content) return "unknown";
   if (content.startsWith("web+stellar:")) return "sep0007";
+  if (isZapsPayUri(content)) return "zaps_pay";
   if (isValidStellarDestination(content.trim())) return "stellar_address";
   return "unknown";
 }
+

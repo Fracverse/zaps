@@ -139,9 +139,12 @@ pub fn validate_username_prefix(prefix: &str) -> Result<(), UsernameError> {
 }
 
 fn validate_username_charset(value: &str) -> Result<(), UsernameError> {
+    if value.starts_with('.') || value.ends_with('.') || value.contains("..") {
+        return Err(UsernameError::InvalidCharacters);
+    }
     if value
         .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.')
     {
         Ok(())
     } else {
@@ -197,10 +200,11 @@ pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 }
 
 pub async fn update_profile(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<UserState>,
     auth: AuthUser,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
+    let pool = &state.pool;
     let row = match sqlx::query(
         r#"
         UPDATE users
@@ -215,7 +219,7 @@ pub async fn update_profile(
     .bind(payload.bio)
     .bind(payload.avatar_url)
     .bind(auth.id)
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     {
         Ok(r) => r,
@@ -229,14 +233,17 @@ pub async fn update_profile(
         }
     };
 
-    Json(ProfileResponse {
+    let profile = ProfileResponse {
         address: row.get("address"),
         username: row.get("username"),
         display_name: row.get("display_name"),
         bio: row.get("bio"),
         avatar_url: row.get("avatar_url"),
-    })
-    .into_response()
+    };
+    if let Some(cache) = &state.cache {
+        cache.invalidate(&profile.username).await;
+    }
+    Json(profile).into_response()
 }
 
 /// Longest accepted `q` on /search. Sized for a Stellar address (56 chars),
@@ -404,6 +411,81 @@ pub async fn suggest_usernames(
         total,
         has_more,
     })
+    .into_response()
+}
+
+/// GET /api/users/autocomplete?q=&limit=
+///
+/// Fast prefix-matching search endpoint backed by a pg_trgm GIN index (#725).
+/// Uses `ILIKE 'query%'` which the trigram index accelerates for large tables.
+/// Falls back to similarity scoring when the prefix index is insufficient.
+pub async fn autocomplete(
+    State(pool): State<sqlx::PgPool>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+) -> impl IntoResponse {
+    let term = params.q.trim().to_lowercase();
+    if term.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "q must not be empty" })),
+        )
+            .into_response();
+    }
+    if term.chars().count() > USERNAME_MAX_LEN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("q must be at most {} characters", USERNAME_MAX_LEN)
+            })),
+        )
+            .into_response();
+    }
+
+    let limit = params.limit.unwrap_or(10).clamp(1, 25);
+    let pattern = format!("{}%", escape_like_pattern(&term));
+
+    // ILIKE 'query%' is served by the trigram GIN index (idx_users_username_trgm)
+    // and by the btree text_pattern_ops index (idx_users_username_lower_pattern).
+    let rows = match sqlx::query(
+        r#"
+        SELECT username, address, avatar_url,
+               similarity(LOWER(username), $1) AS score
+        FROM users
+        WHERE LOWER(username) ILIKE $2 ESCAPE '\'
+        ORDER BY score DESC, LOWER(username) ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(&term)
+    .bind(&pattern)
+    .bind(limit)
+    .fetch_all(&pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("Autocomplete query failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response();
+        }
+    };
+
+    let results: Vec<UserSearchItem> = rows
+        .into_iter()
+        .map(|row| UserSearchItem {
+            username: row.get("username"),
+            address: row.get("address"),
+            avatar_url: row.get("avatar_url"),
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "query": term,
+        "results": results,
+    }))
     .into_response()
 }
 
@@ -784,6 +866,74 @@ pub async fn get_registry_stats(
     .into_response()
 }
 
+pub async fn get_user_by_did(
+    State(state): State<UserState>,
+    Path(did): Path<String>,
+) -> impl IntoResponse {
+    let pool = &state.pool;
+    let row = sqlx::query(
+        r#"
+        SELECT id, address, username, display_name, privy_did, privy_linked_at
+        FROM users
+        WHERE privy_did = $1
+        "#,
+    )
+    .bind(&did)
+    .fetch_optional(pool)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let user_id: Uuid = r.get("id");
+            let address: String = r.get("address");
+            let username: String = r.get("username");
+            let display_name: Option<String> = r.get("display_name");
+            let privy_did: String = r.get("privy_did");
+            let privy_linked_at: Option<chrono::NaiveDateTime> = r.get("privy_linked_at");
+
+            let linked_accounts = serde_json::json!([
+                {
+                    "type": "wallet",
+                    "address": address,
+                    "chain_type": "stellar",
+                    "verified_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                },
+                {
+                    "type": "email",
+                    "address": format!("{}@zaps.fi", username),
+                    "verified_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                }
+            ]);
+
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "id": user_id.to_string(),
+                    "username": username,
+                    "display_name": display_name,
+                    "privy_did": privy_did,
+                    "privy_linked_at": privy_linked_at.map(|t| t.and_utc().to_rfc3339()),
+                    "linked_accounts": linked_accounts,
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "User with this Privy DID not found" })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Error getting user by DID: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Internal database error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,13 +970,30 @@ mod tests {
 
     #[test]
     fn rejects_symbols_and_whitespace() {
-        for candidate in ["e-bube", "e_bube", "e.bube", "e bube", "ebube!", "ébube"] {
+        for candidate in ["e-bube", "e_bube", "e bube", "ebube!", "ébube"] {
             assert_eq!(
                 validate_username(candidate),
                 Err(UsernameError::InvalidCharacters),
                 "expected {candidate:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn accepts_dot_separated_usernames_but_not_edge_dots() {
+        assert_eq!(validate_username("test.zaps"), Ok(()));
+        assert_eq!(
+            validate_username(".test"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test."),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test..zaps"),
+            Err(UsernameError::InvalidCharacters)
+        );
     }
 
     #[test]

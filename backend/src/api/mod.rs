@@ -4,11 +4,14 @@ use axum::{
     Router,
 };
 
+pub mod admin;
+pub use admin::admin_routes;
 pub mod auth;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
 pub mod payouts;
+pub mod privy_jwks;
 pub mod social;
 pub mod user;
 pub mod r#yield;
@@ -19,12 +22,30 @@ pub use auth_middleware::{
     auth_middleware, spawn_cache_sweep, AuthMiddlewareState, AuthTokenCache, AuthenticatedUser,
 };
 
-pub fn auth_routes(pool: sqlx::PgPool) -> Router {
+/// Builds the auth router from an already-assembled `AuthState` (pool +
+/// Privy JWKS client). Prefer this when the caller wants control over the
+/// JWKS URL / app ID (e.g. tests pointing at a mock JWKS server).
+pub fn auth_routes_with_state(state: auth::AuthState) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
-        .with_state(pool)
+        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            auth::AuthRateLimiter::new(),
+            auth::auth_rate_limit,
+        ))
+}
+
+/// Convenience wrapper that builds `AuthState` from `PRIVY_APP_ID` /
+/// `PRIVY_JWKS_URL` env vars (see `config::Config`).
+pub fn auth_routes(pool: sqlx::PgPool) -> Router {
+    let config = crate::config::Config::from_env();
+    auth_routes_with_state(auth::AuthState {
+        pool,
+        privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
+        privy_app_id: config.privy_app_id,
+    })
 }
 
 /// #561 — Session Refresh & Auth Middleware
@@ -72,11 +93,13 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
         )
         .route("/search", get(user::search_users))
         .route("/suggestions", get(user::suggest_usernames))
+        .route("/autocomplete", get(user::autocomplete))
         .route("/friends", get(user::list_friends))
         .route("/friends/request", post(user::send_friend_request))
         .route("/friends/:id/accept", post(user::accept_friend_request))
         .route("/friends/:id/reject", post(user::reject_friend_request))
         .route("/resolve/:username", get(user::resolve_address))
+        .route("/did/:did", get(user::get_user_by_did))
         .with_state(state)
 }
 
@@ -102,6 +125,12 @@ pub fn payout_routes(pool: sqlx::PgPool) -> Router {
         .route("/batches", get(payouts::list_batches))
         .route("/batch", post(payouts::create_batch))
         .route("/batch/:id", get(payouts::get_batch_detail))
+        .route("/batch/:id/export", get(payouts::export_batch))
+        .route("/sdp/webhook", post(payouts::sdp_reconciliation_webhook))
+        // #728 — block transfers to sanctioned addresses before processing.
+        .layer(middleware::from_fn(
+            auth_middleware::compliance_sanitize_middleware,
+        ))
         .with_state(pool)
 }
 

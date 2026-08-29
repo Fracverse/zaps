@@ -50,6 +50,9 @@ const DEFAULT_MAX_ATTEMPTS: i32 = 3;
 const DEFAULT_CLAIM_SIZE: i64 = 100;
 /// A claim older than this is assumed to belong to a dead worker.
 const DEFAULT_LEASE_TIMEOUT_SECS: i64 = 900;
+/// Maximum items per sub-chunk when processing a batch claim.
+/// Prevents gas limit issues on-chain and keeps SDP submissions bounded.
+const CHUNK_SIZE: usize = 50;
 
 pub struct DisbursementWorkerConfig {
     pub poll_interval: Duration,
@@ -193,25 +196,35 @@ async fn process_cycle(
         "Dispatching payout batch"
     );
 
-    // Sequential on purpose: SDP rate-limits per account, and parallel
-    // submissions from one source account contend on the Stellar sequence
-    // number.
-    for recipient in recipients {
-        let attempt = recipient.attempt_count + 1;
-        let outcome = dispatch_one(&recipient, sdp_client).await;
+    // Process recipients in sub-chunks of CHUNK_SIZE to prevent gas limit
+    // issues on-chain and keep SDP submissions bounded. Each chunk is
+    // submitted sequentially; recipients within a chunk are also sequential
+    // (SDP rate-limits per account, and parallel submissions contend on
+    // the Stellar sequence number).
+    for (chunk_idx, chunk) in recipients.chunks(CHUNK_SIZE).enumerate() {
+        tracing::debug!(
+            batch_id = %batch_id,
+            chunk = chunk_idx + 1,
+            chunk_size = chunk.len(),
+            "Processing chunk"
+        );
+
+        for recipient in chunk {
+            let attempt = recipient.attempt_count + 1;
+            let outcome = dispatch_one(recipient, sdp_client).await;
 
         match outcome {
             SdpOutcome::Submitted {
                 payment_id: sdp_payment_id,
                 tx_hash,
             } => {
-                mark_submitted(pool, &recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
+                mark_submitted(pool, recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
                     .await?;
                 log_dispatch(pool, batch_id, Some(recipient.id), attempt, "SUBMITTED", None, None)
                     .await?;
             }
             SdpOutcome::Retryable(err) if attempt < config.max_attempts => {
-                mark_retry(pool, &recipient, &err).await?;
+                mark_retry(pool, recipient, &err).await?;
                 log_dispatch(
                     pool,
                     batch_id,
@@ -226,7 +239,7 @@ async fn process_cycle(
             SdpOutcome::Retryable(err) | SdpOutcome::Permanent(err) => {
                 // Either permanently bad, or out of retries. Fail this row only
                 // — one dead recipient must not strand the rest of the batch.
-                mark_failed(pool, &recipient, &err).await?;
+                mark_failed(pool, recipient, &err).await?;
                 log_dispatch(
                     pool,
                     batch_id,
@@ -240,6 +253,7 @@ async fn process_cycle(
             }
         }
     }
+    } // end chunk loop
 
     finalize_batch(pool, batch_id).await?;
     Ok(())
@@ -521,9 +535,92 @@ async fn log_dispatch(
     Ok(())
 }
 
+/// A compact representation of the batch state used to make status decisions.
+///
+/// The worker persists these same transitions in `claim_next_batch` and
+/// `finalize_batch`. Keeping the decision rule pure makes it possible to test
+/// the state machine without requiring a live PostgreSQL instance.
+#[derive(Debug, PartialEq, Eq)]
+struct BatchState {
+    status: &'static str,
+    pending_recipients: usize,
+    failed_recipients: usize,
+    total_recipients: usize,
+}
+
+fn next_batch_status(state: &BatchState) -> &'static str {
+    match state.status {
+        "PENDING" => "PROCESSING",
+        "PROCESSING" if state.pending_recipients > 0 => "PROCESSING",
+        "PROCESSING" if state.failed_recipients == 0 => "COMPLETED",
+        "PROCESSING" if state.failed_recipients == state.total_recipients => "FAILED",
+        "PROCESSING" => "PARTIALLY_FAILED",
+        status => status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_batch(status: &'static str, pending: usize, failed: usize) -> BatchState {
+        BatchState {
+            status,
+            pending_recipients: pending,
+            failed_recipients: failed,
+            total_recipients: 3,
+        }
+    }
+
+    #[test]
+    fn worker_moves_pending_batch_to_processing() {
+        let batch = sample_batch("PENDING", 3, 0);
+
+        assert_eq!(next_batch_status(&batch), "PROCESSING");
+    }
+
+    #[test]
+    fn worker_completes_processing_batch_when_all_recipients_are_submitted() {
+        let batch = sample_batch("PROCESSING", 0, 0);
+
+        assert_eq!(next_batch_status(&batch), "COMPLETED");
+    }
+
+    #[test]
+    fn worker_recovers_after_retryable_error_and_completes_batch() {
+        // A retryable SDP error leaves the recipient pending, so the batch must
+        // remain PROCESSING and be eligible for another worker cycle.
+        let after_error = sample_batch("PROCESSING", 1, 0);
+        assert_eq!(next_batch_status(&after_error), "PROCESSING");
+
+        // Once the retry succeeds, no pending recipients remain and the batch
+        // reaches its terminal completed state.
+        let after_retry = sample_batch("PROCESSING", 0, 0);
+        assert_eq!(next_batch_status(&after_retry), "COMPLETED");
+    }
+
+    #[test]
+    fn worker_marks_all_permanent_failures_as_failed() {
+        let batch = sample_batch("PROCESSING", 0, 3);
+
+        assert_eq!(next_batch_status(&batch), "FAILED");
+    }
+
+    #[test]
+    fn worker_marks_mixed_success_and_failure_as_partially_failed() {
+        let batch = sample_batch("PROCESSING", 0, 1);
+
+        assert_eq!(next_batch_status(&batch), "PARTIALLY_FAILED");
+    }
+
+    #[test]
+    fn terminal_batch_statuses_are_not_reopened() {
+        let completed = sample_batch("COMPLETED", 0, 0);
+        let failed = sample_batch("FAILED", 0, 3);
+
+        assert_eq!(next_batch_status(&completed), "COMPLETED");
+        assert_eq!(next_batch_status(&failed), "FAILED");
+    }
 
     #[test]
     fn idempotency_key_is_stable_across_retries() {

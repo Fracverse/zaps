@@ -2,29 +2,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-
-const nav = [
-  { href: "/dashboard", label: "Overview", icon: "⬛" },
-  { href: "/dashboard/transactions", label: "Transactions", icon: "📋" },
-  { href: "/dashboard/payouts", label: "Payouts", icon: "💸" },
-  { href: "/dashboard/qr", label: "QR Codes", icon: "⬜" },
-  { href: "/dashboard/analytics", label: "Analytics", icon: "📈" },
-  { href: "/dashboard/contracts", label: "Contracts", icon: "🔗" },
-  { href: "/dashboard/yield", label: "Yield Vault", icon: "🏦" },
-];
+import { DASHBOARD_NAV } from "@/lib/nav";
 
 export default function Sidebar() {
   const path = usePathname();
   const { logout } = useAuth();
 
   return (
-    <aside className="fixed inset-y-0 left-0 w-60 bg-slate-900 text-white flex flex-col z-20">
+    <aside
+      data-testid="desktop-sidebar"
+      className="fixed inset-y-0 left-0 z-20 hidden w-60 flex-col bg-slate-900 text-white md:flex"
+    >
       <div className="px-6 py-5 border-b border-slate-700">
         <span className="text-xl font-bold tracking-tight">⚡ Zaps</span>
         <p className="text-xs text-slate-400 mt-0.5">Merchant Dashboard</p>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {nav.map(({ href, label, icon }) => (
+        {DASHBOARD_NAV.map(({ href, label, icon }) => (
           <Link
             key={href}
             href={href}

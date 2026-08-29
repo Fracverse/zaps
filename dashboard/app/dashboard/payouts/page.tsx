@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import Papa from "papaparse";
 import { format } from "date-fns";
@@ -20,6 +20,7 @@ import {
   type BatchRecipient,
   type Payout,
   type SdpDisbursement,
+  type SdpStatusResponse,
 } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 
@@ -969,6 +970,73 @@ function StatTile({
   );
 }
 
+function ProgressRing({
+  percent,
+  size = 120,
+  strokeWidth = 10,
+  trackColor = "#e2e8f0",
+  progressColor = "#4f46e5",
+  label,
+  sublabel,
+}: {
+  percent: number;
+  size?: number;
+  strokeWidth?: number;
+  trackColor?: string;
+  progressColor?: string;
+  label?: string;
+  sublabel?: string;
+}) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(1, percent));
+  const offset = circumference * (1 - clamped);
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={trackColor}
+          strokeWidth={strokeWidth}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke={progressColor}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          className="transition-all duration-700 ease-out"
+        />
+        <text
+          x={size / 2}
+          y={size / 2}
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-slate-900 text-sm font-bold"
+          style={{ fontSize: size * 0.22 }}
+        >
+          {Math.round(clamped * 100)}%
+        </text>
+      </svg>
+      {label && (
+        <p className="text-xs font-medium text-slate-700">{label}</p>
+      )}
+      {sublabel && (
+        <p className="text-[11px] text-slate-500">{sublabel}</p>
+      )}
+    </div>
+  );
+}
+
 function Banner({
   tone,
   icon,
@@ -1006,6 +1074,91 @@ function Banner({
 function fileBasename(name: string): string {
   const idx = name.lastIndexOf(".");
   return idx > 0 ? name.slice(0, idx) : name;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SDP Status Integration Indicator (#794)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Stellar Disbursement Platform (SDP) server sync status indicator.
+ * Polls `api.getSdpStatus()` and displays real-time sync badge.
+ */
+export function SdpStatusIndicator() {
+  const { data, loading, error } = usePolling<SdpStatusResponse>(
+    () => api.getSdpStatus(),
+    30000,
+  );
+
+  const isSynced =
+    !error &&
+    data &&
+    (data.status?.toLowerCase() === "operational" ||
+      data.status?.toLowerCase() === "synced" ||
+      data.status?.toLowerCase() === "ok");
+
+  const isSyncing =
+    !error && data && data.status?.toLowerCase() === "syncing";
+
+  const isDegraded =
+    !error && data && data.status?.toLowerCase() === "degraded";
+
+  return (
+    <div
+      data-testid="sdp-status-indicator"
+      className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs shadow-xs transition-colors dark:border-slate-800 dark:bg-slate-900"
+      title={
+        loading && !data
+          ? "Checking Stellar Disbursement Platform sync status…"
+          : isSynced
+            ? `SDP Server Synced${data?.synced_at ? ` · Last sync: ${format(new Date(data.synced_at), "HH:mm:ss")}` : ""}`
+            : error
+              ? `SDP Server Offline: ${error}`
+              : `SDP Status: ${data?.status ?? "Unknown"}`
+      }
+    >
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        SDP
+      </span>
+      <span
+        aria-hidden="true"
+        className={`inline-block h-2 w-2 rounded-full ${
+          loading && !data
+            ? "animate-pulse bg-slate-300"
+            : isSynced
+              ? "bg-emerald-500 ring-2 ring-emerald-100"
+              : isSyncing
+                ? "animate-pulse bg-amber-400 ring-2 ring-amber-100"
+                : isDegraded
+                  ? "bg-amber-500 ring-2 ring-amber-100"
+                  : "bg-red-500 ring-2 ring-red-100"
+        }`}
+      />
+      <span
+        className={`font-medium ${
+          loading && !data
+            ? "text-slate-500"
+            : isSynced
+              ? "text-emerald-700"
+              : isSyncing
+                ? "text-amber-700"
+                : isDegraded
+                  ? "text-amber-700"
+                  : "text-red-600"
+        }`}
+      >
+        {loading && !data
+          ? "Checking…"
+          : isSynced
+            ? "Synced"
+            : isSyncing
+              ? "Syncing"
+              : isDegraded
+                ? "Degraded"
+                : "Offline"}
+      </span>
+    </div>
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1079,7 +1232,7 @@ export default function PayoutsPage() {
       </div>
 
       {/* ── Tab nav ─────────────────────────────────────────────────────── */}
-      <div className="mb-6 border-b border-slate-200">
+      <div className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-0 sm:flex-row sm:items-center sm:justify-between">
         <nav className="-mb-px flex space-x-8 overflow-x-auto">
           {TABS.map((tab) => (
             <button
@@ -1098,6 +1251,9 @@ export default function PayoutsPage() {
             </button>
           ))}
         </nav>
+        <div className="flex items-center pb-2 sm:pb-0">
+          <SdpStatusIndicator />
+        </div>
       </div>
 
       {/* ── Payout History ──────────────────────────────────────────────── */}
@@ -1220,34 +1376,55 @@ export default function PayoutsPage() {
       {/* ── Batch Disbursements ─────────────────────────────────────────── */}
       {activeTab === "batch" && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Batches</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {batches.length}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Recipients</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {batches.reduce(
-                  (sum, b) => sum + (b.total_recipients || 0),
-                  0,
-                )}
-              </p>
-            </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-sm text-slate-500">Total Volume (USDC)</p>
-              <p className="mt-1 text-3xl font-bold text-slate-900">
-                {(
-                  batches.reduce(
-                    (sum, b) => sum + (b.total_amount || 0),
-                    0,
-                  ) / 1_000_000
-                ).toLocaleString()}
-              </p>
-            </div>
-          </div>
+          {(() => {
+            const totalRecipients = batches.reduce(
+              (sum, b) => sum + (b.total_recipients || 0),
+              0,
+            );
+            const totalSucceeded = batches.reduce(
+              (sum, b) => sum + (b.succeeded_count || 0),
+              0,
+            );
+            const successRate = totalRecipients > 0 ? totalSucceeded / totalRecipients : 0;
+
+            return (
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Batches</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {batches.length}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Recipients</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {totalRecipients}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-sm text-slate-500">Total Volume (USDC)</p>
+                  <p className="mt-1 text-3xl font-bold text-slate-900">
+                    {(
+                      batches.reduce(
+                        (sum, b) => sum + (b.total_amount || 0),
+                        0,
+                      ) / 1_000_000
+                    ).toLocaleString()}
+                  </p>
+                </div>
+                <div className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <ProgressRing
+                    percent={successRate}
+                    size={110}
+                    strokeWidth={10}
+                    progressColor={successRate === 1 ? "#059669" : "#4f46e5"}
+                    label="Success Rate"
+                    sublabel={`${totalSucceeded} of ${totalRecipients} recipients`}
+                  />
+                </div>
+              </div>
+            );
+          })()}
 
           {batchError && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -1366,6 +1543,45 @@ function BatchDetailsModal({
   recipients: BatchRecipient[];
   onClose: () => void;
 }) {
+  const [rows, setRows] = useState<BatchRecipient[]>(recipients);
+  const [retryingIndex, setRetryingIndex] = useState<number | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRows(recipients);
+  }, [recipients]);
+
+  const handleRetry = async (itemIndex: number) => {
+    setRetryError(null);
+    setRetryingIndex(itemIndex);
+    setRows((prev) =>
+      prev.map((row, i) =>
+        i === itemIndex ? { ...row, status: "retrying" } : row,
+      ),
+    );
+    try {
+      const result = await api.retryBatchItem(batch.id, itemIndex);
+      setRows((prev) =>
+        prev.map((row, i) => {
+          if (i !== itemIndex) return row;
+          if (result.recipient) return result.recipient;
+          return { ...row, status: result.status ?? "pending" };
+        }),
+      );
+    } catch (err) {
+      setRows((prev) =>
+        prev.map((row, i) =>
+          i === itemIndex ? { ...row, status: "failed" } : row,
+        ),
+      );
+      setRetryError(
+        err instanceof Error ? err.message : "Retry failed. Please try again.",
+      );
+    } finally {
+      setRetryingIndex(null);
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
@@ -1427,10 +1643,16 @@ function BatchDetailsModal({
             )}
           </div>
 
-          {recipients.length > 0 && (
+          {retryError && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {retryError}
+            </div>
+          )}
+
+          {rows.length > 0 && (
             <div className="mt-6 border-t border-slate-200 pt-6">
               <h4 className="mb-3 font-semibold text-slate-800">
-                Recipients ({recipients.length})
+                Recipients ({rows.length})
               </h4>
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="w-full text-sm">
@@ -1442,6 +1664,7 @@ function BatchDetailsModal({
                         "Destination",
                         "Attempts",
                         "Tx Hash",
+                        "Action",
                       ].map((h) => (
                         <th
                           key={h}
@@ -1453,25 +1676,46 @@ function BatchDetailsModal({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {recipients.map((r) => (
-                      <tr key={r.id}>
-                        <td className="px-4 py-2">
-                          <StatusBadge status={r.status} />
-                        </td>
-                        <td className="px-4 py-2 font-medium">
-                          {(r.amount / 1_000_000).toLocaleString()}
-                        </td>
-                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-600">
-                          {r.destination_address || r.user_id || "N/A"}
-                        </td>
-                        <td className="px-4 py-2 text-slate-600">
-                          {r.attempt_count}
-                        </td>
-                        <td className="break-all px-4 py-2 font-mono text-xs text-slate-500">
-                          {r.tx_hash ? `${r.tx_hash.slice(0, 16)}…` : "Pending"}
-                        </td>
-                      </tr>
-                    ))}
+                    {rows.map((r, index) => {
+                      const failed = r.status.toLowerCase() === "failed";
+                      const busy = retryingIndex === index;
+                      return (
+                        <tr key={r.id}>
+                          <td className="px-4 py-2">
+                            <StatusBadge status={r.status} />
+                          </td>
+                          <td className="px-4 py-2 font-medium">
+                            {(r.amount / 1_000_000).toLocaleString()}
+                          </td>
+                          <td className="break-all px-4 py-2 font-mono text-xs text-slate-600">
+                            {r.destination_address || r.user_id || "N/A"}
+                          </td>
+                          <td className="px-4 py-2 text-slate-600">
+                            {r.attempt_count}
+                          </td>
+                          <td className="break-all px-4 py-2 font-mono text-xs text-slate-500">
+                            {r.tx_hash ? `${r.tx_hash.slice(0, 16)}…` : "Pending"}
+                          </td>
+                          <td className="px-4 py-2">
+                            {failed && (
+                              <button
+                                type="button"
+                                onClick={() => handleRetry(index)}
+                                disabled={busy}
+                                aria-label={`Retry payout item ${index}`}
+                                className="inline-flex items-center gap-1.5 rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <RefreshCw
+                                  size={12}
+                                  className={busy ? "animate-spin" : ""}
+                                />
+                                {busy ? "Retrying…" : "Retry"}
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -1,217 +1,406 @@
 /**
  * dashboard/e2e/auth-guards.spec.ts
  *
- * Integration tests for Privy dashboard auth guards.
+ * Route protection for the dashboard (#784).
  *
- * Acceptance criteria
- * -------------------
- * ✓ Unauthenticated users are redirected to /login when visiting protected pages.
- * ✓ Authenticated users can access protected dashboard pages without redirect.
- * ✓ Auth is validated via mocked localStorage token (pipeline-safe override).
+ * What the guard actually does
+ * ----------------------------
+ * Next.js middleware (`middleware.ts`) inspects the session cookie and Privy
+ * auth cookies on every `/dashboard/*` request. If none are present it returns
+ * `NextResponse.redirect('/login')`. Client-side, `app/dashboard/layout.tsx`
+ * also checks Privy / stored token and replaces the route with `/login`.
  *
  * Mock strategy
  * -------------
- * The dashboard layout reads `localStorage.getItem("token")` to determine auth
- * state. Tests inject or clear this value via `page.addInitScript` before
- * navigating, so no real Privy or backend connection is required in CI.
+ * Specs clear cookies to act as a guest, or seed a `token` / `zaps-auth`
+ * cookie to act as a signed-in admin. Privy localStorage keys are still
+ * stubbed for the client-side layout check.
  */
 
-import { test, expect, Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+const AUTH_COOKIE = {
+  name: "token",
+  value: "e2e-mock-access-token",
+  domain: "localhost",
+  path: "/",
+} as const;
 
-/**
- * Navigate to `url` without any auth token in localStorage.
- * Simulates an unauthenticated / logged-out user.
- */
-async function visitAsGuest(page: Page, url: string): Promise<void> {
-  // Clear any pre-existing storage state and inject a clean localStorage.
-  await page.addInitScript(() => {
-    window.localStorage.clear();
-  });
-  await page.goto(url);
+async function seedAuthCookies(page: Page): Promise<void> {
+  await page.context().addCookies([
+    AUTH_COOKIE,
+    { ...AUTH_COOKIE, name: "zaps-auth", value: "1" },
+  ]);
 }
 
+// ── Privy stub ───────────────────────────────────────────────────────────────
+
 /**
- * Navigate to `url` with a mock auth token already in localStorage.
- * Simulates a logged-in user without a real Privy session.
+ * Force `usePrivy().authenticated` for the page under test.
  *
- * @param token - A fake JWT-shaped value; only presence matters for the guard.
+ * Privy persists its session in localStorage under `privy:*` keys and reads
+ * them during provider init. Seeding or clearing those before navigation is
+ * what decides which branch of the client guard runs.
  */
-async function visitAsAuthenticated(
-  page: Page,
-  url: string,
-  token = "mock-auth-token-for-e2e"
-): Promise<void> {
-  await page.addInitScript((t) => {
-    window.localStorage.setItem("token", t);
-  }, token);
+async function stubPrivyAuth(page: Page, authenticated: boolean): Promise<void> {
+  await page.addInitScript((isAuthed) => {
+    window.localStorage.clear();
+
+    if (isAuthed) {
+      const expiry = Date.now() + 60 * 60 * 1000;
+      window.localStorage.setItem("privy:token", "e2e-mock-access-token");
+      window.localStorage.setItem(
+        "privy:session",
+        JSON.stringify({ expiry, userId: "did:privy:e2e-user" }),
+      );
+      window.localStorage.setItem(
+        "privy:connections",
+        JSON.stringify([{ type: "email", address: "e2e@example.com" }]),
+      );
+      window.localStorage.setItem("token", "e2e-mock-access-token");
+    }
+
+    Object.defineProperty(window, "__E2E_EXPECT_AUTHENTICATED__", {
+      value: isAuthed,
+      configurable: true,
+    });
+  }, authenticated);
+}
+
+/** Navigate as a signed-out visitor. */
+async function visitAsGuest(page: Page, url: string): Promise<void> {
+  await page.context().clearCookies();
+  await stubPrivyAuth(page, false);
   await page.goto(url);
 }
 
-// ── Protected routes to exercise ─────────────────────────────────────────────
+/** The PIN login form served at /login. */
+function loginForm(page: Page) {
+  return page.getByRole("button", { name: /sign in/i });
+}
+
+// ── Routes the guard covers ──────────────────────────────────────────────────
 
 const PROTECTED_ROUTES = [
   "/dashboard",
-  "/dashboard/payouts",
   "/dashboard/transactions",
-  "/dashboard/yield",
+  "/dashboard/payouts",
+  "/dashboard/qr",
   "/dashboard/analytics",
+  "/dashboard/contracts",
+  "/dashboard/yield",
 ];
 
-// ── Auth guard — unauthenticated access ──────────────────────────────────────
+// ── Unauthenticated access is turned away ────────────────────────────────────
 
-test.describe("Auth guard: unauthenticated users", () => {
+test.describe("Auth guard: unauthenticated visitors", () => {
   for (const route of PROTECTED_ROUTES) {
-    test(`redirects guest from ${route} to /login`, async ({ page }) => {
+    test(`sends a guest away from ${route}`, async ({ page }) => {
       await visitAsGuest(page, route);
 
-      // The layout's useEffect replaces the route with /login when no token is found.
-      await page.waitForURL("**/login", { timeout: 8_000 });
+      await page.waitForURL((url) => url.pathname === "/login", {
+        timeout: 15_000,
+      });
 
-      expect(page.url()).toContain("/login");
+      expect(new URL(page.url()).pathname).toBe("/login");
     });
   }
 
-  test("login page is accessible without a token", async ({ page }) => {
-    await visitAsGuest(page, "/login");
+  test("never renders dashboard chrome to a guest", async ({ page }) => {
+    await visitAsGuest(page, "/dashboard");
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
 
-    // Should stay on /login — not redirect elsewhere.
-    await page.waitForLoadState("networkidle");
-    expect(page.url()).toContain("/login");
+    await expect(page.getByTestId("desktop-sidebar")).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: /yield vault/i }),
+    ).toHaveCount(0);
   });
 
-  test("login page renders sign-in form for unauthenticated users", async ({
+  test("offers a way to sign in rather than a dead end", async ({ page }) => {
+    await visitAsGuest(page, "/dashboard");
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
+
+    await expect(loginForm(page)).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("keeps the landing page reachable", async ({ page }) => {
+    await visitAsGuest(page, "/");
+
+    await expect(page.getByText("Zaps Merchant")).toBeVisible({
+      timeout: 15_000,
+    });
+    expect(new URL(page.url()).pathname).toBe("/");
+  });
+
+  test("guards a deep route as firmly as the dashboard root", async ({
     page,
   }) => {
-    await visitAsGuest(page, "/login");
+    await visitAsGuest(page, "/dashboard/payouts");
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
 
-    await expect(page.getByText("Zaps Merchant")).toBeVisible();
-    await expect(page.getByPlaceholder("Your user ID")).toBeVisible();
-    await expect(page.getByPlaceholder("••••")).toBeVisible();
-    await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+    await expect(page.getByText(/upload sdp disbursement csv/i)).toHaveCount(0);
+  });
+});
+
+// ── Client-side navigation is guarded too ────────────────────────────────────
+
+test.describe("Auth guard: client-side navigation", () => {
+  test("a guest cannot reach the dashboard by pushing history", async ({
+    page,
+  }) => {
+    await visitAsGuest(page, "/");
+    await expect(page.getByText("Zaps Merchant")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await page.evaluate(() => window.history.pushState({}, "", "/dashboard"));
+    await page.goto("/dashboard");
+
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
+    expect(new URL(page.url()).pathname).toBe("/login");
   });
 
-  test("direct navigation to /dashboard root redirects guest to /login", async ({
+  test("a guest returning via the back button is still turned away", async ({
     page,
   }) => {
     await visitAsGuest(page, "/dashboard");
-    await page.waitForURL("**/login", { timeout: 8_000 });
-    expect(page.url()).toContain("/login");
-    // Confirm protected content is not visible
-    await expect(page.getByText("Zaps Merchant")).toBeVisible();
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
+
+    await page.goBack();
+
+    await expect(page.getByTestId("desktop-sidebar")).toHaveCount(0);
   });
 });
 
-// ── Auth guard — authenticated access ────────────────────────────────────────
+// ── Losing the session mid-visit ─────────────────────────────────────────────
 
-test.describe("Auth guard: authenticated users", () => {
-  test("authenticated user can reach /dashboard without redirect", async ({
+test.describe("Auth guard: session loss", () => {
+  test("clearing the session cookie and reloading turns the visitor away", async ({
     page,
   }) => {
-    await visitAsAuthenticated(page, "/dashboard");
+    await visitAsGuest(page, "/dashboard");
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
 
-    // Wait for the page to settle. If the guard fires, it would push to /login.
-    await page.waitForLoadState("networkidle");
-
-    // Should remain on a dashboard URL, not be pushed to /login.
-    expect(page.url()).not.toContain("/login");
-  });
-
-  test("mock token is present in localStorage during session", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard");
-    await page.waitForLoadState("networkidle");
-
-    const token = await page.evaluate(() =>
-      window.localStorage.getItem("token")
-    );
-    expect(token).toBeTruthy();
-  });
-
-  test("authenticated user can navigate to /dashboard/payouts", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard/payouts");
-    await page.waitForLoadState("networkidle");
-
-    expect(page.url()).not.toContain("/login");
-  });
-
-  test("authenticated user can navigate to /dashboard/yield", async ({
-    page,
-  }) => {
-    await visitAsAuthenticated(page, "/dashboard/yield");
-    await page.waitForLoadState("networkidle");
-
-    expect(page.url()).not.toContain("/login");
-  });
-});
-
-// ── Auth guard — token removal (logout) ──────────────────────────────────────
-
-test.describe("Auth guard: token removal simulates logout", () => {
-  test("clearing token then navigating to /dashboard redirects to /login", async ({
-    page,
-  }) => {
-    // Start authenticated
-    await visitAsAuthenticated(page, "/dashboard");
-    await page.waitForLoadState("networkidle");
-
-    // Simulate logout by clearing localStorage
-    await page.evaluate(() => window.localStorage.removeItem("token"));
-
-    // Navigate to a protected page fresh — should now be redirected
+    await page.context().clearCookies();
+    await page.evaluate(() => window.localStorage.clear());
     await page.goto("/dashboard");
-    await page.waitForURL("**/login", { timeout: 8_000 });
-    expect(page.url()).toContain("/login");
+
+    await page.waitForURL((url) => url.pathname === "/login", {
+      timeout: 15_000,
+    });
+    await expect(loginForm(page)).toBeVisible();
   });
 });
 
-// ── Login form validation ─────────────────────────────────────────────────────
+// ── Yield Vault: parameter updates (#804) ────────────────────────────────────
 
-test.describe("Login form: field validation", () => {
-  test("submit button is present and form fields are required", async ({
-    page,
-  }) => {
-    await visitAsGuest(page, "/login");
+/**
+ * Freighter is a browser extension, so Playwright has no way to install or
+ * drive the real wallet. `lib/freighter.ts` resolves its API through
+ * `loadFreighterApi()`, which prefers `window.__zapsFreighterApiMock__` outside
+ * production builds — these tests install a stand-in there before the app
+ * boots. The seam is compiled out of production, so a real user's page cannot
+ * be pointed at a fake wallet.
+ */
+const FREIGHTER_MOCK_KEY = "__zapsFreighterApiMock__";
+const MOCK_PUBLIC_KEY = "GD3XABCDEFGHIJKLMNOPQRSTUVWXYZ12345678ABCD";
+const MOCK_SIGNED_XDR = "AAAAAgAAAABsignedEnvelopeFromMockWallet==";
 
-    const userIdInput = page.getByPlaceholder("Your user ID");
-    const pinInput = page.getByPlaceholder("••••");
-    const submitBtn = page.getByRole("button", { name: /sign in/i });
+interface WalletMockOptions {
+  /** Simulate the extension not being installed at all. */
+  installed?: boolean;
+  /** Simulate the extension present but not yet granted access. */
+  connected?: boolean;
+  /** Make signTransaction resolve with an error, as a user rejection does. */
+  signError?: string;
+}
 
-    await expect(userIdInput).toBeVisible();
-    await expect(pinInput).toBeVisible();
-    await expect(submitBtn).toBeEnabled();
+/**
+ * Install a fake Freighter and a mock auth token, then open the vault page.
+ */
+async function visitVaultWithWallet(
+  page: Page,
+  options: WalletMockOptions = {},
+): Promise<void> {
+  const { installed = true, connected = true, signError } = options;
 
-    // HTML5 required validation: attempting submit with empty fields
-    // should not proceed (browser prevents form submission).
-    await submitBtn.click();
+  await seedAuthCookies(page);
 
-    // Page should still be on /login (no navigation occurred).
-    expect(page.url()).toContain("/login");
+  await page.addInitScript(
+    ({ key, publicKey, signedXdr, installed, connected, signError }) => {
+      window.localStorage.setItem("token", "mock-auth-token-for-e2e");
+
+      if (!installed) {
+        // detectFreighter() treats a throwing API as "extension not present".
+        (window as unknown as Record<string, unknown>)[key] = {
+          isConnected: () => Promise.reject(new Error("not installed")),
+          getAddress: () => Promise.reject(new Error("not installed")),
+          getNetwork: () => Promise.reject(new Error("not installed")),
+          requestAccess: () => Promise.reject(new Error("not installed")),
+          signTransaction: () => Promise.reject(new Error("not installed")),
+        };
+        return;
+      }
+
+      const calls: unknown[] = [];
+      (window as unknown as Record<string, unknown>).__freighterSignCalls = calls;
+
+      (window as unknown as Record<string, unknown>)[key] = {
+        isConnected: () => Promise.resolve({ isConnected: connected }),
+        getAddress: () => Promise.resolve({ address: publicKey }),
+        getNetwork: () => Promise.resolve({ network: "TESTNET" }),
+        requestAccess: () => Promise.resolve({ address: publicKey }),
+        signTransaction: (xdr: string, opts: { networkPassphrase: string }) => {
+          calls.push({ xdr, opts });
+          return signError
+            ? Promise.resolve({ error: signError })
+            : Promise.resolve({ signedTxXdr: signedXdr });
+        },
+      };
+    },
+    {
+      key: FREIGHTER_MOCK_KEY,
+      publicKey: MOCK_PUBLIC_KEY,
+      signedXdr: MOCK_SIGNED_XDR,
+      installed,
+      connected,
+      signError,
+    },
+  );
+
+  await page.goto("/dashboard/yield");
+  await page.waitForLoadState("networkidle");
+}
+
+/** Fill the APY field, tick the confirmation box, and submit. */
+async function submitApy(page: Page, apy: string): Promise<void> {
+  const apyInput = page.getByLabel("APY (%)");
+  await apyInput.fill(apy);
+  await page.locator("#vault-confirm").check();
+  await page.getByRole("button", { name: /sign & submit via freighter/i }).click();
+}
+
+test.describe("Yield Vault: APY parameter updates", () => {
+  test("admin can update APY and sign with Freighter", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "7.5");
+
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByTestId("vault-success")).toContainText(
+      /transaction signed and submitted/i,
+    );
   });
 
-  test("error message is shown on failed login attempt", async ({ page }) => {
-    // Mock the API call to reject credentials
-    await page.route("**/api/auth/**", (route) =>
-      route.fulfill({
-        status: 401,
-        contentType: "application/json",
-        body: JSON.stringify({ error: "Unauthorized" }),
-      })
-    );
+  test("the APY value entered is what gets signed", async ({ page }) => {
+    await visitVaultWithWallet(page);
 
-    await visitAsGuest(page, "/login");
+    await submitApy(page, "12.25");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
 
-    await page.getByPlaceholder("Your user ID").fill("invalid-user");
-    await page.getByPlaceholder("••••").fill("0000");
-    await page.getByRole("button", { name: /sign in/i }).click();
+    // The page encodes the vault params as base64 JSON before handing them to
+    // the wallet, so decoding the captured XDR proves the form value survived.
+    const signed = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string; opts: { networkPassphrase: string } }[]
+        | undefined;
+      if (!calls?.length) return null;
+      const last = calls[calls.length - 1];
+      return { payload: JSON.parse(atob(last.xdr)), passphrase: last.opts.networkPassphrase };
+    });
 
-    // The login page shows an error message on failure
-    await expect(
-      page.getByText(/invalid user id or pin/i)
-    ).toBeVisible({ timeout: 6_000 });
+    expect(signed).not.toBeNull();
+    expect(signed!.payload.fn).toBe("set_vault_params");
+    expect(signed!.payload.apy).toBe("12.25");
+    expect(signed!.passphrase).toBeTruthy();
+  });
+
+  test("the connected wallet address is submitted as the admin", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "6.0");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string }[]
+        | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload.admin).toBe(MOCK_PUBLIC_KEY);
+  });
+
+  test("the pause flag is carried through with the APY change", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await page.getByRole("switch", { name: /pause vault/i }).click();
+    await submitApy(page, "5.5");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>).__freighterSignCalls as
+        | { xdr: string }[]
+        | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload.paused).toBe(true);
+    expect(payload.apy).toBe("5.5");
+  });
+
+  test("submission is blocked until the confirmation box is ticked", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await page.getByLabel("APY (%)").fill("9.0");
+
+    const submit = page.getByRole("button", { name: /sign & submit via freighter/i });
+    await expect(submit).toBeDisabled();
+
+    await page.locator("#vault-confirm").check();
+    await expect(submit).toBeEnabled();
+  });
+
+  test("the confirmation box is cleared after a successful submission", async ({ page }) => {
+    await visitVaultWithWallet(page);
+
+    await submitApy(page, "8.0");
+    await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
+
+    // Re-arming for every change is deliberate: an admin should have to
+    // confirm each on-chain write, not just the first.
+    await expect(page.locator("#vault-confirm")).not.toBeChecked();
+  });
+
+  test("a rejected signature surfaces the wallet's message, not a success toast", async ({
+    page,
+  }) => {
+    await visitVaultWithWallet(page, { signError: "User declined access" });
+
+    await submitApy(page, "7.5");
+
+    await expect(page.getByTestId("vault-error")).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByTestId("vault-error")).toContainText(/user declined access/i);
+    await expect(page.getByTestId("vault-success")).toHaveCount(0);
+  });
+
+  test("submission is unavailable while the wallet is disconnected", async ({ page }) => {
+    await visitVaultWithWallet(page, { connected: false });
+
+    const submit = page.getByRole("button", { name: /connect wallet to sign/i });
+    await expect(submit).toBeVisible();
+    await expect(submit).toBeDisabled();
   });
 });

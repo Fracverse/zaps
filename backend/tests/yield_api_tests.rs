@@ -100,6 +100,17 @@ fn post_req_json(path: &str, token: Option<&str>, payload: Value) -> Request<Bod
         .unwrap()
 }
 
+fn post_req_raw(path: &str, token: Option<&str>, raw_body: &str) -> Request<Body> {
+    let mut builder = Request::builder().method("POST").uri(path);
+    if let Some(t) = token {
+        builder = builder.header("Authorization", format!("Bearer {}", t));
+    }
+    builder
+        .header("content-type", "application/json")
+        .body(Body::from(raw_body.to_string()))
+        .unwrap()
+}
+
 // ── tests ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -657,3 +668,72 @@ async fn test_toggle_auto_requires_boolean_enabled_field() {
         .await
         .ok();
 }
+
+#[tokio::test]
+async fn test_yield_service_daily_snapshots() {
+    use zaps_backend::services::yield_service::YieldService;
+
+    let pool = test_pool().await;
+
+    // 1. Seed a test user
+    let run = Uuid::new_v4().to_string().replace('-', "")[..8].to_string();
+    let address = test_address("GVALIDSVC", &run);
+    let user_id = seed_user(&pool, &address).await;
+
+    // 2. Set up initial yield balance
+    sqlx::query(
+        r#"
+        INSERT INTO user_yield_balances (user_id, available_balance, earning_balance, last_yield_sync_at, updated_at)
+        VALUES ($1, 0, 100000000000, NOW() - INTERVAL '1 day', NOW())
+        ON CONFLICT (user_id) DO UPDATE 
+        SET earning_balance = 100000000000, updated_at = NOW()
+        "#,
+    )
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("Failed to set up earning balance");
+
+    // 3. Log a specific APY rate in rates history (e.g. 800 basis points / 8%)
+    sqlx::query(
+        r#"
+        INSERT INTO yield_rates_history (apy, created_at)
+        VALUES (800, NOW())
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to log test yield rate");
+
+    // 4. Run the daily snapshot service
+    let snapshot_count = YieldService::create_daily_snapshots(&pool)
+        .await
+        .expect("Failed to run yield daily snapshot service");
+
+    // At least our user should be snapshotted (maybe others too depending on database state)
+    assert!(snapshot_count >= 1);
+
+    // 5. Retrieve and verify the user's snapshot
+    let snapshots = YieldService::get_user_snapshots(&pool, user_id, 10, 0)
+        .await
+        .expect("Failed to retrieve user yield snapshots");
+
+    assert_eq!(snapshots.len(), 1);
+    let snapshot = &snapshots[0];
+    assert_eq!(snapshot.user_id, user_id);
+    assert_eq!(snapshot.earning_balance, 100000000000);
+    assert_eq!(snapshot.apy, 800);
+
+    // Expected daily interest: (100,000,000,000 * 800 * 86,400) / (10,000 * 31,536,000) = 21,921,080
+    // Let's verify it matches the database calculation
+    let expected_interest = (100000000000_i64 * 800 * 86400) / 315360000000_i64;
+    assert_eq!(snapshot.accrued_interest, expected_interest);
+
+    // Clean up
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .ok();
+}
+

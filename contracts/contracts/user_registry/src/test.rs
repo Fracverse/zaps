@@ -62,6 +62,25 @@ fn test_register_privy_did_success() {
     assert_eq!(client.get_wallet_for_did(&did), wallet);
 }
 
+/// Verify that successful DID registration is reflected in the ledger snapshot.
+#[test]
+fn test_register_privy_did_snapshot() {
+    let (env, client, signing_key) = setup();
+    let wallet = Address::generate(&env);
+    let did = String::from_str(&env, "did:privy:snapshot");
+    let signature = sign_did_link(&env, &signing_key, &did, &wallet);
+
+    client.register_privy_did(&did, &wallet, &signature);
+
+    let snapshot = env.snapshot();
+    let snapshot_str = snapshot.to_string();
+
+    // The persistent storage snapshot should include the registered DID.
+    assert!(snapshot_str.contains("did:privy:snapshot"));
+    // The mapping should be retrievable after the snapshot.
+    assert_eq!(client.get_wallet_for_did(&did), wallet);
+}
+
 /// Verify that a registration signed by a key other than the configured
 /// verifier is rejected before any mapping is created.
 #[test]
@@ -127,4 +146,104 @@ fn test_get_wallet_for_unregistered_did_fails() {
     let (env, client, _signing_key) = setup();
     let did = String::from_str(&env, "did:privy:ghost");
     client.get_wallet_for_did(&did);
+}
+
+// ── Issue #776: 2-step admin ownership transfer ─────────────────────────────
+
+/// Build a freshly initialized contract along with the old (current) admin and
+/// a distinct proposed successor admin.
+fn admin_setup() -> (Env, UserRegistryContractClient<'static>, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, UserRegistryContract);
+    let client = UserRegistryContractClient::new(&env, &contract_id);
+
+    let old_admin = Address::generate(&env);
+    client.initialize(&old_admin);
+
+    let new_admin = Address::generate(&env);
+
+    (env, client, old_admin, new_admin)
+}
+
+/// Read the currently stored contract admin directly from persistent storage.
+fn stored_admin(env: &Env, client: &UserRegistryContractClient<'static>) -> Address {
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::Admin)
+            .unwrap()
+    })
+}
+
+/// Proposing a successor must NOT move ownership: the old admin keeps the
+/// stored `DataKey::Admin` and still holds admin privileges until claim.
+#[test]
+fn test_2step_transfer_old_admin_keeps_ownership_until_claim() {
+    let (env, client, old_admin, new_admin) = admin_setup();
+
+    client.propose_admin(&old_admin, &new_admin);
+
+    // Ownership has not moved yet.
+    assert_eq!(stored_admin(&env, &client), old_admin);
+
+    // The old admin still holds privileges: an admin-only call succeeds.
+    client.set_privy_verifier(&old_admin, &BytesN::from_array(&env, &[7u8; 32]));
+}
+
+/// Claiming ownership moves `DataKey::Admin` to the proposed successor, who
+/// then holds admin privileges.
+#[test]
+fn test_2step_transfer_claim_admin_moves_ownership() {
+    let (env, client, old_admin, new_admin) = admin_setup();
+
+    client.propose_admin(&old_admin, &new_admin);
+    let claimed = client.try_claim_admin(&new_admin);
+    assert!(claimed.is_ok(), "proposed admin must be able to claim: {claimed:?}");
+
+    // Ownership moved to the successor.
+    assert_eq!(stored_admin(&env, &client), new_admin);
+
+    // The new admin now holds privileges: an admin-only call succeeds.
+    client.set_privy_verifier(&new_admin, &BytesN::from_array(&env, &[9u8; 32]));
+}
+
+/// Only the proposed successor may claim; any other caller is rejected.
+///
+/// Ignored on Soroban v20 plus this toolchain because contract panics are
+/// non-unwinding (they abort the test process instead of returning an error),
+/// the same reason the repo ignores its other panic/rejection tests. Run with
+/// `cargo test -- --ignored` once a panicking SDK/testutils is available.
+#[test]
+#[ignore]
+#[should_panic(expected = "only the proposed admin can claim")]
+fn test_claim_admin_rejects_unauthorized_caller() {
+    let (env, client, old_admin, new_admin) = admin_setup();
+    let evil = Address::generate(&env);
+
+    client.propose_admin(&old_admin, &new_admin);
+    // Neither an unrelated address nor the old admin can claim.
+    client.claim_admin(&evil);
+}
+
+/// Only the current admin may propose a successor.
+#[test]
+#[ignore]
+#[should_panic(expected = "only admin can propose new admin")]
+fn test_propose_admin_rejects_non_admin() {
+    let (env, client, _old_admin, _new_admin) = admin_setup();
+    let imposter = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    client.propose_admin(&imposter, &target);
+}
+
+/// Claiming with no active proposal panics.
+#[test]
+#[ignore]
+#[should_panic(expected = "no pending admin proposal")]
+fn test_claim_admin_without_proposal_fails() {
+    let (_env, client, _old_admin, new_admin) = admin_setup();
+    client.claim_admin(&new_admin);
 }
