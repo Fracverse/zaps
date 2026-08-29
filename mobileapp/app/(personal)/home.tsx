@@ -166,6 +166,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [notifPromptVisible, setNotifPromptVisible] = useState(false);
   const [notifRequesting, setNotifRequesting] = useState(false);
+  const [balanceMasked, setBalanceMasked] = useState(true);
+  const MASKED_BALANCE = "••••••";
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
@@ -651,6 +653,14 @@ export default function HomeScreen() {
       maximumFractionDigits: 2,
     })}`;
 
+  const toggleBalanceMask = () => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setBalanceMasked((prev) => !prev);
+  };
+
+  const displayBalance = (amount: string) =>
+    balanceMasked ? MASKED_BALANCE : amount;
+
   const monthlyEarnings = useMemo(() => {
     const baseTotal = MONTHLY_EARNINGS.reduce(
       (sum, item) => sum + item.amount,
@@ -823,47 +833,26 @@ export default function HomeScreen() {
         <View style={styles.balanceCard}>
           {/* Available Balance Section */}
           <View style={styles.balanceSection}>
-            <View style={styles.balanceHeaderRow}>
+            <View style={styles.balanceLabelRow}>
               <Text style={styles.balanceLabel}>Available Balance</Text>
-              {/* Currency display toggle: ₦ fiat equivalent <-> XLM tokens */}
-              <View style={styles.currencyToggle}>
-                <TouchableOpacity
-                  onPress={toggleCurrency}
-                  disabled={displayCurrency === "NGN"}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel="Show balance in Naira"
-                >
-                  <Text
-                    style={[
-                      styles.currencyToggleText,
-                      displayCurrency === "NGN" &&
-                        styles.currencyToggleTextActive,
-                    ]}
-                  >
-                    ₦
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={toggleCurrency}
-                  disabled={displayCurrency === "XLM"}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel="Show balance in XLM"
-                >
-                  <Text
-                    style={[
-                      styles.currencyToggleText,
-                      displayCurrency === "XLM" &&
-                        styles.currencyToggleTextActive,
-                    ]}
-                  >
-                    XLM
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                onPress={toggleBalanceMask}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  balanceMasked ? "Show balance" : "Hide balance"
+                }
+              >
+                <Ionicons
+                  name={balanceMasked ? "eye-outline" : "eye-off-outline"}
+                  size={20}
+                  color="#777"
+                />
+              </TouchableOpacity>
             </View>
-            <Text style={styles.balanceAmount}>{availableBalanceDisplay}</Text>
+            <Text style={styles.balanceAmount}>
+              {displayBalance(availableBalance)}
+            </Text>
           </View>
 
           {/* Earning Balance Section */}
@@ -873,7 +862,7 @@ export default function HomeScreen() {
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
             <Text style={styles.earningBalanceAmount}>
-              {totalYieldEarnedDisplay}
+              {displayBalance(totalYieldEarned)}
             </Text>
           </View>
 
@@ -1780,7 +1769,7 @@ const styles = StyleSheet.create({
   balanceSection: {
     marginBottom: 16,
   },
-  balanceHeaderRow: {
+  balanceLabelRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -1790,25 +1779,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
     color: "#777",
-  },
-  currencyToggle: {
-    flexDirection: "row",
-    backgroundColor: "#F5F5F5",
-    borderRadius: 18,
-    padding: 3,
-    gap: 2,
-  },
-  currencyToggleText: {
-    fontSize: 12,
-    fontFamily: "Outfit_600SemiBold",
-    color: "#999",
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-  },
-  currencyToggleTextActive: {
-    color: COLORS.secondary,
-    backgroundColor: COLORS.primary,
   },
   balanceAmount: {
     fontSize: 34,
