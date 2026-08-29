@@ -30,7 +30,7 @@
     "expo": "~54.0.32",
     "expo-camera": "~17.0.10",
     "expo-clipboard": "~8.0.8",
-    "expo-contacts": "~14.1.4",
+    "expo-contacts": "~14.2.6",
     "expo-document-picker": "~57.0.1",
     "expo-constants": "^18.0.13",
     "expo-file-system": "~19.0.22",
@@ -82,7 +82,7 @@
     "jest-expo": "~54.0.16",
     "prettier": "^3.8.1",
     "react-native-svg-transformer": "^1.5.3",
-    "react-test-renderer": "^19.1.0",
+    "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"
   },
   "private": true,
