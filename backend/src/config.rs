@@ -14,6 +14,12 @@ pub struct Config {
     /// Comma-separated list of frontend origins allowed to call the API
     /// cross-origin. Used to build the Tower CORS middleware whitelist.
     pub cors_allowed_origins: Vec<String>,
+    /// S3 bucket for avatar uploads.
+    pub aws_s3_bucket: Option<String>,
+    /// AWS region for S3 (defaults to "us-east-1").
+    pub aws_s3_region: String,
+    /// Public base URL prefix for avatar objects (e.g. CloudFront or bucket URL).
+    pub aws_s3_public_url_base: Option<String>,
 }
 
 impl Config {
@@ -64,6 +70,14 @@ impl Config {
                     }
                 }
             },
+            aws_s3_bucket: std::env::var("AWS_S3_BUCKET")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            aws_s3_region: std::env::var("AWS_S3_REGION")
+                .unwrap_or_else(|_| "us-east-1".into()),
+            aws_s3_public_url_base: std::env::var("AWS_S3_PUBLIC_URL_BASE")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
         }
     }
 }
