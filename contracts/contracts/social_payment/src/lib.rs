@@ -4,6 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
     Bytes, BytesN, Env, String, Symbol, Vec,
 };
+use soroban_sdk::xdr::ToXdr;
 
 const ADMIN_KEY: Symbol = symbol_short!("admin");
 const TREAS_KEY: Symbol = symbol_short!("treasury");
@@ -481,7 +482,7 @@ impl SocialPaymentContract {
     ///   - Emits MassPayoutExecuted with sender, batch_size, total_volume, fee_charged
     ///     so off-chain indexers can reconcile bulk payouts without scanning individual
     ///     BatchPayoutItem events.
-    /// SC-039 / Issues #529–#532, #752: Batch payout to multiple recipients.
+    /// SC-039 / Issues #529–#532, #752, #774: Batch payout to multiple recipients.
     ///
     /// Returns `Err(Error::BatchTooLarge)` when `payouts.len() > MAX_BATCH_SIZE`
     /// so callers receive a typed, inspectable error instead of an opaque panic.
@@ -534,22 +535,48 @@ impl SocialPaymentContract {
             "insufficient balance for batch payout"
         );
 
-        // #530 — deduct fee to treasury before processing recipients
-        if batch_fee > 0 {
+        // #774 — Process payouts, skipping any that exceed remaining balance.
+        // Reserve the upper-bound fee so we never over-transfer.
+        let mut remaining_balance: i128 = sender_balance - batch_fee;
+        let mut successful_volume: i128 = 0;
+        let mut skipped_volume: i128 = 0;
+
+        for payout in payouts.iter() {
+            if remaining_balance >= payout.amount {
+                token_client.transfer(&sender, &payout.recipient, &payout.amount);
+                successful_volume += payout.amount;
+                remaining_balance -= payout.amount;
+            } else {
+                skipped_volume += payout.amount;
+            }
+            env.events().publish(
+                (Symbol::new(&env, "BatchPayoutItem"),),
+                (sender.clone(), payout.recipient.clone(), payout.amount),
+            );
+        }
+
+        // #530 — charge fee on successful volume only
+        let actual_fee = if successful_volume > 0 {
+            let f = successful_volume * (fee_coef as i128) / 10000;
+            if f == 0 { 1 } else { f }
+        } else {
+            0
+        };
+
+        if actual_fee > 0 {
             let treasury: Address = env
                 .storage()
                 .instance()
                 .get(&TREAS_KEY)
                 .expect("treasury not initialized");
-            token_client.transfer(&sender, &treasury, &batch_fee);
+            token_client.transfer(&sender, &treasury, &actual_fee);
         }
 
-        // Transfer to each recipient and emit per-item events
-        for payout in payouts.iter() {
-            token_client.transfer(&sender, &payout.recipient, &payout.amount);
+        // #774 — report skipped volume for off-chain reconciliation
+        if skipped_volume > 0 {
             env.events().publish(
-                (Symbol::new(&env, "BatchPayoutItem"),),
-                (sender.clone(), payout.recipient.clone(), payout.amount),
+                (Symbol::new(&env, "BatchPayoutRefunded"),),
+                (sender.clone(), skipped_volume),
             );
         }
 
@@ -560,7 +587,7 @@ impl SocialPaymentContract {
                 sender,
                 batch_size,
                 total_volume,
-                fee_charged: batch_fee,
+                fee_charged: actual_fee,
             },
         );
 
@@ -1394,22 +1421,55 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn test_batch_payout_fails_on_insufficient_balance() {
-        let (env, client, admin, _treasury, sender, receiver1) = setup();
-        let token = mint_token(&env, &admin, &sender, 1_000);
+    fn test_batch_payout_defers_fee_to_successful_volume() {
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let receiver2 = Address::generate(&env);
+        // total_volume = 5_000, fee at 10 bps = 5
+        let token = mint_token(&env, &admin, &sender, 5_005);
         client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
 
         let payouts = vec![
             &env,
             PayoutItem {
                 recipient: receiver1.clone(),
+                amount: 3_000,
+            },
+            PayoutItem {
+                recipient: receiver2.clone(),
                 amount: 2_000,
             },
         ];
 
-        let res = client.try_batch_payout(&sender, &payouts);
-        assert!(res.is_err());
+        client.batch_payout(&sender, &payouts);
+
+        assert_eq!(token_client.balance(&receiver1), 3_000);
+        assert_eq!(token_client.balance(&receiver2), 2_000);
+        assert_eq!(token_client.balance(&treasury), 5);
+        assert_eq!(token_client.balance(&sender), 0);
+    }
+
+    #[test]
+    fn test_batch_payout_minimum_fee_applied() {
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        // total_volume = 1_000, fee = max(1, 1000*10/10000) = max(1, 1) = 1
+        let token = mint_token(&env, &admin, &sender, 1_001);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 1_000,
+            },
+        ];
+
+        client.batch_payout(&sender, &payouts);
+
+        assert_eq!(token_client.balance(&receiver1), 1_000);
+        assert_eq!(token_client.balance(&treasury), 1);
+        assert_eq!(token_client.balance(&sender), 0);
     }
 
     #[test]
