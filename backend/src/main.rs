@@ -2,7 +2,7 @@
 
 use axum::{
     extract::State,
-    http::{Request, StatusCode},
+    http::{header, header::HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
+use tower_http::{classify::ServerErrorsFailureClass, cors::CorsLayer, trace::TraceLayer};
 use tracing::Span;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -159,6 +159,36 @@ async fn rate_limiter_middleware(
     }
 }
 
+/// Build a broad-but-whitelisted CORS layer from the configured origins.
+///
+/// Requests originating from domains not in `origins` still reach the router,
+/// but the response carries no CORS headers, so browsers refuse to read it.
+/// Unparseable origins are logged and skipped so a bad value never panics
+/// the server at startup.
+fn cors_layer(origins: &[String]) -> CorsLayer {
+    let mut allowed = Vec::with_capacity(origins.len());
+    for origin in origins {
+        match HeaderValue::from_str(origin) {
+            Ok(value) => allowed.push(value),
+            Err(e) => tracing::warn!("Ignoring invalid CORS origin {origin:?}: {e}"),
+        }
+    }
+
+    CorsLayer::new()
+        .allow_origin(allowed)
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::OPTIONS,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([header::ACCEPT, header::AUTHORIZATION, header::CONTENT_TYPE])
+        .allow_credentials(true)
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize logging
@@ -273,7 +303,6 @@ async fn main() {
         )
         .nest("/admin", api::admin_routes(pool.clone()));
 
-
     // #561 — routes that require a valid Privy JWT are wrapped with the auth
     // middleware so the token is validated (and cached) before any handler runs.
     let auth_required_routes = api::protected_routes(
@@ -342,7 +371,8 @@ async fn main() {
                         );
                     },
                 ),
-        );
+        )
+        .layer(cors_layer(&config.cors_allowed_origins));
 
     // #726 — Track background worker tasks so they can be allowed to finish
     // their current batch item before the process exits on shutdown.
@@ -368,6 +398,13 @@ async fn main() {
     let sweep_config = services::sweep_worker::SweepWorkerConfig::from_env();
     worker_handles.push(tokio::spawn(async move {
         services::sweep_worker::run(sweep_pool, sweep_config).await;
+    }));
+
+    // #737: Alert the operations channel when a user's auto-sweep keeps failing.
+    let sweep_alert_pool = pool.clone();
+    let sweep_alert_config = services::sweep_scheduler::SweepSchedulerConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::sweep_scheduler::run(sweep_alert_pool, sweep_alert_config).await;
     }));
 
     // BE-547: Hourly APY checkpoints into yield_rates_history, so the series
@@ -417,9 +454,7 @@ async fn app_config() -> Json<AppConfigResponse> {
         ios_store_url: std::env::var("IOS_STORE_URL")
             .unwrap_or_else(|_| "https://apps.apple.com/app/zaps".into()),
         android_store_url: std::env::var("ANDROID_STORE_URL")
-            .unwrap_or_else(|_| {
-                "https://play.google.com/store/apps/details?id=app.zaps".into()
-            }),
+            .unwrap_or_else(|_| "https://play.google.com/store/apps/details?id=app.zaps".into()),
     })
 }
 
@@ -434,10 +469,8 @@ async fn health_check(State(state): State<HealthState>) -> impl IntoResponse {
         probe_redis(state.redis_url.as_deref()),
     );
 
-    let all_ok = db.status == "ok"
-        && yield_db.status == "ok"
-        && rpc.status == "ok"
-        && redis.status == "ok";
+    let all_ok =
+        db.status == "ok" && yield_db.status == "ok" && rpc.status == "ok" && redis.status == "ok";
 
     let body = HealthResponse {
         status: if all_ok { "ok" } else { "degraded" },
@@ -657,5 +690,124 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
             latency_ms,
             error: Some(e),
         },
+    }
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::cors_layer;
+    use axum::{
+        body::Body,
+        http::{header, HeaderValue, Method, Request, StatusCode},
+        routing::get,
+        Router,
+    };
+    use tower::ServiceExt;
+    use tower_http::cors::CorsLayer;
+
+    const ALLOWED: &str = "http://localhost:3000";
+    const DENIED: &str = "http://evil.example.com";
+
+    fn router(layer: CorsLayer) -> Router {
+        Router::new()
+            .route("/", get(|| async { "pong" }))
+            .layer(layer)
+    }
+
+    fn simple_get(origin: &str) -> Request<Body> {
+        Request::builder()
+            .method(Method::GET)
+            .uri("/")
+            .header(header::ORIGIN, origin)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn preflight(origin: &str, requested_method: &str) -> Request<Body> {
+        Request::builder()
+            .method(Method::OPTIONS)
+            .uri("/")
+            .header(header::ORIGIN, origin)
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, requested_method)
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization, content-type",
+            )
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn allow_origin_header(response: &axum::response::Response) -> Option<HeaderValue> {
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .cloned()
+    }
+
+    #[tokio::test]
+    async fn whitelisted_origin_is_allowed() {
+        let layer = cors_layer(&[ALLOWED.to_string()]);
+        let response = router(layer).oneshot(simple_get(ALLOWED)).await.unwrap();
+
+        assert_eq!(
+            allow_origin_header(&response),
+            Some(HeaderValue::from_static(ALLOWED))
+        );
+    }
+
+    #[tokio::test]
+    async fn non_whitelisted_origin_gets_no_cors_headers() {
+        let layer = cors_layer(&[ALLOWED.to_string()]);
+        let response = router(layer).oneshot(simple_get(DENIED)).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(allow_origin_header(&response), None);
+    }
+
+    #[tokio::test]
+    async fn preflight_from_whitelisted_origin_is_allowed() {
+        let layer = cors_layer(&[ALLOWED.to_string()]);
+        let response = router(layer)
+            .oneshot(preflight(ALLOWED, "GET"))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            allow_origin_header(&response),
+            Some(HeaderValue::from_static(ALLOWED))
+        );
+        let allow_methods = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert!(allow_methods.contains("GET"));
+        assert!(allow_methods.contains("POST"));
+    }
+
+    #[tokio::test]
+    async fn preflight_from_denied_origin_is_rejected() {
+        let layer = cors_layer(&[ALLOWED.to_string()]);
+        let response = router(layer)
+            .oneshot(preflight(DENIED, "GET"))
+            .await
+            .unwrap();
+
+        assert_eq!(allow_origin_header(&response), None);
+    }
+
+    #[tokio::test]
+    async fn invalid_origin_entries_are_skipped() {
+        let layer = cors_layer(&[
+            "http://localhost:3000".to_string(),
+            "not a header".to_string(),
+        ]);
+        let response = router(layer).oneshot(simple_get(ALLOWED)).await.unwrap();
+
+        assert_eq!(
+            allow_origin_header(&response),
+            Some(HeaderValue::from_static(ALLOWED))
+        );
     }
 }

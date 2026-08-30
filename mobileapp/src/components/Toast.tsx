@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+} from "react";
 import {
   View,
   Text,
@@ -196,6 +202,78 @@ export const ToastManager: React.FC = () => {
         <Toast key={id} {...props} onHide={() => hideToast(id)} />
       ))}
     </View>
+  );
+};
+
+// ── Context-based toast API (Issue #712) ──────────────────────────────────────
+
+type ToastContextValue = {
+  showToast: (message: string, type: ToastType) => void;
+};
+
+const ToastContext = createContext<ToastContextValue | undefined>(undefined);
+
+export function useToast(): ToastContextValue {
+  const context = useContext(ToastContext);
+  if (!context) {
+    throw new Error("useToast must be used within ToastProvider");
+  }
+  return context;
+}
+
+export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [toasts, setToasts] = useState<{ id: string; props: ToastProps }[]>([]);
+
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showToast = useCallback((message: string, type: ToastType) => {
+    const id = Date.now().toString();
+    setToasts((prev) => [...prev, { id, props: { message, type } }]);
+  }, []);
+
+  // Bridge to global.toast for existing consumers
+  useEffect(() => {
+    (global as any).toast = {
+      show: (props: Omit<ToastProps, "onHide">) => {
+        const id = Date.now().toString();
+        setToasts((prev) => [...prev, { id, props }]);
+      },
+      success: (message: string, action?: ToastProps["action"]) => {
+        const id = Date.now().toString();
+        setToasts((prev) => [...prev, { id, props: { message, type: "success", action } }]);
+      },
+      error: (message: string, action?: ToastProps["action"]) => {
+        const id = Date.now().toString();
+        setToasts((prev) => [...prev, { id, props: { message, type: "error", action } }]);
+      },
+      warning: (message: string, action?: ToastProps["action"]) => {
+        const id = Date.now().toString();
+        setToasts((prev) => [...prev, { id, props: { message, type: "warning", action } }]);
+      },
+      info: (message: string, action?: ToastProps["action"]) => {
+        const id = Date.now().toString();
+        setToasts((prev) => [...prev, { id, props: { message, type: "info", action } }]);
+      },
+    };
+
+    return () => {
+      delete (global as any).toast;
+    };
+  }, []);
+
+  return (
+    <ToastContext.Provider value={{ showToast }}>
+      {children}
+      <View style={styles.toastContainer}>
+        {toasts.map(({ id, props }) => (
+          <Toast key={id} {...props} onHide={() => removeToast(id)} />
+        ))}
+      </View>
+    </ToastContext.Provider>
   );
 };
 

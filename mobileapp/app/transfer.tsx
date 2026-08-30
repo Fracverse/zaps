@@ -42,6 +42,7 @@ import {
   StellarWalletState,
 } from "../src/services/stellarWallet";
 import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+import { isFederatedAddress } from "../src/utils/sep0007";
 // #580 — Biometric Verification Overlay
 import { authenticateWithBiometrics } from "./biometric";
 import BatchPayoutItemRow from "../src/components/BatchPayoutItemRow";
@@ -320,6 +321,12 @@ function TransferScreen() {
   type UsernameStatus = "idle" | "checking" | "registered" | "not_registered" | "blacklisted";
   const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>("idle");
 
+  // #686 — Stellar Federation resolution state
+  type FederationStatus = "idle" | "resolving" | "resolved" | "error";
+  const [federationStatus, setFederationStatus] = useState<FederationStatus>("idle");
+  const [federationError, setFederationError] = useState<string | null>(null);
+  const federationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Batch upload state
   const [batchFile, setBatchFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
   const [batchItems, setBatchItems] = useState<BatchPayoutItem[]>([]);
@@ -398,20 +405,93 @@ function TransferScreen() {
     }
   }, []);
 
-  // Debounce search while user types (ZAPS mode only) + registry check
+  // #686 — Resolve a Stellar Federation address to a public key.
+  const resolveFederationAddress = useCallback(async (address: string) => {
+    if (!isFederatedAddress(address)) {
+      setFederationStatus("idle");
+      setFederationError(null);
+      return;
+    }
+
+    setFederationStatus("resolving");
+    setFederationError(null);
+
+    try {
+      let publicKey: string | undefined;
+
+      if (typeof (StellarSdk as any).FederationServer !== "undefined") {
+        const FederationServerCtor = (StellarSdk as any).FederationServer;
+        const server = new FederationServerCtor("stellar.org");
+        const result = await server.resolve({ accountId: address });
+        publicKey = result.accountId || result.public_key;
+      } else {
+        const domain = address.split("*").pop();
+        if (!domain) throw new Error("Invalid federation address format");
+
+        const tomlUrl = `https://${domain}/.well-known/stellar.toml`;
+        const tomlRes = await fetch(tomlUrl);
+        if (!tomlRes.ok) throw new Error("Federation server not found");
+
+        const tomlText = await tomlRes.text();
+        const federationUrlMatch = tomlText.match(/FEDERATION_SERVER\s*=\s*"([^"]+)"/);
+        if (!federationUrlMatch) throw new Error("Federation URL not found in TOML");
+
+        const federationUrl = new URL(federationUrlMatch[1]);
+        const response = await fetch(federationUrl.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ stellar_address: address, op: "lookup" }),
+        });
+
+        if (!response.ok) throw new Error("Federation lookup failed");
+        const data = await response.json();
+        publicKey = data.account_id;
+      }
+
+      if (!publicKey || !publicKey.startsWith("G")) {
+        throw new Error("Invalid federation response");
+      }
+
+      setRecipient(publicKey);
+      setFederationStatus("resolved");
+      setUsernameStatus("registered");
+    } catch (err) {
+      setFederationStatus("error");
+      setFederationError(
+        err instanceof Error
+          ? err.message
+          : "Failed to resolve federation address."
+      );
+    }
+  }, []);
+
+  // Debounce search while user types (ZAPS mode only) + registry check + federation
   useEffect(() => {
     if (transferType !== "ZAPS") return;
     if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (federationTimer.current) clearTimeout(federationTimer.current);
 
     // Reset registry status when the user is actively typing
     if (recipient.length >= 2) {
       setUsernameStatus("idle");
     }
 
+    // #686 — Trigger federation resolution for federated addresses
+    if (isFederatedAddress(recipient)) {
+      setFederationStatus("idle");
+      setFederationError(null);
+      federationTimer.current = setTimeout(() => {
+        resolveFederationAddress(recipient);
+      }, 300);
+    } else {
+      setFederationStatus("idle");
+      setFederationError(null);
+    }
+
     searchTimer.current = setTimeout(() => {
       searchUsers(recipient);
       // After search settles, check the exact username against the registry
-      if (recipient.length >= 3) {
+      if (recipient.length >= 3 && !isFederatedAddress(recipient)) {
         checkUsernameRegistry(recipient);
       } else {
         setUsernameStatus("idle");
@@ -419,8 +499,9 @@ function TransferScreen() {
     }, 350);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
+      if (federationTimer.current) clearTimeout(federationTimer.current);
     };
-  }, [recipient, transferType, searchUsers, checkUsernameRegistry]);
+  }, [recipient, transferType, searchUsers, checkUsernameRegistry, resolveFederationAddress]);
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
     setRecipient(user.username);
@@ -644,6 +725,13 @@ function TransferScreen() {
     setStep(3);
   };
 
+  const handleKeypadPress = (value: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setAmount((prev: string) =>
+      value === "backspace" ? prev.slice(0, -1) : prev + value
+    );
+  };
+
   const renderStep0 = () => (
     <View style={styles.stepContainer}>
       <Text style={styles.subtitle}>Choose how you want to send money.</Text>
@@ -693,6 +781,9 @@ function TransferScreen() {
               setSelectedUser(null);
               // Reset registry warning when user edits the field
               setUsernameStatus("idle");
+              // #686 — Reset federation status when user edits the field
+              setFederationStatus("idle");
+              setFederationError(null);
               if (transferType !== "ZAPS") return;
               if (text.length < 2) {
                 setShowDropdown(false);
@@ -709,6 +800,37 @@ function TransferScreen() {
               color="#1A4B4A"
               style={styles.searchingIndicator}
             />
+          )}
+          {/* #686 — Federation resolution indicator */}
+          {transferType === "ZAPS" && federationStatus === "resolving" && (
+            <View style={styles.warningBanner} testID="federation-resolving">
+              <ActivityIndicator size="small" color={COLORS.primary} />
+              <Text style={styles.warningBannerText}>
+                Resolving federation address…
+              </Text>
+            </View>
+          )}
+          {transferType === "ZAPS" && federationStatus === "resolved" && (
+            <View
+              style={[styles.warningBanner, styles.warningBannerSuccess]}
+              testID="federation-resolved"
+            >
+              <Ionicons name="checkmark-circle" size={20} color="#16A34A" />
+              <Text style={styles.warningBannerTextSuccess}>
+                Federation address resolved.
+              </Text>
+            </View>
+          )}
+          {transferType === "ZAPS" && federationStatus === "error" && (
+            <View
+              style={[styles.warningBanner, styles.warningBannerDanger]}
+              testID="federation-error"
+            >
+              <Ionicons name="alert-circle" size={20} color="#DC2626" />
+              <Text style={styles.warningBannerTextDanger}>
+                {federationError || "Failed to resolve federation address."}
+              </Text>
+            </View>
           )}
           {/* Dropdown results */}
           {transferType === "ZAPS" &&
@@ -899,7 +1021,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -910,7 +1032,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -921,7 +1043,7 @@ function TransferScreen() {
               <TouchableOpacity
                 key={num}
                 style={styles.keypadButton}
-                onPress={() => setAmount((prev: string) => prev + num)}
+                onPress={() => handleKeypadPress(num)}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -930,19 +1052,19 @@ function TransferScreen() {
           <View style={styles.keypadRow}>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev + ".")}
+              onPress={() => handleKeypadPress(".")}
             >
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev + "0")}
+              onPress={() => handleKeypadPress("0")}
             >
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
-              onPress={() => setAmount((prev: string) => prev.slice(0, -1))}
+              onPress={() => handleKeypadPress("backspace")}
             >
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>
@@ -1483,7 +1605,9 @@ function TransferScreen() {
                     (transferType === "ZAPS" &&
                       recipient.length >= 3 &&
                       (usernameStatus === "not_registered" ||
-                        usernameStatus === "blacklisted")))) ||
+                        usernameStatus === "blacklisted")) ||
+                    (federationStatus === "resolving" ||
+                      federationStatus === "error"))) ||
                 (step === 3 && submitting) ||
                 submitting
               }
@@ -1889,6 +2013,41 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 16,
     top: 20,
+  },
+  warningBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFBEB",
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#FEF3C7",
+  },
+  warningBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#92400E",
+    lineHeight: 18,
+  },
+  warningBannerSuccess: {
+    backgroundColor: "#F0FFF4",
+    borderColor: "#BBF7D0",
+  },
+  warningBannerTextSuccess: {
+    color: "#166534",
+  },
+  warningBannerDanger: {
+    backgroundColor: "#FFF5F5",
+    borderColor: "#FEB2B2",
+  },
+  warningBannerTextDanger: {
+    color: "#C53030",
+  },
+  warningBannerBlacklisted: {
+    backgroundColor: "#FFF5F5",
+    borderColor: "#FEB2B2",
   },
   dropdownContainer: {
     position: "absolute",

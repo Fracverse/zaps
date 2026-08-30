@@ -37,6 +37,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import * as LocalAuthentication from "expo-local-authentication";
+import * as SecureStore from "expo-secure-store";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Ionicons } from "@expo/vector-icons";
@@ -49,6 +50,231 @@ const PIN_HASH_KEY = "zaps_account_pin_hash";
 
 /** Minimum accepted PIN length. */
 const PIN_MIN_LENGTH = 4;
+
+// ── #704 — Secure Storage Key Rotation ───────────────────────────────────────
+
+/**
+ * The version-stamped key names used for hardware-backed token storage.
+ *
+ * The "active" key suffix is written to SecureStore so the app always reads
+ * from the most recently rotated slot without hard-coding a single key name.
+ *
+ * Rotation algorithm:
+ *  1. Read the currently active version number (defaults to 0).
+ *  2. Derive the "next" version (current + 1, capped mod 2 to alternate between
+ *     two slots — avoids unbounded key proliferation in the keychain).
+ *  3. Read all known token values from the current slot.
+ *  4. Write them into the new slot under `WHEN_UNLOCKED_THIS_DEVICE_ONLY`.
+ *  5. Delete the old slot entries.
+ *  6. Persist the new version number.
+ *
+ * Using two alternating slots means we always have a fallback if the write
+ * to the new slot is interrupted mid-way: the old slot is only deleted after
+ * a successful write.
+ */
+
+/** SecureStore key that holds the currently active rotation version (0 or 1). */
+const KEY_ROTATION_VERSION_KEY = "auth_key_rotation_version";
+
+/** Milliseconds between automatic key rotations (7 days). */
+const KEY_ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/** AsyncStorage key that records the timestamp of the last rotation. */
+const LAST_ROTATION_TIMESTAMP_KEY = "auth_key_last_rotation_ts";
+
+/**
+ * The token keys that are subject to key rotation.  These map to the Privy
+ * session-token and user-state values stored by `api.ts` (#586).
+ *
+ * When a new secure-storage key pair is generated, all of these values are
+ * re-encrypted under the new key before the old key is wiped.
+ */
+const ROTATABLE_TOKEN_KEYS = [
+  "privy_session_token",
+  "privy_user_state",
+] as const;
+
+type RotatableKey = (typeof ROTATABLE_TOKEN_KEYS)[number];
+
+/**
+ * Derive the versioned key name for a given base key and slot.
+ *
+ * @example
+ * versionedKey("privy_session_token", 0) → "privy_session_token_v0"
+ * versionedKey("privy_session_token", 1) → "privy_session_token_v1"
+ */
+function versionedKey(base: RotatableKey, version: number): string {
+  return `${base}_v${version}`;
+}
+
+/** Read the current active rotation version (0 or 1). Returns 0 on first use. */
+async function getActiveKeyVersion(): Promise<number> {
+  try {
+    const raw = await SecureStore.getItemAsync(KEY_ROTATION_VERSION_KEY, {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+    const parsed = parseInt(raw ?? "0", 10);
+    return Number.isFinite(parsed) ? parsed % 2 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Read a token value from the active (versioned) slot.
+ *
+ * Falls back to the bare (un-versioned) key so that tokens written before
+ * rotation was introduced are still readable on the first rotation run.
+ */
+export async function getRotatedToken(base: RotatableKey): Promise<string | null> {
+  try {
+    const version = await getActiveKeyVersion();
+    // Try versioned key first.
+    const versioned = await SecureStore.getItemAsync(versionedKey(base, version), {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+    if (versioned !== null) return versioned;
+    // Fall back to the legacy un-versioned key (pre-rotation tokens).
+    return SecureStore.getItemAsync(base, {
+      keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write a token value into the active (versioned) slot.
+ *
+ * All token writes after rotation is initialised go through this helper so
+ * the correct versioned key is always used.
+ */
+export async function setRotatedToken(
+  base: RotatableKey,
+  value: string
+): Promise<void> {
+  const version = await getActiveKeyVersion();
+  await SecureStore.setItemAsync(versionedKey(base, version), value, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+/**
+ * Delete a token value from the active (versioned) slot.
+ */
+export async function deleteRotatedToken(base: RotatableKey): Promise<void> {
+  const version = await getActiveKeyVersion();
+  await SecureStore.deleteItemAsync(versionedKey(base, version)).catch(() => {});
+  // Also clear any legacy un-versioned entry.
+  await SecureStore.deleteItemAsync(base).catch(() => {});
+}
+
+/**
+ * Rotate the hardware-backed secure storage key.
+ *
+ * #704 — This is the primary export for key rotation.  Call it periodically
+ * (e.g. via `maybeRotateSecureStorageKey` on app launch) to re-encrypt cached
+ * authentication tokens under a fresh key slot.
+ *
+ * The rotation is atomic in the sense that:
+ *  - New slot is fully populated before the old slot is deleted.
+ *  - If writing to the new slot throws, the old slot is untouched.
+ *  - Token values are never logged or exposed outside SecureStore.
+ *
+ * @returns `true` when rotation completed successfully, `false` on error.
+ */
+export async function rotateSecureStorageKey(): Promise<boolean> {
+  try {
+    const currentVersion = await getActiveKeyVersion();
+    const nextVersion = (currentVersion + 1) % 2;
+
+    // 1. Read all tokens from the current slot (or legacy bare key).
+    const tokenValues = new Map<RotatableKey, string | null>();
+    for (const key of ROTATABLE_TOKEN_KEYS) {
+      let value: string | null = null;
+      // Try current versioned slot first.
+      value = await SecureStore.getItemAsync(
+        versionedKey(key, currentVersion),
+        { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }
+      ).catch(() => null);
+      if (value === null) {
+        // Fall back to legacy bare key (pre-rotation tokens).
+        value = await SecureStore.getItemAsync(key, {
+          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+        }).catch(() => null);
+      }
+      tokenValues.set(key, value);
+    }
+
+    // 2. Write all non-null tokens into the new slot.
+    for (const [key, value] of tokenValues) {
+      if (value !== null) {
+        await SecureStore.setItemAsync(versionedKey(key, nextVersion), value, {
+          keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+        });
+      }
+    }
+
+    // 3. Update the active version pointer BEFORE deleting the old slot
+    //    so a crash between steps 3 and 4 is recoverable (old slot still intact).
+    await SecureStore.setItemAsync(
+      KEY_ROTATION_VERSION_KEY,
+      String(nextVersion),
+      { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY }
+    );
+
+    // 4. Delete old slot entries (best-effort — leftover stale data is benign).
+    for (const key of ROTATABLE_TOKEN_KEYS) {
+      await SecureStore.deleteItemAsync(
+        versionedKey(key, currentVersion)
+      ).catch(() => {});
+      // Also clear any legacy bare key that was migrated in step 2.
+      await SecureStore.deleteItemAsync(key).catch(() => {});
+    }
+
+    // 5. Record the rotation timestamp for interval tracking.
+    await AsyncStorage.setItem(
+      LAST_ROTATION_TIMESTAMP_KEY,
+      String(Date.now())
+    ).catch(() => {});
+
+    return true;
+  } catch {
+    // Rotation failed — original keys are untouched; app continues normally.
+    return false;
+  }
+}
+
+/**
+ * Rotate the secure storage key only if the rotation interval has elapsed.
+ *
+ * Call this once from your app's root layout (or on a background task) so
+ * keys are rotated transparently without blocking the UI.
+ *
+ * @example
+ * // In _layout.tsx:
+ * useEffect(() => {
+ *   maybeRotateSecureStorageKey().catch(() => {});
+ * }, []);
+ *
+ * @returns `true` when a rotation was performed, `false` when skipped or failed.
+ */
+export async function maybeRotateSecureStorageKey(): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_ROTATION_TIMESTAMP_KEY);
+    const lastRotation = raw ? parseInt(raw, 10) : 0;
+    const msSinceLast = Date.now() - lastRotation;
+
+    if (msSinceLast < KEY_ROTATION_INTERVAL_MS) {
+      // Not yet time to rotate.
+      return false;
+    }
+
+    return rotateSecureStorageKey();
+  } catch {
+    return false;
+  }
+}
 
 // ── Biometric helper types ────────────────────────────────────────────────────
 

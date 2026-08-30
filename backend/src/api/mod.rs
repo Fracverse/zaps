@@ -91,6 +91,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
             "/profile",
             get(user::get_profile).post(user::update_profile),
         )
+        .route("/profile/avatar", post(user::upload_avatar))
         .route("/search", get(user::search_users))
         .route("/suggestions", get(user::suggest_usernames))
         .route("/autocomplete", get(user::autocomplete))
@@ -125,6 +126,7 @@ pub fn payout_routes(pool: sqlx::PgPool) -> Router {
         .route("/batches", get(payouts::list_batches))
         .route("/batch", post(payouts::create_batch))
         .route("/batch/:id", get(payouts::get_batch_detail))
+        .route("/batch/:id/export", get(payouts::export_batch))
         .route("/sdp/webhook", post(payouts::sdp_reconciliation_webhook))
         // #728 — block transfers to sanctioned addresses before processing.
         .layer(middleware::from_fn(
