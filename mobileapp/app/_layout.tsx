@@ -37,6 +37,8 @@ import { logNavigation, startNavigation } from "../src/utils/performance";
 import * as Linking from "expo-linking";
 import { parseSdpClaimUrl } from "../src/utils/sdpDeepLink";
 import { initOfflineSync } from "../src/services/api";
+import { ThemeProvider } from "../src/contexts/ThemeProvider";
+import { useTheme } from "../src/hooks/useTheme";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "https://api.zaps.app";
 const IOS_STORE_URL = "https://apps.apple.com/app/zaps";
@@ -75,6 +77,7 @@ Notifications.setNotificationHandler({
 function LayoutContent() {
   const router = useRouter();
   const pathname = usePathname();
+  const { theme, isDark } = useTheme();
   const [forceUpdate, setForceUpdate] = React.useState(false);
   const [storeUrl, setStoreUrl] = React.useState(
     Platform.OS === "ios" ? IOS_STORE_URL : ANDROID_STORE_URL
@@ -200,12 +203,12 @@ function LayoutContent() {
   }, [router]);
 
   return (
-    <View style={{ flex: 1 }}>
-      <StatusBar style="auto" />
+    <View style={[{ flex: 1, backgroundColor: theme.backgroundRoot }]}>
+      <StatusBar style={isDark ? "light" : "auto"} />
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: COLORS.white },
+          contentStyle: { backgroundColor: theme.backgroundRoot },
         }}
       >
         {/* Existing screens */}
@@ -331,18 +334,20 @@ export default function Layout() {
   }
 
   return (
-    <PrivyProvider
-      appId={process.env.EXPO_PUBLIC_PRIVY_APP_ID || ""}
-      config={{
-        loginMethods: ["google", "apple", "email"],
-        appearance: { theme: "light" },
-      }}
-    >
-      <ErrorBoundary onReset={() => router.replace("/(personal)/home")}>
-        <ToastProvider>
-          <LayoutContent />
-        </ToastProvider>
-      </ErrorBoundary>
-    </PrivyProvider>
+<ThemeProvider>
+      <PrivyProvider
+        appId={process.env.EXPO_PUBLIC_PRIVY_APP_ID || ""}
+        config={{
+          loginMethods: ["google", "apple", "email"],
+          appearance: { theme: "light" },
+        }}
+      >
+        <ErrorBoundary onReset={() => router.replace("/(personal)/home")}>
+          <ToastProvider>
+            <LayoutContent />
+          </ToastProvider>
+        </ErrorBoundary>
+      </PrivyProvider>
+    </ThemeProvider>
   );
 }
