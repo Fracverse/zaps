@@ -1,10 +1,5 @@
 export type TransactionType =
-  | "sent"
-  | "received"
-  | "swap"
-  | "payment"
-  | "yield"
-  | "mass_payout";
+  "sent" | "received" | "swap" | "payment" | "yield" | "mass_payout";
 export type TransactionStatus = "completed" | "pending" | "failed";
 export type YieldType = "interest" | "reward" | "apy";
 
@@ -49,4 +44,6 @@ export interface TransactionFilters {
   amountMin?: string;
   amountMax?: string;
   yieldOnly?: boolean;
+  /** Asset code filter (e.g. "XLM", "USDC", "USDT"). */
+  asset?: string;
 }
