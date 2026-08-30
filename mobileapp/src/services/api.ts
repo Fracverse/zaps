@@ -23,10 +23,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import NetInfo from "@react-native-community/netinfo";
-import {
-  enqueueTransaction,
-  startOfflineQueueSync,
-} from "./offlineQueue";
+import { enqueueTransaction, startOfflineQueueSync } from "./offlineQueue";
+import { fetchTransactions } from "./transactionService";
+import type { Transaction } from "../types/transaction";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -207,6 +206,40 @@ export async function updateAutoEarn(enabled: boolean): Promise<void> {
   }
 }
 
+export interface YieldTransactionQuery {
+  /** Asset code filter, e.g. "XLM" | "USDC" | "USDT". */
+  asset?: string;
+  /** ISO date (YYYY-MM-DD) — earliest transaction to include. */
+  dateFrom?: string;
+  /** ISO date (YYYY-MM-DD) — latest transaction to include. */
+  dateTo?: string;
+}
+
+/**
+ * #692 — Yield transaction history.
+ *
+ * Fetches the user's yield transactions (interest/reward/APY) filtered by the
+ * selected date range and asset type. Delegates to the transaction service so
+ * the client-side filters and backend query params stay in lockstep.
+ */
+export async function getYieldTransactions(
+  query: YieldTransactionQuery = {}
+): Promise<Transaction[]> {
+  const page = await fetchTransactions(
+    {
+      type: "yield",
+      status: "all",
+      search: "",
+      yieldOnly: true,
+      asset: query.asset,
+      dateFrom: query.dateFrom,
+      dateTo: query.dateTo,
+    },
+    null
+  );
+  return page.items;
+}
+
 // ── Username Resolution ──────────────────────────────────────────────────────
 
 export interface ReceiverDetails {
@@ -223,14 +256,18 @@ export interface UsernameLookupError extends Error {
  * Resolves a username to its registered Stellar address for transaction flows.
  * Uses the cached backend endpoint that checks Redis before falling back to Postgres.
  * Automatically saves successful lookups to recent recipients.
- * 
+ *
  * @param username - The username to resolve (must be 3-15 chars, lowercase alphanumeric)
  * @returns Promise resolving to receiver details with username and address
  * @throws UsernameLookupError with specific error codes for different failure scenarios
  */
-export async function resolveUsername(username: string): Promise<ReceiverDetails> {
+export async function resolveUsername(
+  username: string
+): Promise<ReceiverDetails> {
   if (!username || typeof username !== "string") {
-    const error = new Error("Username is required and must be a string") as UsernameLookupError;
+    const error = new Error(
+      "Username is required and must be a string"
+    ) as UsernameLookupError;
     error.code = "INVALID_USERNAME";
     throw error;
   }
@@ -243,15 +280,17 @@ export async function resolveUsername(username: string): Promise<ReceiverDetails
   }
 
   try {
-    const response = await apiFetch(`${API_BASE}/api/users/resolve/${encodeURIComponent(trimmedUsername)}`);
-    
+    const response = await apiFetch(
+      `${API_BASE}/api/users/resolve/${encodeURIComponent(trimmedUsername)}`
+    );
+
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const error = new Error(
         errorData.error || `HTTP ${response.status}: ${response.statusText}`
       ) as UsernameLookupError;
       error.statusCode = response.status;
-      
+
       if (response.status === 404) {
         error.code = "NOT_FOUND";
       } else if (response.status === 400) {
@@ -259,15 +298,17 @@ export async function resolveUsername(username: string): Promise<ReceiverDetails
       } else {
         error.code = "NETWORK_ERROR";
       }
-      
+
       throw error;
     }
 
     const data = await response.json();
-    
+
     // Validate the response structure
     if (!data || typeof data !== "object" || !data.username || !data.address) {
-      const error = new Error("Invalid response format from server") as UsernameLookupError;
+      const error = new Error(
+        "Invalid response format from server"
+      ) as UsernameLookupError;
       error.code = "UNKNOWN_ERROR";
       throw error;
     }
@@ -291,7 +332,9 @@ export async function resolveUsername(username: string): Promise<ReceiverDetails
 
     // Handle network errors and other unexpected failures
     const error = new Error(
-      err instanceof Error ? err.message : "Unknown error occurred during username lookup"
+      err instanceof Error
+        ? err.message
+        : "Unknown error occurred during username lookup"
     ) as UsernameLookupError;
     error.code = "NETWORK_ERROR";
     throw error;
@@ -302,11 +345,13 @@ export async function resolveUsername(username: string): Promise<ReceiverDetails
  * Safely resolves a username with automatic error handling and user-friendly messages.
  * Returns null on any error instead of throwing, making it suitable for UI flows
  * where you want to handle errors gracefully.
- * 
+ *
  * @param username - The username to resolve
  * @returns Promise resolving to receiver details or null on any error
  */
-export async function safeResolveUsername(username: string): Promise<ReceiverDetails | null> {
+export async function safeResolveUsername(
+  username: string
+): Promise<ReceiverDetails | null> {
   try {
     return await resolveUsername(username);
   } catch (error) {
@@ -319,7 +364,7 @@ export async function safeResolveUsername(username: string): Promise<ReceiverDet
  * Batch resolve multiple usernames efficiently.
  * Note: Currently calls the single endpoint multiple times. Could be optimized
  * with a dedicated batch endpoint in the future.
- * 
+ *
  * @param usernames - Array of usernames to resolve
  * @returns Promise resolving to map of username -> ReceiverDetails (successful lookups only)
  */
@@ -331,7 +376,7 @@ export async function batchResolveUsernames(
   }
 
   const results: Record<string, ReceiverDetails> = {};
-  
+
   // Use Promise.allSettled to handle partial failures gracefully
   const promises = usernames.map(async (username) => {
     try {
@@ -343,7 +388,7 @@ export async function batchResolveUsernames(
   });
 
   const settled = await Promise.allSettled(promises);
-  
+
   settled.forEach((outcome) => {
     if (outcome.status === "fulfilled" && outcome.value.result) {
       results[outcome.value.username] = outcome.value.result;
@@ -356,7 +401,7 @@ export async function batchResolveUsernames(
 /**
  * Resolves a username and returns the result in ZapsUser format for compatibility
  * with existing UI components that expect the full user interface.
- * 
+ *
  * @param username - The username to resolve
  * @returns Promise resolving to a partial ZapsUser with username and address
  * @throws UsernameLookupError with specific error codes for different failure scenarios

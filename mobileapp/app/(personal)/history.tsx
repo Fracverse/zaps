@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -29,6 +29,25 @@ import {
 /** A pending transaction is considered "stuck" (and eligible to Speed Up) once
  *  it has been pending longer than this, in milliseconds. */
 const STUCK_PENDING_MS = 60 * 1000;
+
+// #692 — Yield transaction history filtering presets.
+const DATE_PRESETS: { label: string; days: number }[] = [
+  { label: "7D", days: 7 },
+  { label: "30D", days: 30 },
+  { label: "90D", days: 90 },
+  { label: "1Y", days: 365 },
+];
+
+function presetStartIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function isPresetActive(filters: TransactionFilters, days: number): boolean {
+  return filters.dateFrom === presetStartIso(days) && !filters.dateTo;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,7 +131,8 @@ function hasActiveFilters(f: TransactionFilters): boolean {
     !!f.dateTo ||
     !!f.amountMin ||
     !!f.amountMax ||
-    !!f.yieldOnly
+    !!f.yieldOnly ||
+    !!f.asset
   );
 }
 
@@ -399,6 +419,15 @@ export default function HistoryScreen() {
   const listData = groupByDate(items);
   const filtersActive = hasActiveFilters(filters);
 
+  // #692 — Distinct asset codes present in the filtered result set.
+  const assetOptions = useMemo(
+    () => [
+      "All",
+      ...Array.from(new Set(items.map((tx) => tx.asset.toUpperCase()))).sort(),
+    ],
+    [items]
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
       if (item.kind === "header") {
@@ -566,6 +595,111 @@ export default function HistoryScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {/* #692 — Yield history filters: asset type chips + date range */}
+      {filters.yieldOnly && (
+        <View style={styles.yieldFiltersCard}>
+          <View style={styles.yieldFiltersHeader}>
+            <Ionicons name="trending-up" size={14} color="#16A34A" />
+            <Text style={styles.yieldFiltersTitle}>Filter yield history</Text>
+          </View>
+
+          <Text style={styles.yieldFiltersLabel}>Asset type</Text>
+          <View style={styles.yieldChipRow}>
+            {assetOptions.map((asset) => {
+              const selected =
+                asset === "All" ? !filters.asset : filters.asset === asset;
+              return (
+                <TouchableOpacity
+                  key={asset}
+                  style={[styles.assetChip, selected && styles.assetChipActive]}
+                  onPress={() =>
+                    applyFilters({
+                      ...filters,
+                      asset: asset === "All" ? undefined : asset,
+                      search: searchText,
+                    })
+                  }
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`Filter by ${asset}`}
+                >
+                  <Text
+                    style={[
+                      styles.assetChipText,
+                      selected && styles.assetChipTextActive,
+                    ]}
+                  >
+                    {asset}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.yieldFiltersLabel}>Date range</Text>
+          <View style={styles.yieldChipRow}>
+            <TouchableOpacity
+              style={[
+                styles.assetChip,
+                !filters.dateFrom && styles.assetChipActive,
+              ]}
+              onPress={() =>
+                applyFilters({
+                  ...filters,
+                  dateFrom: undefined,
+                  dateTo: undefined,
+                  search: searchText,
+                })
+              }
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: !filters.dateFrom }}
+              accessibilityLabel="Filter by all dates"
+            >
+              <Text
+                style={[
+                  styles.assetChipText,
+                  !filters.dateFrom && styles.assetChipTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
+            {DATE_PRESETS.map((preset) => {
+              const active = isPresetActive(filters, preset.days);
+              return (
+                <TouchableOpacity
+                  key={preset.label}
+                  style={[styles.assetChip, active && styles.assetChipActive]}
+                  onPress={() =>
+                    applyFilters({
+                      ...filters,
+                      dateFrom: presetStartIso(preset.days),
+                      dateTo: undefined,
+                      search: searchText,
+                    })
+                  }
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`Filter by last ${preset.label}`}
+                >
+                  <Text
+                    style={[
+                      styles.assetChipText,
+                      active && styles.assetChipTextActive,
+                    ]}
+                  >
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
 
       {/* Summary row */}
       {!loading && items.length > 0 && (
@@ -889,6 +1023,62 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === "ios" ? 40 : 24,
+  },
+  // #692 — Yield history filter card
+  yieldFiltersCard: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#C8EAD1",
+  },
+  yieldFiltersHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 12,
+  },
+  yieldFiltersTitle: {
+    fontSize: 13,
+    fontFamily: "Outfit_700Bold",
+    color: "#16A34A",
+  },
+  yieldFiltersLabel: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#6B8D74",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  yieldChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 8,
+  },
+  assetChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#B9DCC4",
+    backgroundColor: "#FFFFFF",
+  },
+  assetChipActive: {
+    borderColor: "#16A34A",
+    backgroundColor: "#16A34A",
+  },
+  assetChipText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#166534",
+  },
+  assetChipTextActive: {
+    color: COLORS.secondary,
   },
   footerLoader: { paddingVertical: 20, alignItems: "center" },
   // Empty
