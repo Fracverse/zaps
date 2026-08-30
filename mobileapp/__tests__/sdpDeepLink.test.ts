@@ -1,59 +1,115 @@
-import { parseSdpClaimUrl, isValidSdpToken } from "../src/utils/sdpDeepLink";
+import { parseSdpDeepLink } from '../utils/sdpDeepLink';
 
-describe("parseSdpClaimUrl", () => {
-  it("parses a custom-scheme claim link with a query-param token", () => {
-    const result = parseSdpClaimUrl("zaps://claim?token=abc123-def456");
-    expect(result).toEqual({ valid: true, token: "abc123-def456" });
+describe('parseSdpDeepLink', () => {
+  // ── Valid URLs ──────────────────────────────────────────────────────────
+
+  it('parses a standard SDP deep link with token and amount', () => {
+    const result = parseSdpDeepLink(
+      'zaps://sdp/pay?token=abc123&amount=100',
+    );
+    expect(result).toEqual({ token: 'abc123', amount: 100 });
   });
 
-  it("parses a custom-scheme claim link with a path-based token", () => {
-    const result = parseSdpClaimUrl("zaps://claim/abc123-def456");
-    expect(result).toEqual({ valid: true, token: "abc123-def456" });
+  it('parses a deep link with a decimal amount', () => {
+    const result = parseSdpDeepLink(
+      'zaps://sdp/pay?token=tok_99&amount=49.99',
+    );
+    expect(result).toEqual({ token: 'tok_99', amount: 49.99 });
   });
 
-  it("parses an https invite link with a query-param token", () => {
-    const result = parseSdpClaimUrl("https://zaps.app/claim?token=abc123-def456");
-    expect(result).toEqual({ valid: true, token: "abc123-def456" });
+  it('parses a deep link with extra query parameters (ignores them)', () => {
+    const result = parseSdpDeepLink(
+      'zaps://sdp/pay?token=xyz&amount=250&ref=123&source=qr',
+    );
+    expect(result).toEqual({ token: 'xyz', amount: 250 });
   });
 
-  it("accepts alternate accepted token param names", () => {
-    const result = parseSdpClaimUrl("zaps://claim?sdp_token=xyz789token");
-    expect(result).toEqual({ valid: true, token: "xyz789token" });
+  it('parses an HTTPS URL variant', () => {
+    const result = parseSdpDeepLink(
+      'https://zaps.app/sdp/pay?token=secure_token_1&amount=1000',
+    );
+    expect(result).toEqual({ token: 'secure_token_1', amount: 1000 });
   });
 
-  it("ignores links that are not SDP claim links", () => {
-    const result = parseSdpClaimUrl("zaps://home");
-    expect(result.valid).toBe(false);
+  it('handles URL-encoded token values', () => {
+    const result = parseSdpDeepLink(
+      'zaps://sdp/pay?token=hello%20world&amount=55',
+    );
+    expect(result).toEqual({ token: 'hello world', amount: 55 });
   });
 
-  it("rejects a claim link missing a token", () => {
-    const result = parseSdpClaimUrl("zaps://claim");
-    expect(result).toEqual({ valid: false, error: "Missing claim token in URL" });
+  it('handles leading/trailing whitespace in the URL', () => {
+    const result = parseSdpDeepLink(
+      '  zaps://sdp/pay?token=trim_me&amount=10  ',
+    );
+    expect(result).toEqual({ token: 'trim_me', amount: 10 });
   });
 
-  it("rejects a claim link with a malformed token", () => {
-    const result = parseSdpClaimUrl("zaps://claim?token=<script>bad</script>");
-    expect(result.valid).toBe(false);
+  it('returns amount as number, not string', () => {
+    const result = parseSdpDeepLink(
+      'zaps://sdp/pay?token=num&amount=777',
+    );
+    expect(typeof result!.amount).toBe('number');
   });
 
-  it("rejects empty or null input", () => {
-    expect(parseSdpClaimUrl("").valid).toBe(false);
-    expect(parseSdpClaimUrl(null).valid).toBe(false);
-    expect(parseSdpClaimUrl(undefined).valid).toBe(false);
-  });
-});
+  // ── Malformed / missing-parameter URLs ──────────────────────────────────
 
-describe("isValidSdpToken", () => {
-  it("accepts well-formed tokens", () => {
-    expect(isValidSdpToken("abc123-DEF.456_ghi")).toBe(true);
+  it('returns null for an empty string', () => {
+    expect(parseSdpDeepLink('')).toBeNull();
   });
 
-  it("rejects tokens that are too short", () => {
-    expect(isValidSdpToken("ab1")).toBe(false);
+  it('returns null for a non-string input', () => {
+    expect(parseSdpDeepLink(undefined as unknown as string)).toBeNull();
+    expect(parseSdpDeepLink(null as unknown as string)).toBeNull();
   });
 
-  it("rejects tokens with disallowed characters", () => {
-    expect(isValidSdpToken("abc/../etc")).toBe(false);
-    expect(isValidSdpToken("<script>")).toBe(false);
+  it('returns null for a URL without query parameters', () => {
+    expect(parseSdpDeepLink('zaps://sdp/pay')).toBeNull();
+  });
+
+  it('returns null when the token parameter is missing', () => {
+    expect(parseSdpDeepLink('zaps://sdp/pay?amount=100')).toBeNull();
+  });
+
+  it('returns null when the amount parameter is missing', () => {
+    expect(parseSdpDeepLink('zaps://sdp/pay?token=abc')).toBeNull();
+  });
+
+  it('returns null when token is present but empty', () => {
+    expect(
+      parseSdpDeepLink('zaps://sdp/pay?token=&amount=100'),
+    ).toBeNull();
+  });
+
+  it('returns null when amount is present but empty', () => {
+    expect(
+      parseSdpDeepLink('zaps://sdp/pay?token=abc&amount='),
+    ).toBeNull();
+  });
+
+  it('returns null when amount is not a number (NaN)', () => {
+    expect(
+      parseSdpDeepLink('zaps://sdp/pay?token=abc&amount=notanumber'),
+    ).toBeNull();
+  });
+
+  it('returns null when amount is zero', () => {
+    expect(
+      parseSdpDeepLink('zaps://sdp/pay?token=abc&amount=0'),
+    ).toBeNull();
+  });
+
+  it('returns null when amount is negative', () => {
+    expect(
+      parseSdpDeepLink('zaps://sdp/pay?token=abc&amount=-50'),
+    ).toBeNull();
+  });
+
+  it('returns null for a completely malformed URL string', () => {
+    expect(parseSdpDeepLink('not-a-url-at-all')).toBeNull();
+  });
+
+  it('returns null for random gibberish', () => {
+    expect(parseSdpDeepLink('::::')).toBeNull();
   });
 });
