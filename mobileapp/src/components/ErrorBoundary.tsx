@@ -1,10 +1,13 @@
 import React, { Component, ReactNode } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { COLORS } from "../constants/colors";
+import { reportCrash } from "../services/crashReporter";
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /** Called when the user taps "Try Again" so the app can reset navigation. */
+  onReset?: () => void;
 }
 
 interface State {
@@ -24,11 +27,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("ErrorBoundary caught an error:", error, errorInfo);
-    // TODO: Send to error tracking service like Sentry
+    // Queue the crash (locally first, then fire-and-forget to the backend)
+    // so the team gets visibility into unhandled render failures. This must
+    // never throw — reporting failures are swallowed inside reportCrash.
+    void reportCrash(error, errorInfo.componentStack);
   }
 
   handleRetry = () => {
     this.setState({ hasError: false, error: undefined });
+    this.props.onReset?.();
   };
 
   render() {

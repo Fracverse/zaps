@@ -1,7 +1,7 @@
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
 import React from "react";
-import { Stack, useRouter, usePathname } from "expo-router";
+import { Stack, useRouter, usePathname, router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
   Linking as RNLinking,
@@ -140,7 +140,9 @@ function LayoutContent() {
         // first-time consent is asked contextually from the Home screen. This
         // only silently refreshes the Expo push token for a user who has
         // already granted permission in a previous session.
-        await registerForPushNotificationsAsync({ requestIfUndetermined: false });
+        await registerForPushNotificationsAsync({
+          requestIfUndetermined: false,
+        });
       }
     }
 
@@ -336,7 +338,7 @@ export default function Layout() {
         appearance: { theme: "light" },
       }}
     >
-      <ErrorBoundary>
+      <ErrorBoundary onReset={() => router.replace("/(personal)/home")}>
         <ToastProvider>
           <LayoutContent />
         </ToastProvider>

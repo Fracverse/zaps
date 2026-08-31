@@ -36,6 +36,8 @@ const STATUS_OPTIONS: { label: string; value: TransactionFilters["status"] }[] =
     { label: "Failed", value: "failed" },
   ];
 
+const ASSET_OPTIONS: string[] = ["XLM", "USDC", "USDT"];
+
 function ChipGroup<T extends string>({
   options,
   value,
@@ -179,6 +181,45 @@ export function TransactionFilterSheet({
                   Yield only
                 </Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Asset */}
+            <Text style={styles.sectionLabel}>Asset</Text>
+            <View style={chipStyles.row}>
+              <TouchableOpacity
+                style={[chipStyles.chip, !local.asset && chipStyles.chipActive]}
+                onPress={() => update("asset", undefined)}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    chipStyles.chipText,
+                    !local.asset && chipStyles.chipTextActive,
+                  ]}
+                >
+                  All
+                </Text>
+              </TouchableOpacity>
+              {ASSET_OPTIONS.map((asset) => (
+                <TouchableOpacity
+                  key={asset}
+                  style={[
+                    chipStyles.chip,
+                    local.asset === asset && chipStyles.chipActive,
+                  ]}
+                  onPress={() => update("asset", asset)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      chipStyles.chipText,
+                      local.asset === asset && chipStyles.chipTextActive,
+                    ]}
+                  >
+                    {asset}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             {/* Date range */}
