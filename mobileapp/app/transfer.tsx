@@ -39,7 +39,10 @@ import {
   saveLocalKeypair,
   submitPayment,
   getLocalKeypair,
+  buildPaymentEnvelope,
+  estimateTransactionFee,
   StellarWalletState,
+  type TransactionFeeEstimate,
 } from "../src/services/stellarWallet";
 import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
 import { isFederatedAddress } from "../src/utils/sep0007";
@@ -306,6 +309,8 @@ function TransferScreen() {
   const [walletState, setWalletState] = useState<StellarWalletState | null>(
     null
   );
+  const [transactionFeeEstimate, setTransactionFeeEstimate] =
+    useState<TransactionFeeEstimate | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -559,6 +564,42 @@ function TransferScreen() {
   }, []);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
+
+  useEffect(() => {
+    if (step !== 3 || !walletState?.isConnected || !recipient || !amount) {
+      setTransactionFeeEstimate(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    (async () => {
+      try {
+        const assetIssuer =
+          token.symbol !== "XLM" ? STELLAR_ASSET_ISSUERS[token.symbol] : undefined;
+        const txXdr = await buildPaymentEnvelope(
+          walletState.publicKey,
+          recipient,
+          amount,
+          token.symbol,
+          assetIssuer,
+          description || undefined
+        );
+        const estimate = await estimateTransactionFee(txXdr);
+        if (isMounted) {
+          setTransactionFeeEstimate(estimate);
+        }
+      } catch {
+        if (isMounted) {
+          setTransactionFeeEstimate(null);
+        }
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [step, walletState, recipient, amount, token.symbol, description]);
 
   useEffect(() => {
     (async () => {
@@ -1238,6 +1279,7 @@ function TransferScreen() {
           amount={amount}
           tokenSymbol={token.symbol}
           description={description}
+          feeEstimate={transactionFeeEstimate}
         />
 
         <View style={styles.confirmationActions}>

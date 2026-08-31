@@ -113,6 +113,14 @@ export async function connectLocalWallet(): Promise<StellarWalletState> {
   return { publicKey: kp.publicKey(), isConnected: true, source: "local" };
 }
 
+export interface TransactionFeeEstimate {
+  baseFee: string;
+  minResourceFee: string;
+  totalFee: string;
+  cpuInsns?: string;
+  memBytes?: string;
+}
+
 export async function getAccountBalance(
   publicKey: string
 ): Promise<{ balance: string; asset: string }[]> {
@@ -125,6 +133,108 @@ export async function getAccountBalance(
   } catch {
     return [];
   }
+}
+
+function parseNumericValue(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toString();
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric.toString() : null;
+  }
+
+  if (Array.isArray(value) && value.length > 0) {
+    return parseNumericValue(value[0]);
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const maybe = value as Record<string, unknown>;
+    for (const key of [
+      "value",
+      "amount",
+      "fee",
+      "feeCharged",
+      "fee_charged",
+      "minResourceFee",
+      "min_resource_fee",
+      "cpuInsns",
+      "cpu_insns",
+      "memBytes",
+      "mem_bytes",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(maybe, key)) {
+        const parsed = parseNumericValue(maybe[key]);
+        if (parsed) return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
+export async function estimateTransactionFee(
+  txXdr: string
+): Promise<TransactionFeeEstimate> {
+  const baseFee = await server.fetchBaseFee();
+  const sorobanRpcUrl =
+    (process.env.EXPO_PUBLIC_SOROBAN_RPC_URL ||
+      (STELLAR_NETWORK === "PUBLIC"
+        ? "https://soroban.stellar.org"
+        : "https://soroban-testnet.stellar.org")) ||
+    (STELLAR_NETWORK === "PUBLIC"
+      ? "https://soroban.stellar.org"
+      : "https://soroban-testnet.stellar.org");
+
+  const response = await fetch(sorobanRpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "simulateTransaction",
+      params: { transaction: txXdr },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Soroban simulation failed with HTTP ${response.status}`);
+  }
+
+  const body = await response.json();
+  const result = body?.result ?? {};
+  const minResourceFee =
+    parseNumericValue(result.minResourceFee) ??
+    parseNumericValue(result.min_resource_fee) ??
+    parseNumericValue(result.cost?.feeCharged) ??
+    parseNumericValue(result.cost?.fee_charged) ??
+    parseNumericValue(result.feeCharged) ??
+    parseNumericValue(result.fee_charged) ??
+    parseNumericValue(result.cost?.feeChanges) ??
+    parseNumericValue(result.cost?.fee_changes) ??
+    "0";
+  const cpuInsns =
+    parseNumericValue(result.cost?.cpuInsns) ??
+    parseNumericValue(result.cost?.cpu_insns) ??
+    undefined;
+  const memBytes =
+    parseNumericValue(result.cost?.memBytes) ??
+    parseNumericValue(result.cost?.mem_bytes) ??
+    undefined;
+
+  const baseFeeValue = Number(baseFee) || 0;
+  const minResourceFeeValue = Number(minResourceFee) || 0;
+
+  return {
+    baseFee: baseFeeValue.toString(),
+    minResourceFee: minResourceFeeValue.toString(),
+    totalFee: (baseFeeValue + minResourceFeeValue).toString(),
+    cpuInsns,
+    memBytes,
+  };
 }
 
 export async function buildPaymentEnvelope(

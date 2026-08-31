@@ -109,4 +109,28 @@ describe("TransferConfirmationCard", () => {
     );
     expect(getByLabelText("Avatar for tolu.zaps")).toBeTruthy();
   });
+
+  it("renders network and Soroban resource fee breakdown when provided", () => {
+    const { getByText } = render(
+      <TransferConfirmationCard
+        recipient={mockRecipient}
+        amount="500"
+        tokenSymbol="XLM"
+        feeEstimate={{
+          baseFee: "100",
+          minResourceFee: "250",
+          cpuInsns: "200000",
+          memBytes: "4096",
+          totalFee: "350",
+        }}
+      />
+    );
+
+    expect(getByText("Network base fee")).toBeTruthy();
+    expect(getByText("100 stroops")).toBeTruthy();
+    expect(getByText("Soroban resource fee")).toBeTruthy();
+    expect(getByText("250 stroops")).toBeTruthy();
+    expect(getByText("Estimated total fee")).toBeTruthy();
+    expect(getByText("350 stroops")).toBeTruthy();
+  });
 });
