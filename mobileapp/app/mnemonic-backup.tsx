@@ -44,6 +44,55 @@ const WordTile = ({ index, word }: WordTileProps) => (
   </View>
 );
 
+// ── Verify quiz ─────────────────────────────────────────────────────────────
+
+/** 1-based positions (3, 7, 11) that the user must confirm to verify backup. */
+const QUIZ_POSITIONS = [3, 7, 11];
+
+/** Deterministic-ish scramble helper (seeded per render is fine here). */
+function shuffle<T>(arr: T[]): T[] {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/** Distinct decoy pool drawn from the rest of the phrase, avoiding dupes. */
+function quizWordOptions(words: string[], position: number): string[] {
+  const correct = words[position - 1];
+  const decoys = shuffle(words.filter((w) => w !== correct)).slice(0, 3);
+  return shuffle([correct, ...decoys]);
+}
+
+const VerifyButton = ({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) => (
+  <TouchableOpacity
+    style={[styles.verifyButton, selected && styles.verifyButtonSelected]}
+    onPress={onPress}
+    activeOpacity={0.8}
+    accessibilityRole="button"
+    accessibilityState={{ selected }}
+  >
+    <Text
+      style={[
+        styles.verifyButtonText,
+        selected && styles.verifyButtonTextSelected,
+      ]}
+    >
+      {label}
+    </Text>
+  </TouchableOpacity>
+);
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function MnemonicBackupScreen() {
@@ -55,6 +104,9 @@ export default function MnemonicBackupScreen() {
   const [confirmed, setConfirmed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyCountdown, setCopyCountdown] = useState<number | null>(null);
+  const [stage, setStage] = useState<"phrase" | "verify">("phrase");
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [quizOptions, setQuizOptions] = useState<Record<number, string[]>>({});
 
   // Keep a ref to the clipboard cancel fn so we can clean up on unmount
   const cancelClipboardRef = useRef<(() => void) | null>(null);
@@ -150,16 +202,57 @@ export default function MnemonicBackupScreen() {
   // ── Continue handler ──────────────────────────────────────────────────────
 
   const handleContinue = useCallback(async () => {
-    if (!confirmed) return;
+    if (!confirmed || !wallet) return;
 
-    // Clear clipboard before navigating away
+    // Clear clipboard before showing the verify quiz
     await clearClipboard();
     if (countdownRef.current) clearInterval(countdownRef.current);
     cancelClipboardRef.current = null;
+    setCopied(false);
 
-    // Navigate to account-type selection (wallet is already stored)
-    router.replace("/account-type");
-  }, [confirmed, router]);
+    const words = wallet.mnemonic.split(" ");
+    const options: Record<number, string[]> = {};
+    for (const pos of QUIZ_POSITIONS)
+      options[pos] = quizWordOptions(words, pos);
+
+    // Ask the user to confirm a few phrase words before wallet unlock.
+    setQuizOptions(options);
+    setAnswers({});
+    setStage("verify");
+  }, [confirmed, wallet]);
+
+  // ── Verify handler ───────────────────────────────────────────────────────
+  // Only unlocks when the selected word for every quiz position is an exact
+  // match with the generated phrase.
+
+  const checkAnswers = useCallback(
+    (a: Record<number, string>) =>
+      QUIZ_POSITIONS.every(
+        (pos) => a[pos] === wallet?.mnemonic.split(" ")[pos - 1]
+      ),
+    [wallet]
+  );
+
+  const handleSelect = useCallback(
+    (pos: number, word: string) => {
+      const next = { ...answers, [pos]: word };
+      setAnswers(next);
+      if (checkAnswers(next)) {
+        // Navigate to account-type selection once verified.
+        router.replace("/account-type");
+      } else if (
+        Object.keys(next).length === QUIZ_POSITIONS.length &&
+        !checkAnswers(next)
+      ) {
+        Alert.alert(
+          "Incorrect phrase",
+          "One or more selected words don't match your recovery phrase. Please review and try again.",
+          [{ text: "OK" }]
+        );
+      }
+    },
+    [answers, checkAnswers, router]
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -213,93 +306,140 @@ export default function MnemonicBackupScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Warning banner */}
-        <View style={styles.warningBanner}>
-          <Ionicons name="warning-outline" size={20} color="#B7791F" />
-          <Text style={styles.warningText}>
-            Write these words down on paper. Never share them with anyone.
-            Screenshots are blocked for your security.
-          </Text>
-        </View>
+        {stage === "phrase" ? (
+          <>
+            {/* Warning banner */}
+            <View style={styles.warningBanner}>
+              <Ionicons name="warning-outline" size={20} color="#B7791F" />
+              <Text style={styles.warningText}>
+                Write these words down on paper. Never share them with anyone.
+                Screenshots are blocked for your security.
+              </Text>
+            </View>
 
-        {/* Word grid */}
-        <View style={styles.wordGrid}>
-          {words.map((word, i) => (
-            <WordTile key={i} index={i} word={word} />
-          ))}
-        </View>
+            {/* Word grid */}
+            <View style={styles.wordGrid}>
+              {words.map((word, i) => (
+                <WordTile key={i} index={i} word={word} />
+              ))}
+            </View>
 
-        {/* Copy button */}
-        <TouchableOpacity
-          style={[styles.copyButton, copied && styles.copyButtonActive]}
-          onPress={handleCopy}
-          activeOpacity={0.8}
-          accessibilityLabel="Copy recovery phrase to clipboard"
-        >
-          <Ionicons
-            name={copied ? "checkmark-circle-outline" : "copy-outline"}
-            size={20}
-            color={copied ? COLORS.primary : COLORS.black}
-            style={{ marginRight: 8 }}
-          />
-          <Text
-            style={[
-              styles.copyButtonText,
-              copied && styles.copyButtonTextActive,
-            ]}
-          >
-            {copied
-              ? `Copied — clears in ${copyCountdown}s`
-              : "Copy to Clipboard"}
-          </Text>
-        </TouchableOpacity>
+            {/* Copy button */}
+            <TouchableOpacity
+              style={[styles.copyButton, copied && styles.copyButtonActive]}
+              onPress={handleCopy}
+              activeOpacity={0.8}
+              accessibilityLabel="Copy recovery phrase to clipboard"
+            >
+              <Ionicons
+                name={copied ? "checkmark-circle-outline" : "copy-outline"}
+                size={20}
+                color={copied ? COLORS.primary : COLORS.black}
+                style={{ marginRight: 8 }}
+              />
+              <Text
+                style={[
+                  styles.copyButtonText,
+                  copied && styles.copyButtonTextActive,
+                ]}
+              >
+                {copied
+                  ? `Copied — clears in ${copyCountdown}s`
+                  : "Copy to Clipboard"}
+              </Text>
+            </TouchableOpacity>
 
-        {/* Confirmation checkbox */}
-        <TouchableOpacity
-          style={styles.checkboxRow}
-          onPress={() => setConfirmed((v) => !v)}
-          activeOpacity={0.8}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: confirmed }}
-        >
-          <View style={[styles.checkbox, confirmed && styles.checkboxChecked]}>
-            {confirmed && (
-              <Ionicons name="checkmark" size={14} color={COLORS.primary} />
-            )}
-          </View>
-          <Text style={styles.checkboxText}>
-            I have written down my recovery phrase and stored it safely. I
-            understand that losing it means losing access to my wallet forever.
-          </Text>
-        </TouchableOpacity>
+            {/* Confirmation checkbox */}
+            <TouchableOpacity
+              style={styles.checkboxRow}
+              onPress={() => setConfirmed((v) => !v)}
+              activeOpacity={0.8}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: confirmed }}
+            >
+              <View
+                style={[styles.checkbox, confirmed && styles.checkboxChecked]}
+              >
+                {confirmed && (
+                  <Ionicons name="checkmark" size={14} color={COLORS.primary} />
+                )}
+              </View>
+              <Text style={styles.checkboxText}>
+                I have written down my recovery phrase and stored it safely. I
+                understand that losing it means losing access to my wallet
+                forever.
+              </Text>
+            </TouchableOpacity>
 
-        {/* Account info */}
-        <View style={styles.accountInfo}>
-          <Ionicons
-            name="wallet-outline"
-            size={16}
-            color={COLORS.primary}
-            style={{ marginRight: 6 }}
-          />
-          <Text style={styles.accountInfoText}>
-            Public key:{" "}
-            <Text style={styles.publicKey}>
-              {wallet.accounts[0].publicKey.slice(0, 8)}…
-              {wallet.accounts[0].publicKey.slice(-8)}
+            {/* Account info */}
+            <View style={styles.accountInfo}>
+              <Ionicons
+                name="wallet-outline"
+                size={16}
+                color={COLORS.primary}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.accountInfoText}>
+                Public key:{" "}
+                <Text style={styles.publicKey}>
+                  {wallet.accounts[0].publicKey.slice(0, 8)}…
+                  {wallet.accounts[0].publicKey.slice(-8)}
+                </Text>
+              </Text>
+            </View>
+          </>
+        ) : (
+          /* Verify quiz — confirm words at positions 3, 7, 11 before unlock */
+          <View style={styles.quizCard}>
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={28}
+              color={COLORS.primary}
+            />
+            <Text style={styles.quizTitle}>Verify your recovery phrase</Text>
+            <Text style={styles.quizSubtitle}>
+              Select the correct word for each position to confirm you've saved
+              your phrase.
             </Text>
-          </Text>
-        </View>
+
+            {QUIZ_POSITIONS.map((pos) => {
+              const options = quizOptions[pos] ?? [];
+              return (
+                <View key={pos} style={styles.quizItem}>
+                  <Text style={styles.quizItemLabel}>Word #{pos}</Text>
+                  <View style={styles.quizOptionsRow}>
+                    {options.map((word) => (
+                      <VerifyButton
+                        key={word}
+                        label={word}
+                        selected={answers[pos] === word}
+                        onPress={() => handleSelect(pos, word)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
 
       {/* Footer CTA */}
       <View style={styles.footer}>
-        <Button
-          title="I've saved my phrase"
-          onPress={handleContinue}
-          variant="primary"
-          disabled={!confirmed}
-          style={!confirmed ? styles.disabledButton : undefined}
-        />
+        {stage === "phrase" ? (
+          <Button
+            title="I've saved my phrase"
+            onPress={handleContinue}
+            variant="primary"
+            disabled={!confirmed}
+            style={!confirmed ? styles.disabledButton : undefined}
+          />
+        ) : (
+          <Text style={styles.verifyHint}>
+            Select the correct word for each position — your wallet unlocks
+            automatically when all match.
+          </Text>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -480,5 +620,70 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
+  },
+  // Verify quiz
+  quizCard: {
+    backgroundColor: "#F7F8FC",
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#E6E8F0",
+    alignItems: "flex-start",
+  },
+  quizTitle: {
+    fontSize: 18,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  quizSubtitle: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#666",
+    lineHeight: 19,
+    marginBottom: 20,
+  },
+  quizItem: {
+    width: "100%",
+    marginBottom: 20,
+  },
+  quizItemLabel: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.primary,
+    marginBottom: 10,
+  },
+  quizOptionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  verifyButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#D5D9E6",
+    backgroundColor: COLORS.white,
+  },
+  verifyButtonSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primary,
+  },
+  verifyButtonText: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#333",
+  },
+  verifyButtonTextSelected: {
+    color: "#fff",
+  },
+  verifyHint: {
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#999",
+    textAlign: "center",
+    lineHeight: 19,
   },
 });

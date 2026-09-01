@@ -32,7 +32,13 @@ export function useTransactions() {
         cursorRef.current = page.nextCursor;
         hasMoreRef.current = page.nextCursor !== null;
         setTotal(page.total);
-        setItems((prev) => (append ? [...prev, ...page.items] : page.items));
+        setItems((prev) => {
+          if (!append) return page.items;
+          // Guard against duplicates when the backend returns overlapping items
+          // across cursor pages (e.g. a new tx arriving mid-scroll).
+          const seen = new Set(prev.map((t) => t.id));
+          return [...prev, ...page.items.filter((t) => !seen.has(t.id))];
+        });
         setError(null);
       } catch (e: unknown) {
         const msg =
