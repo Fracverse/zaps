@@ -315,7 +315,6 @@ impl YieldVaultContract {
             .checked_div(virtual_assets)
             .expect("divide by zero");
         let _ = index; // index still used by withdraw path; not needed here with virtual formula
-        assert!(shares > 0, "deposit too small");
 
         // Update user shares
         let user_key = DataKey::UserShares(depositor.clone());
