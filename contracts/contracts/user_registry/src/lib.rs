@@ -600,13 +600,18 @@ impl UserRegistryContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    /// Unregister a user's profile and mapping.
+    /// Unregister a user's profile and mapping (issue #963).
     ///
-    /// Refunds any reservation deposit still held for `user`. In the normal
-    /// flow that deposit was already released by `update_profile` on profile
-    /// completion (issue #772), so this is a fallback for users who never
-    /// completed their profile before unregistering — `UserDeposit` reads as
-    /// 0 either way once it has been paid out.
+    /// Only the owning address may call this (`require_auth`). Refunds any
+    /// reservation deposit still held for `user`. In the normal flow that
+    /// deposit was already released by `update_profile` on profile completion
+    /// (issue #772), so this is a fallback for users who never completed their
+    /// profile before unregistering — `UserDeposit` reads as 0 either way once
+    /// it has been paid out.
+    ///
+    /// Clears both the legacy struct keys and the `DataKey::{User,Username}`
+    /// enum variants written by `register_user`, so the username can be
+    /// reclaimed cleanly after release.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
@@ -618,7 +623,9 @@ impl UserRegistryContract {
             .persistent()
             .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"));
-        let username_key = UsernameToAddressKey { username };
+        let username_key = UsernameToAddressKey {
+            username: username.clone(),
+        };
         let reservation_amount: i128 = env
             .storage()
             .persistent()
@@ -627,6 +634,12 @@ impl UserRegistryContract {
 
         env.storage().persistent().remove(&user_key);
         env.storage().persistent().remove(&username_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::User(user.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Username(username.clone()));
         env.storage()
             .persistent()
             .remove(&DataKey::Avatar(user.clone()));
@@ -648,6 +661,9 @@ impl UserRegistryContract {
             let token_client = token::Client::new(&env, &reservation_token);
             token_client.transfer(&env.current_contract_address(), &user, &reservation_amount);
         }
+
+        env.events()
+            .publish((Symbol::new(&env, "UserUnregistered"),), (user, username));
     }
 }
 
@@ -692,6 +708,133 @@ mod tests {
         token_admin.mint(&user, &10_000_i128);
 
         (env, client, user, token_contract_id, reservation_amount)
+    }
+
+    // ── Issue #963: name claiming deposit + owner-only release/refund ──────
+
+    #[test]
+    fn register_user_deducts_minimum_reservation_deposit() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+
+        assert_eq!(token.balance(&user), 10_000);
+        assert_eq!(token.balance(&client.address), 0);
+
+        client.register_user(&user, &String::from_str(&env, "alice"));
+
+        assert_eq!(
+            token.balance(&user),
+            10_000 - reservation_amount,
+            "claim must deduct the configured reservation deposit from the claimer"
+        );
+        assert_eq!(
+            token.balance(&client.address),
+            reservation_amount,
+            "reservation deposit must be escrowed in the registry contract"
+        );
+
+        env.as_contract(&client.address, || {
+            let held: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::UserDeposit(user.clone()))
+                .expect("UserDeposit must be recorded on claim");
+            assert_eq!(held, reservation_amount);
+        });
+    }
+
+    #[test]
+    fn unregister_user_refunds_reservation_deposit_to_owner() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+        let username = String::from_str(&env, "bob");
+
+        client.register_user(&user, &username);
+        assert_eq!(token.balance(&user), 10_000 - reservation_amount);
+        assert_eq!(token.balance(&client.address), reservation_amount);
+
+        // Release without completing profile — deposit must be refunded in full.
+        client.unregister_user(&user);
+
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "unregister must refund the full reservation deposit to the owner"
+        );
+        assert_eq!(
+            token.balance(&client.address),
+            0,
+            "registry must hold no residual deposit after refund"
+        );
+
+        env.as_contract(&client.address, || {
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::UserDeposit(user.clone())),
+                "UserDeposit key must be cleared after refund"
+            );
+            assert!(
+                !env.storage().persistent().has(&DataKey::User(user.clone())),
+                "DataKey::User must be cleared on release"
+            );
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Username(username.clone())),
+                "DataKey::Username must be cleared on release"
+            );
+        });
+
+        let res = client.try_get_address(&username);
+        assert!(res.is_err(), "released username must no longer resolve");
+    }
+
+    #[test]
+    fn unregister_user_allows_username_reclaim_after_refund() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+        let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+        let username = String::from_str(&env, "carol");
+
+        client.register_user(&user, &username);
+        client.unregister_user(&user);
+
+        let other = Address::generate(&env);
+        token_admin.mint(&other, &10_000_i128);
+        client.register_user(&other, &username);
+
+        assert_eq!(client.get_address(&username), other);
+        assert_eq!(token.balance(&other), 10_000 - reservation_amount);
+        assert_eq!(token.balance(&client.address), reservation_amount);
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "original owner keeps their refund after someone else reclaims the name"
+        );
+    }
+
+    #[test]
+    fn register_user_rejects_claim_when_balance_below_minimum_deposit() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+
+        // Drain the claimer's balance below the minimum registration deposit.
+        let token = token::Client::new(&env, &token_contract_id);
+        let sink = Address::generate(&env);
+        token.transfer(&user, &sink, &(10_000 - (reservation_amount - 1)));
+        assert_eq!(token.balance(&user), reservation_amount - 1);
+
+        let res = client.try_register_user(&user, &String::from_str(&env, "dave"));
+        assert!(
+            res.is_err(),
+            "claim must fail when the user cannot cover the minimum reservation deposit"
+        );
+        assert_eq!(token.balance(&client.address), 0);
+        // Leave leftover dust with the underfunded claimer.
+        assert_eq!(token.balance(&user), reservation_amount - 1);
+        // Mint enough for a successful claim so the helper remains reusable in spirit.
+        let _ = token_admin;
     }
 
     #[test]
