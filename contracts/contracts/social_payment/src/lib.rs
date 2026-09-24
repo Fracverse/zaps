@@ -97,7 +97,8 @@ pub struct PayoutItem {
     pub amount: i128,
 }
 
-/// Emitted after a successful batch_payout for off-chain accounting / indexing.
+/// Emitted after a successful batch_payout for off-chain accounting / indexing (#532 / #978).
+/// Fields: `sender`, `batch_size`, `total_volume` (sum of payout amounts), `fee_charged`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MassPayoutExecuted {
@@ -580,7 +581,7 @@ impl SocialPaymentContract {
             );
         }
 
-        // #532 — emit MassPayoutExecuted summary event for off-chain indexers
+        // #532 / #978 — emit MassPayoutExecuted summary event for off-chain indexers
         env.events().publish(
             (Symbol::new(&env, "MassPayoutExecuted"),),
             MassPayoutExecuted {
@@ -1378,10 +1379,20 @@ mod tests {
         // no panic = auth was enforced and satisfied by mock
     }
 
-    // ── #532: MassPayoutExecuted event emitted ────────────────────────────────
+    // ── #532 / #978: MassPayoutExecuted event for off-chain accounting ───────
+    fn find_mass_payout_executed(env: &Env) -> Option<MassPayoutExecuted> {
+        let topic: Val = Symbol::new(env, "MassPayoutExecuted").into_val(env);
+        for item in env.events().all().iter() {
+            if item.1.contains(topic) {
+                return Some(item.2.try_into_val(env).unwrap());
+            }
+        }
+        None
+    }
+
     #[test]
     fn test_batch_payout_emits_mass_payout_executed_event() {
-        let (env, client, admin, _treasury, sender, receiver1) = setup();
+        let (env, client, admin, treasury, sender, receiver1) = setup();
         let receiver2 = Address::generate(&env);
         let token = mint_token(&env, &admin, &sender, 20_000);
         client.set_naira_token(&token);
@@ -1401,23 +1412,117 @@ mod tests {
 
         client.batch_payout(&sender, &payouts);
 
-        // total_volume = 3_000, fee = 3_000 * 10 / 10000 = 1 (min)
-        let _ = token_client.balance(&sender);
+        // total_volume = 3_000, fee = max(1, 3_000 * 10 / 10000) = 1
+        let ev = find_mass_payout_executed(&env).expect("MassPayoutExecuted event not emitted");
+        assert_eq!(ev.sender, sender);
+        assert_eq!(ev.batch_size, 2);
+        assert_eq!(ev.total_volume, 3_000);
+        assert_eq!(ev.fee_charged, 1);
+        assert_eq!(token_client.balance(&treasury), ev.fee_charged);
+    }
 
-        let events = env.events().all();
-        let topic: Val = Symbol::new(&env, "MassPayoutExecuted").into_val(&env);
-        let mut found = false;
-        for item in events.iter() {
-            if item.1.contains(topic) {
-                let ev: MassPayoutExecuted = item.2.try_into_val(&env).unwrap();
-                assert_eq!(ev.sender, sender);
-                assert_eq!(ev.batch_size, 2);
-                assert_eq!(ev.total_volume, 3_000);
-                assert!(ev.fee_charged > 0);
-                found = true;
-            }
-        }
-        assert!(found, "MassPayoutExecuted event not emitted");
+    /// #978 — exact fee accounting: event fee_charged must match treasury delta
+    /// and the volume*fee_coef/10000 formula used by indexers.
+    #[test]
+    fn test_mass_payout_executed_exact_fee_matches_treasury() {
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let receiver2 = Address::generate(&env);
+        let receiver3 = Address::generate(&env);
+        // volume 100_000 + 50_000 + 50_000 = 200_000; fee @ 10 bps = 200
+        let token = mint_token(&env, &admin, &sender, 200_200);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        let treasury_before = token_client.balance(&treasury);
+
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 100_000,
+            },
+            PayoutItem {
+                recipient: receiver2.clone(),
+                amount: 50_000,
+            },
+            PayoutItem {
+                recipient: receiver3.clone(),
+                amount: 50_000,
+            },
+        ];
+
+        client.batch_payout(&sender, &payouts);
+
+        let ev = find_mass_payout_executed(&env).expect("MassPayoutExecuted event not emitted");
+        assert_eq!(ev.sender, sender, "indexer must key batches by sender");
+        assert_eq!(ev.batch_size, 3);
+        assert_eq!(ev.total_volume, 200_000);
+        assert_eq!(ev.fee_charged, 200);
+        assert_eq!(
+            token_client.balance(&treasury) - treasury_before,
+            ev.fee_charged,
+            "fee_charged must equal treasury delta for off-chain reconciliation"
+        );
+        assert_eq!(token_client.balance(&receiver1), 100_000);
+        assert_eq!(token_client.balance(&receiver2), 50_000);
+        assert_eq!(token_client.balance(&receiver3), 50_000);
+    }
+
+    /// #978 — fee coefficient changes must flow into MassPayoutExecuted.fee_charged
+    /// so indexers can reconcile without re-deriving the on-chain fee schedule.
+    #[test]
+    fn test_mass_payout_executed_reflects_custom_fee_coefficient() {
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let token = mint_token(&env, &admin, &sender, 50_250);
+        client.set_naira_token(&token);
+        client.set_fee_coefficient(&50); // 0.5%
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 50_000,
+            },
+        ];
+
+        client.batch_payout(&sender, &payouts);
+
+        let ev = find_mass_payout_executed(&env).expect("MassPayoutExecuted event not emitted");
+        assert_eq!(ev.sender, sender);
+        assert_eq!(ev.batch_size, 1);
+        assert_eq!(ev.total_volume, 50_000);
+        // 50_000 * 50 / 10000 = 250
+        assert_eq!(ev.fee_charged, 250);
+        assert_eq!(token_client.balance(&treasury), 250);
+        assert_eq!(token_client.balance(&receiver1), 50_000);
+        assert_eq!(token_client.balance(&sender), 0);
+    }
+
+    /// #978 — single-recipient batch still emits structured MassPayoutExecuted
+    /// (batch_size=1) so indexers treat it identically to multi-recipient batches.
+    #[test]
+    fn test_mass_payout_executed_single_recipient_batch() {
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let token = mint_token(&env, &admin, &sender, 10_010);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 10_000,
+            },
+        ];
+
+        client.batch_payout(&sender, &payouts);
+
+        let ev = find_mass_payout_executed(&env).expect("MassPayoutExecuted event not emitted");
+        assert_eq!(ev.sender, sender);
+        assert_eq!(ev.batch_size, 1);
+        assert_eq!(ev.total_volume, 10_000);
+        assert_eq!(ev.fee_charged, 10); // 10000 * 10 / 10000
+        assert_eq!(token_client.balance(&treasury), ev.fee_charged);
     }
 
     #[test]
