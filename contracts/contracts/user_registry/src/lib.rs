@@ -366,14 +366,35 @@ impl UserRegistryContract {
 
     /// Register a Privy DID -> wallet address mapping.
     ///
-    /// The caller must supply an Ed25519 `signature` over the `(did, wallet)`
-    /// payload, produced by the trusted Privy verifier key configured via
-    /// `set_privy_verifier`. This proves Privy attested that `did` belongs to
-    /// `wallet` before the on-chain mapping is created, in addition to the
-    /// wallet itself authorizing the transaction.
+    /// Two independent authorization checks are enforced before any mapping
+    /// is written:
+    ///
+    /// 1. **Wallet authorization** — `wallet.require_auth()` ensures the
+    ///    transaction is signed by (or explicitly authorized by) the wallet
+    ///    that will be linked. This prevents a third party from registering a
+    ///    link on behalf of a wallet owner without their consent.
+    ///
+    /// 2. **Privy verifier signature** — the caller must supply a 64-byte
+    ///    Ed25519 `signature` over the canonical XDR encoding of the
+    ///    `(did, wallet)` tuple, produced by the trusted Privy backend key
+    ///    configured via `set_privy_verifier`. This proves that Privy's
+    ///    off-chain system attested the DID belongs to this wallet before the
+    ///    on-chain mapping is created.
+    ///
+    /// Both checks must pass; failing either panics and leaves storage
+    /// unchanged.
+    ///
+    /// Additionally, the function guards against duplicate registrations in
+    /// both directions:
+    /// - The same DID cannot be linked to more than one wallet (`PrivyDid`
+    ///   forward key already exists → panic).
+    /// - The same wallet cannot be linked to more than one DID (`WalletDid`
+    ///   reverse key already exists → panic).
     pub fn register_privy_did(env: Env, did: String, wallet: Address, signature: BytesN<64>) {
+        // ── 1. Wallet owner must authorize this transaction ──────────────────
         wallet.require_auth();
 
+        // ── 2. Privy verifier key must be configured ─────────────────────────
         let verifier_key: BytesN<32> = env
             .storage()
             .persistent()
@@ -385,26 +406,39 @@ impl UserRegistryContract {
             TTL_EXTEND_TO,
         );
 
+        // ── 3. Verify Privy's Ed25519 attestation over (did, wallet) ─────────
+        // The message is the canonical XDR serialization of the tuple so that
+        // both on-chain and off-chain code agree on the exact byte sequence
+        // being signed, with no ambiguity about encoding details.
         let message: Bytes = (did.clone(), wallet.clone()).to_xdr(&env);
         env.crypto()
             .ed25519_verify(&verifier_key, &message, &signature);
 
+        // ── 4. Reject duplicate DID (forward direction) ──────────────────────
         let did_key = DataKey::PrivyDid(did.clone());
         if env.storage().persistent().has(&did_key) {
             panic!("DID already registered");
         }
+
+        // ── 5. Reject duplicate wallet (reverse direction) ───────────────────
+        // Prevents the same wallet from accumulating multiple DID mappings,
+        // which would make the reverse index `WalletDid` inconsistent.
+        let wallet_did_key = DataKey::WalletDid(wallet.clone());
+        if env.storage().persistent().has(&wallet_did_key) {
+            panic!("wallet already has a DID linked");
+        }
+
+        // ── 6. Persist the bidirectional mapping ─────────────────────────────
         env.storage().persistent().set(&did_key, &wallet);
         env.storage()
             .persistent()
-            .set(&DataKey::WalletDid(wallet.clone()), &did);
+            .set(&wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(wallet.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events()
             .publish((symbol_short!("did_reg"),), (wallet, did));
@@ -468,7 +502,10 @@ impl UserRegistryContract {
         );
     }
 
-    /// Get the wallet address registered for a Privy DID
+    /// Get the wallet address registered for a Privy DID.
+    ///
+    /// Panics with "DID not registered" if the DID has not yet been linked via
+    /// `register_privy_did`.
     pub fn get_wallet_for_did(env: Env, did: String) -> Address {
         let key = DataKey::PrivyDid(did);
         let wallet = env
@@ -480,6 +517,25 @@ impl UserRegistryContract {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
         wallet
+    }
+
+    /// Get the Privy DID linked to a wallet address (reverse lookup).
+    ///
+    /// Exposes the `WalletDid` reverse-index written by `register_privy_did`
+    /// and maintained through `update_privy_did` / `recover_privy_did`.
+    /// Panics with "wallet has no DID linked" if the wallet has not been
+    /// linked to any DID.
+    pub fn get_did_for_wallet(env: Env, wallet: Address) -> String {
+        let key = DataKey::WalletDid(wallet);
+        let did = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("wallet has no DID linked"));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        did
     }
 
     /// Issue #754: Remove a user's profile data (username and avatar URI) from storage.
