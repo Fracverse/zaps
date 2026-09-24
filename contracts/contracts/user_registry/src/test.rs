@@ -37,18 +37,28 @@ fn sign_did_link(
     BytesN::from_array(env, &signature.to_bytes())
 }
 
-/// Verify that registering the same DID twice panics with a duplicate error.
+/// Verify that registering the same DID twice is rejected.
+///
+/// Uses `try_register_privy_did` which returns `Result` so the test
+/// process is not aborted by the contract's internal `panic!` — in
+/// contrast to `#[should_panic]` which does not work with Soroban v20's
+/// non-unwinding panics.
 #[test]
-#[ignore]
-#[should_panic(expected = "DID already registered")]
 fn test_register_privy_did_duplicate_fails() {
     let (env, client, signing_key) = setup();
     let wallet = Address::generate(&env);
     let did = String::from_str(&env, "did:privy:abc123");
     let signature = sign_did_link(&env, &signing_key, &did, &wallet);
+
+    // First registration succeeds.
     client.register_privy_did(&did, &wallet, &signature);
-    // Second registration with same DID must panic
-    client.register_privy_did(&did, &wallet, &signature);
+
+    // Second registration of the same DID must be rejected.
+    let result = client.try_register_privy_did(&did, &wallet, &signature);
+    assert!(
+        result.is_err(),
+        "registering the same DID twice must fail"
+    );
 }
 
 /// Verify that a successful DID registration stores the correct wallet mapping.
@@ -83,18 +93,32 @@ fn test_register_privy_did_snapshot() {
 
 /// Verify that a registration signed by a key other than the configured
 /// verifier is rejected before any mapping is created.
+///
+/// Uses `try_register_privy_did` (returns `Result`) so the contract's
+/// internal `panic!` (triggered by the failed ed25519_verify) is caught
+/// as an error rather than aborting the test process.
 #[test]
-#[ignore]
-#[should_panic]
 fn test_register_privy_did_invalid_signature_fails() {
     let (env, client, _signing_key) = setup();
     let wallet = Address::generate(&env);
     let did = String::from_str(&env, "did:privy:untrusted");
 
+    // Sign with a *different* key — not the one configured as the verifier.
     let forged_key = SigningKey::from_bytes(&[9u8; 32]);
     let signature = sign_did_link(&env, &forged_key, &did, &wallet);
 
-    client.register_privy_did(&did, &wallet, &signature);
+    let result = client.try_register_privy_did(&did, &wallet, &signature);
+    assert!(
+        result.is_err(),
+        "a signature from an untrusted key must be rejected"
+    );
+
+    // No mapping must have been created despite the failed call.
+    let lookup = client.try_get_wallet_for_did(&did);
+    assert!(
+        lookup.is_err(),
+        "DID must not be registered after rejected call"
+    );
 }
 
 /// Verify that updating a DID mapping with the correct old wallet succeeds.
@@ -110,10 +134,8 @@ fn test_update_privy_did_success() {
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
 }
 
-/// Verify that updating a DID mapping with the wrong old wallet panics.
+/// Verify that updating a DID mapping with the wrong old wallet is rejected.
 #[test]
-#[ignore]
-#[should_panic(expected = "unauthorized: old wallet does not match registered wallet")]
 fn test_update_privy_did_wrong_wallet_fails() {
     let (env, client, signing_key) = setup();
     let correct_wallet = Address::generate(&env);
@@ -122,7 +144,11 @@ fn test_update_privy_did_wrong_wallet_fails() {
     let did = String::from_str(&env, "did:privy:user3");
     let signature = sign_did_link(&env, &signing_key, &did, &correct_wallet);
     client.register_privy_did(&did, &correct_wallet, &signature);
-    client.update_privy_did(&did, &wrong_wallet, &new_wallet);
+    let result = client.try_update_privy_did(&did, &wrong_wallet, &new_wallet);
+    assert!(
+        result.is_err(),
+        "update with wrong old wallet must be rejected"
+    );
 }
 
 /// Verify that admin recovery reassigns a DID to a new wallet.
@@ -138,14 +164,13 @@ fn test_recover_privy_did_as_admin() {
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
 }
 
-/// Verify that querying an unregistered DID panics.
+/// Verify that querying an unregistered DID returns an error.
 #[test]
-#[ignore]
-#[should_panic(expected = "DID not registered")]
 fn test_get_wallet_for_unregistered_did_fails() {
     let (env, client, _signing_key) = setup();
     let did = String::from_str(&env, "did:privy:ghost");
-    client.get_wallet_for_did(&did);
+    let result = client.try_get_wallet_for_did(&did);
+    assert!(result.is_err(), "querying an unregistered DID must fail");
 }
 
 // ── Issue #776: 2-step admin ownership transfer ─────────────────────────────
