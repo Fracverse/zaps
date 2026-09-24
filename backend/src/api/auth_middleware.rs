@@ -6,6 +6,11 @@
 //! Bearer <token>` headers and attaches the authenticated user to the request
 //! extensions so downstream handlers can extract it without repeating JWT logic.
 //!
+//! ## Bearer token verification via Privy JWKS
+//!
+//! Bearer tokens from Privy are verified against dynamically fetched JWKS from
+//! the Privy endpoint. The JWKS client handles periodic refresh and caching.
+//!
 //! ## In-memory TTL token cache
 //!
 //! Validating a JWT on every single request is cheap (it's just HMAC-SHA256),
@@ -23,11 +28,12 @@
 //! ```rust
 //! // In main.rs, wrap the routes that require authentication:
 //! let auth_cache = AuthTokenCache::new();
+//! let privy_jwks = PrivyJwksClient::new(jwks_url);
 //!
 //! let protected = Router::new()
 //!     .nest("/api/feed", feed_routes(pool.clone()))
 //!     .layer(middleware::from_fn_with_state(
-//!         AuthMiddlewareState { pool: pool.clone(), cache: auth_cache },
+//!         AuthMiddlewareState { pool: pool.clone(), cache: auth_cache, privy: privy_jwks, privy_app_id },
 //!         auth_middleware,
 //!     ));
 //! ```
@@ -47,6 +53,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+use super::privy_jwks::PrivyJwksClient;
 
 // ── Cache configuration ───────────────────────────────────────────────────────
 
@@ -123,13 +131,13 @@ impl AuthTokenCache {
     }
 }
 
-// ── Middleware state ──────────────────────────────────────────────────────────
 
-/// State passed to `auth_middleware` via `middleware::from_fn_with_state`.
 #[derive(Clone)]
 pub struct AuthMiddlewareState {
     pub pool: sqlx::PgPool,
     pub cache: AuthTokenCache,
+    pub privy: Arc<PrivyJwksClient>,
+    pub privy_app_id: String,
 }
 
 // ── Authenticated user extension ──────────────────────────────────────────────
@@ -148,6 +156,10 @@ pub struct AuthenticatedUser {
 /// Axum middleware that validates `Authorization: Bearer <token>` on every
 /// request, caches the result for `TOKEN_CACHE_TTL`, and attaches an
 /// `AuthenticatedUser` extension for downstream handlers.
+///
+/// Supports two token types:
+/// - **Privy tokens**: Verified against dynamically fetched JWKS from Privy endpoint
+/// - **Local tokens**: Verified with our own JWT secret (for legacy/fallback)
 ///
 /// Returns `401 Unauthorized` when:
 /// - The `Authorization` header is absent.
@@ -182,10 +194,11 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
-    // ── 3. JWT validation ────────────────────────────────────────────────────
-    let address = match validate_jwt(&token) {
-        Some(addr) => addr,
-        None => {
+    // ── 3. JWT validation (Privy JWKS or local) ──────────────────────────────
+    let address = match validate_jwt_async(&token, &state).await {
+        Ok(addr) => addr,
+        Err(e) => {
+            tracing::warn!("Bearer token validation failed: {e}");
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({ "error": "Invalid or expired token" })),
@@ -239,35 +252,84 @@ fn extract_bearer_token(request: &Request<axum::body::Body>) -> Option<String> {
     header.strip_prefix("Bearer ").map(|t| t.to_string())
 }
 
-/// Decode and validate a JWT, returning the `sub` claim (Stellar address) on success.
-///
-/// Falls back gracefully: if the token is the well-known `mock-jwt-token-string`
-/// used in tests, it returns the mock address so existing test suites keep passing.
-fn validate_jwt(token: &str) -> Option<String> {
+/// Validate JWT using Privy JWKS (async) or fall back to local secret.
+/// Returns the Stellar address from the `sub` claim on success.
+async fn validate_jwt_async(
+    token: &str,
+    state: &AuthMiddlewareState,
+) -> Result<String, String> {
     // Allow the mock token used across integration tests.
     if token == "mock-jwt-token-string" {
-        return Some("GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string());
+        return Ok("GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string());
     }
 
+    // Try validating with Privy JWKS first (for Privy-issued tokens)
+    match state
+        .privy
+        .verify_token::<PrivyTokenClaims>(token, &state.privy_app_id)
+        .await
+    {
+        Ok(claims) => {
+            // Extract Stellar address from linked accounts in Privy token
+            if let Some(stellar_addr) = claims.stellar_address() {
+                tracing::debug!("Validated Privy token for Stellar address: {}", stellar_addr);
+                return Ok(stellar_addr);
+            }
+            // Fall back to subject if no linked Stellar account
+            tracing::debug!("Privy token has no linked Stellar account, using sub: {}", claims.sub);
+            Ok(claims.sub)
+        }
+        Err(e) => {
+            tracing::debug!("Privy JWKS validation failed, trying local JWT: {e}");
+            // Fall back to local JWT validation
+            validate_jwt_local(token)
+        }
+    }
+}
+
+/// Claims from Privy JWT containing linked accounts info.
+#[derive(serde::Deserialize)]
+struct PrivyTokenClaims {
+    #[serde(rename = "sub")]
+    pub sub: String,
+    #[serde(default)]
+    pub linked_accounts: Vec<PrivyLinkedAccount>,
+}
+
+impl PrivyTokenClaims {
+    /// Extract Stellar address from linked accounts.
+    fn stellar_address(&self) -> Option<String> {
+        self.linked_accounts
+            .iter()
+            .filter(|acc| acc.account_type == "wallet" && acc.chain_type.as_deref() == Some("stellar"))
+            .filter_map(|acc| acc.address.clone())
+            .next()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct PrivyLinkedAccount {
+    #[serde(rename = "type")]
+    pub account_type: String,
+    pub address: Option<String>,
+    pub chain_type: Option<String>,
+}
+
+/// Validate JWT using local secret (fallback for legacy tokens).
+fn validate_jwt_local(token: &str) -> Result<String, String> {
     let secret = std::env::var("JWT_SECRET")
         .unwrap_or_else(|_| "zaps-jwt-secret-placeholder-very-long-key".into());
 
     let mut validation = jsonwebtoken::Validation::default();
-    // Privy JWTs use the same HS256 default; adjust to RS256 if/when
-    // verify_privy_token is upgraded to full asymmetric verification.
     validation.algorithms = vec![jsonwebtoken::Algorithm::HS256];
 
-    match jsonwebtoken::decode::<crate::api::auth::Claims>(
+    jsonwebtoken::decode::<crate::api::auth::Claims>(
         token,
         &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
         &validation,
-    ) {
-        Ok(data) => Some(data.claims.sub),
-        Err(e) => {
-            tracing::debug!("JWT validation failed: {e}");
-            None
-        }
-    }
+    )
+    .map(|data| data.claims.sub)
+    .map_err(|e| e.to_string())
 }
 
 /// Find or create a user row for the given Stellar address and return
@@ -448,9 +510,10 @@ mod tests {
         assert_eq!(extracted.as_deref(), Some("my-token-123"));
     }
 
-    #[test]
-    fn mock_token_is_accepted() {
-        let result = validate_jwt("mock-jwt-token-string");
-        assert!(result.is_some());
+    #[tokio::test]
+    async fn mock_token_is_accepted() {
+        // Test the local JWT validation path
+        let result = validate_jwt_local("mock-jwt-token-string");
+        assert!(result.is_ok());
     }
 }

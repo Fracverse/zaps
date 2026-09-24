@@ -57,20 +57,37 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
 /// round-trip on every request.  See `auth_middleware::AuthTokenCache` for the
 /// TTL and eviction semantics.
 ///
+/// Bearer tokens are verified against dynamically fetched Privy JWKS, with
+/// fallback to local JWT validation for legacy tokens.
+///
 /// # Usage (in main.rs)
 /// ```rust
 /// let auth_cache = api::AuthTokenCache::new();
+/// let privy_jwks = api::privy_jwks::PrivyJwksClient::new(jwks_url);
 /// let protected = api::protected_routes(
 ///     Router::new()
 ///         .nest("/api/feed",   api::feed_routes(pool.clone()))
 ///         .nest("/api/social", api::social_routes(pool.clone())),
 ///     pool.clone(),
 ///     auth_cache,
+///     privy_jwks,
+///     privy_app_id,
 /// );
 /// ```
-pub fn protected_routes(router: Router, pool: sqlx::PgPool, cache: AuthTokenCache) -> Router {
+pub fn protected_routes(
+    router: Router,
+    pool: sqlx::PgPool,
+    cache: AuthTokenCache,
+    privy: std::sync::Arc<privy_jwks::PrivyJwksClient>,
+    privy_app_id: String,
+) -> Router {
     router.layer(middleware::from_fn_with_state(
-        AuthMiddlewareState { pool, cache },
+        AuthMiddlewareState {
+            pool,
+            cache,
+            privy,
+            privy_app_id,
+        },
         auth_middleware,
     ))
 }
