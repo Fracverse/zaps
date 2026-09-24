@@ -11,8 +11,6 @@ const TOKEN_KEY: Symbol = symbol_short!("token");
 const APY_KEY: Symbol = symbol_short!("apy");
 const PROPOSED_APY_KEY: Symbol = symbol_short!("prop_apy");
 const APY_ACTIVATION_KEY: Symbol = symbol_short!("apy_act");
-const SHARES_KEY: Symbol = symbol_short!("tot_shr");
-const ASSETS_KEY: Symbol = symbol_short!("tot_ast");
 const IDX_KEY: Symbol = symbol_short!("yld_idx");
 const IDX_LED_KEY: Symbol = symbol_short!("idx_led");
 const PROTO_BAL_KEY: Symbol = symbol_short!("p_bal");
@@ -154,11 +152,10 @@ mod sandbox_protocol {
 #[contracttype]
 enum DataKey {
     UserShares(Address),
-    /// Reentrancy lock for withdraw. Held in temporary storage for the
-    /// duration of the token transfer so a callback cannot re-enter.
     Locked,
-    /// Track cumulative active deposited principal for each user.
     UserDeposit(Address),
+    TotalShares,
+    TotalAssets,
 }
 
 #[contract]
