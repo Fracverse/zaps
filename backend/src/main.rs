@@ -305,6 +305,10 @@ async fn main() {
 
     // #561 — routes that require a valid Privy JWT are wrapped with the auth
     // middleware so the token is validated (and cached) before any handler runs.
+    // Bearer tokens are verified against dynamically fetched Privy JWKS.
+    let privy_jwks = Arc::new(api::privy_jwks::PrivyJwksClient::new(
+        config.privy_jwks_url.clone(),
+    ));
     let auth_required_routes = api::protected_routes(
         Router::new()
             .nest("/api/feed", api::feed_routes(pool.clone()))
@@ -321,6 +325,8 @@ async fn main() {
             .nest("/api/payouts", api::payout_routes(pool.clone())),
         pool.clone(),
         auth_cache.clone(),
+        privy_jwks,
+        config.privy_app_id.clone(),
     );
 
     let other_routes = auth_required_routes;
