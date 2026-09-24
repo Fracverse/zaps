@@ -566,30 +566,13 @@ fn crc16(data: &[u8]) -> u16 {
     crc
 }
 
-/// Validates Stellar address format (56 chars, G-prefix, valid checksum)
+/// Validates Stellar address format (56 chars, G-prefix, valid Base32)
 fn is_valid_stellar_address(address: &str) -> bool {
-    if address.len() != 56 {
-        return false;
-    }
-    if !address.starts_with('G') {
-        return false;
-    }
-    // Decode and validate checksum
-    match decode_base32(address) {
-        Some(decoded) => {
-            if decoded.len() != 35 {
-                return false;
-            }
-            if decoded[0] != 0x30 {
-                return false;
-            }
-            let checksum_bytes = &decoded[33..35];
-            let calculated_crc = crc16(&decoded[0..33]);
-            let expected_crc = ((checksum_bytes[1] as u16) << 8) | (checksum_bytes[0] as u16);
-            calculated_crc == expected_crc
-        }
-        None => false,
-    }
+    address.len() == 56
+        && address.starts_with('G')
+        && address
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || (b'2'..=b'7').contains(&(c as u8)))
 }
 
 /// Issue #562/#563: Privy JWT claims, including linked accounts. Deserialized

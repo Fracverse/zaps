@@ -301,7 +301,8 @@ async fn main() {
                 username_address_cache.clone(),
             )),
         )
-        .nest("/admin", api::admin_routes(pool.clone()));
+        .nest("/admin", api::admin_routes(pool.clone()))
+        .nest("/api/payouts", api::payout_webhook_routes(pool.clone()));
 
     // #561 — routes that require a valid Privy JWT are wrapped with the auth
     // middleware so the token is validated (and cached) before any handler runs.
@@ -420,6 +421,13 @@ async fn main() {
     let notification_config = services::notifications::NotificationSchedulerConfig::from_env();
     worker_handles.push(tokio::spawn(async move {
         services::notifications::run(notification_pool, notification_config).await;
+    }));
+
+    // BE-554 / Issue #936: Background queue worker processing bulk disbursement requests asynchronously
+    let disbursement_pool = pool.clone();
+    let disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
+    worker_handles.push(tokio::spawn(async move {
+        services::disbursement_worker::run(disbursement_pool, disbursement_config).await;
     }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));

@@ -1,4 +1,5 @@
 pub mod allbridge;
+pub mod auth;
 pub mod disbursement_worker;
 pub mod notifications;
 pub mod redis_cache;

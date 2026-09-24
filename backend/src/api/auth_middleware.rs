@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn extract_bearer_token_works() {
         use axum::http::{header::AUTHORIZATION, HeaderValue, Method};
-        let mut req = Request::builder()
+        let req = Request::builder()
             .method(Method::GET)
             .uri("/")
             .header(AUTHORIZATION, HeaderValue::from_static("Bearer my-token-123"))

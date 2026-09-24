@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn valid_stellar_address_passes() {
         // 56-char G-prefix address
-        let addr = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         assert_eq!(addr.len(), 56);
         assert!(is_valid_stellar_address(addr));
     }
@@ -1496,15 +1496,15 @@ mod tests {
 
     #[test]
     fn valid_contract_address_passes() {
-        let addr = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let addr = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         assert_eq!(addr.len(), 56);
         assert!(is_valid_contract_address(addr));
     }
 
     #[test]
     fn build_soroban_manage_data_xdr_produces_base64() {
-        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let user = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let vault = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         let result = build_soroban_manage_data_xdr(user, vault, "deposit", 1_000_000, 100);
         assert!(result.is_ok(), "unexpected error: {:?}", result.err());
         let xdr = result.unwrap();
@@ -1518,8 +1518,8 @@ mod tests {
 
     #[test]
     fn build_soroban_manage_data_xdr_withdraw() {
-        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let user = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let vault = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         let result = build_soroban_manage_data_xdr(user, vault, "withdraw", 500_000, 200);
         assert!(result.is_ok());
     }
@@ -1527,7 +1527,7 @@ mod tests {
     #[test]
     fn build_soroban_manage_data_xdr_rejects_bad_address() {
         let result =
-            build_soroban_manage_data_xdr("NOTANADDRESS", "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "deposit", 100, 100);
+            build_soroban_manage_data_xdr("NOTANADDRESS", "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM", "deposit", 100, 100);
         assert!(result.is_err());
     }
 }
