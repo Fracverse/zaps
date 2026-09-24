@@ -60,6 +60,9 @@ impl UserRegistryContract {
         admin
     }
 
+    /// Enforce username rules from issue #964:
+    /// lowercase ASCII letters + digits only, length in [3, 15].
+    /// Rejects uppercase, underscores, spaces, hyphens, and other symbols.
     fn validate_username(username: &String) {
         let len = username.len();
         if len < 3 || len > 15 {
@@ -71,6 +74,11 @@ impl UserRegistryContract {
 
         for i in 0..len as usize {
             let b = bytes[i];
+            // Explicitly reject common illegal bytes (underscore / symbols)
+            // before the general alphanumeric check for clearer contract behavior.
+            if b == b'_' || b == b'-' || b == b'@' || b == b'.' || b == b' ' {
+                panic!("username must be lowercase alphanumeric");
+            }
             let is_lowercase = (b'a'..=b'z').contains(&b);
             let is_numeric = (b'0'..=b'9').contains(&b);
             if !is_lowercase && !is_numeric {
@@ -832,35 +840,108 @@ mod tests {
         assert!(res.is_err());
     }
 
-    #[test]
-    #[ignore]
-    fn test_validation_rules() {
+    // ── Issue #964: username validation edge cases ───────────────────────────
+
+    fn setup_validation_client() -> (Env, UserRegistryContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
-
         let contract_id = env.register_contract(None, UserRegistryContract);
         let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
         let user = Address::generate(&env);
+        (env, client, user)
+    }
 
-        // Too short
-        let username = String::from_str(&env, "ab");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_too_short() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab"));
+    }
 
-        // Too long
-        let username = String::from_str(&env, "a123456789012345");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_empty() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, ""));
+    }
 
-        // Capital letter
-        let username = String::from_str(&env, "aBcd");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_too_long() {
+        let (env, client, user) = setup_validation_client();
+        // 16 chars
+        client.register_user(&user, &String::from_str(&env, "a123456789012345"));
+    }
 
-        // Special char
-        let username = String::from_str(&env, "ab-c");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_uppercase() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "aBcd"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_all_caps() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ABCD"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_underscore() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab_c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_hyphen_symbol() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab-c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_at_symbol() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab@c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_space() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab c"));
+    }
+
+    #[test]
+    fn username_accepts_min_length_alphanumeric() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        let username = String::from_str(&env, "ab1");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
+        assert_eq!(client.get_username(&user), username);
+    }
+
+    #[test]
+    fn username_accepts_max_length_alphanumeric() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        // 15 chars: lowercase + digits
+        let username = String::from_str(&env, "abc123456789012");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
+        assert_eq!(client.get_username(&user), username);
+    }
+
+    #[test]
+    fn username_accepts_digits_only_boundary() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        let username = String::from_str(&env, "123");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
     }
 
     #[test]
