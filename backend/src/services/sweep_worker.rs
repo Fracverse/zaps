@@ -55,7 +55,7 @@ pub async fn run(pool: PgPool, config: SweepWorkerConfig) {
         config.min_idle_amount
     );
 
-    let stellar = StellarClient::new(config.stellar_rpc_url.clone());
+    let stellar = StellarClient::with_env_backups(config.stellar_rpc_url.clone());
     let mut interval = tokio::time::interval(config.poll_interval);
 
     loop {
@@ -305,7 +305,7 @@ pub async fn run_yield_checkpoints(pool: PgPool, config: YieldCheckpointConfig) 
         config.yield_vault_contract_id
     );
 
-    let stellar = StellarClient::new(config.stellar_rpc_url.clone());
+    let stellar = StellarClient::with_env_backups(config.stellar_rpc_url.clone());
     let mut interval = tokio::time::interval(config.interval);
 
     loop {

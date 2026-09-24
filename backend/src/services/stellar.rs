@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use stellar_base::{
     amount::Stroops,
     network::Network,
@@ -14,13 +15,25 @@ use stellar_base::{
 // Stellar/Soroban Horizon & RPC operations client stub
 // This client interacts with Stellar RPC nodes and Horizon endpoints.
 
+/// #947: How long an endpoint that timed out or returned a retryable error is
+/// skipped before it becomes eligible for traffic again.
+const ENDPOINT_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Comma-separated backup Horizon/Soroban RPC endpoints, tried in order after
+/// the primary (`STELLAR_RPC_URL`) fails.
+const BACKUP_URLS_ENV: &str = "STELLAR_RPC_BACKUP_URLS";
+
 pub struct StellarClient {
     pub rpc_url: String,
     /// Ordered failover endpoints. The first endpoint remains `rpc_url` for
     /// backwards compatibility with existing callers and diagnostics.
     pub rpc_urls: Vec<String>,
     pub http_client: reqwest::Client,
-    next_endpoint: AtomicUsize,
+    /// #947: Index of the endpoint currently serving traffic. Sticky: it only
+    /// moves when that endpoint fails, so a healthy primary keeps all load.
+    current_endpoint: AtomicUsize,
+    /// Per-endpoint cooldown deadline; `Some(t)` means "unhealthy until `t`".
+    unhealthy_until: Vec<Mutex<Option<Instant>>>,
 }
 
 impl StellarClient {
@@ -28,19 +41,34 @@ impl StellarClient {
         Self::with_rpc_urls(vec![rpc_url])
     }
 
-    /// Build a client with an ordered pool of Horizon/Soroban endpoints.
-    /// Requests rotate through the pool after timeout, connection, and
-    /// retryable HTTP failures.
+    /// #947: `rpc_url` as primary, followed by any backups listed in
+    /// `STELLAR_RPC_BACKUP_URLS`.
+    pub fn with_env_backups(rpc_url: String) -> Self {
+        let backups = std::env::var(BACKUP_URLS_ENV).unwrap_or_default();
+        Self::with_rpc_urls(
+            std::iter::once(rpc_url)
+                .chain(backups.split(',').map(|url| url.trim().to_string()))
+                .collect(),
+        )
+    }
+
+    /// Build a client with an ordered pool of Horizon/Soroban endpoints: the
+    /// first is the primary, the rest are backups. On timeout, connection
+    /// failure, 5xx or 429 the failing endpoint is put on cooldown and the
+    /// request fails over to the next healthy endpoint (round-robin).
     pub fn with_rpc_urls(rpc_urls: Vec<String>) -> Self {
-        let mut endpoints: Vec<String> = rpc_urls
-            .into_iter()
-            .map(|url| url.trim_end_matches('/').to_string())
-            .filter(|url| !url.is_empty())
-            .collect();
+        let mut endpoints: Vec<String> = Vec::new();
+        for url in rpc_urls {
+            let url = url.trim().trim_end_matches('/').to_string();
+            if !url.is_empty() && !endpoints.contains(&url) {
+                endpoints.push(url);
+            }
+        }
         if endpoints.is_empty() {
             endpoints.push("https://soroban-testnet.stellar.org".to_string());
         }
         let rpc_url = endpoints[0].clone();
+        let unhealthy_until = endpoints.iter().map(|_| Mutex::new(None)).collect();
         Self {
             rpc_url,
             rpc_urls: endpoints,
@@ -48,66 +76,124 @@ impl StellarClient {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("valid reqwest client configuration"),
-            next_endpoint: AtomicUsize::new(0),
+            current_endpoint: AtomicUsize::new(0),
+            unhealthy_until,
         }
     }
 
-    /// Send an RPC request with retry mechanism (BE-042)
+    /// #947: The endpoint to try next — the current one if it is healthy,
+    /// otherwise the next healthy one in pool order. If every endpoint is
+    /// cooling down, the current one is used anyway rather than failing
+    /// without trying.
+    fn select_endpoint(&self) -> usize {
+        let len = self.rpc_urls.len();
+        let start = self.current_endpoint.load(Ordering::Acquire) % len;
+        let now = Instant::now();
+        (0..len)
+            .map(|offset| (start + offset) % len)
+            .find(|&idx| self.is_healthy(idx, now))
+            .unwrap_or(start)
+    }
+
+    fn is_healthy(&self, idx: usize, now: Instant) -> bool {
+        match *self.unhealthy_until[idx].lock().unwrap() {
+            Some(until) => now >= until,
+            None => true,
+        }
+    }
+
+    fn mark_healthy(&self, idx: usize) {
+        *self.unhealthy_until[idx].lock().unwrap() = None;
+        self.current_endpoint.store(idx, Ordering::Release);
+    }
+
+    /// Put `idx` on cooldown and advance the pool past it. Uses a CAS so that
+    /// concurrent requests failing on the same endpoint advance it only once.
+    fn mark_unhealthy(&self, idx: usize) {
+        *self.unhealthy_until[idx].lock().unwrap() = Some(Instant::now() + ENDPOINT_COOLDOWN);
+        let next = (idx + 1) % self.rpc_urls.len();
+        let _ = self.current_endpoint.compare_exchange(
+            idx,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    /// Send an RPC request with retry mechanism (BE-042) and endpoint
+    /// failover (#947).
+    ///
+    /// A timeout, connection error, 5xx or 429 puts the endpoint on cooldown
+    /// and the request is retried immediately against the next healthy
+    /// endpoint. Exponential backoff (1s, 2s, 4s, ...) is applied only once
+    /// every endpoint in the pool has been tried, so with a single endpoint
+    /// the behaviour is the original retry-with-backoff.
     pub async fn send_rpc_request(
         &self,
         method: &str,
         params: Value,
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let max_attempts = 3;
+        let pool_size = self.rpc_urls.len();
+        let max_attempts = pool_size.max(3);
         let mut attempts = 0;
+        let mut backoff_rounds = 0u32;
+
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params
+        });
 
         loop {
             attempts += 1;
 
-            let payload = json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": method,
-                "params": params
-            });
-
-            let endpoint_index =
-                self.next_endpoint.fetch_add(1, Ordering::Relaxed) % self.rpc_urls.len();
+            let endpoint_index = self.select_endpoint();
             let endpoint = &self.rpc_urls[endpoint_index];
             let response = self.http_client.post(endpoint).json(&payload).send().await;
 
-            match response {
+            let failure = match response {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_success() {
+                        self.mark_healthy(endpoint_index);
                         let json_resp: Value = resp.json().await?;
                         return Ok(json_resp);
-                    } else if status.as_u16() == 500
-                        || status.as_u16() == 502
-                        || status.as_u16() == 503
-                        || status.as_u16() == 504
-                        || status.as_u16() == 429
-                    {
-                        // Server errors / rate limits, eligible for retry
+                    } else if is_retryable_status(status) {
+                        format!("HTTP {status}")
                     } else {
                         return Err(format!("RPC call failed with status: {}", status).into());
                     }
                 }
                 Err(e) => {
                     if e.is_timeout() || e.is_connect() {
-                        // Network timeout or connect errors, eligible for retry
+                        e.to_string()
                     } else {
                         return Err(e.into());
                     }
                 }
-            }
+            };
+
+            self.mark_unhealthy(endpoint_index);
+            tracing::warn!(
+                endpoint = %endpoint,
+                attempt = attempts,
+                "Stellar RPC endpoint failed ({failure}), failing over"
+            );
 
             if attempts >= max_attempts {
-                return Err("Max retry attempts reached".into());
+                return Err(format!(
+                    "Max retry attempts reached across {pool_size} RPC endpoint(s): {failure}"
+                )
+                .into());
             }
 
-            // Exponential backoff
-            tokio::time::sleep(Duration::from_secs(2_u64.pow(attempts - 1))).await;
+            // Fail over to a backup immediately; back off only after a full
+            // pass over the pool.
+            if attempts % pool_size == 0 {
+                tokio::time::sleep(Duration::from_secs(2_u64.pow(backoff_rounds))).await;
+                backoff_rounds += 1;
+            }
         }
     }
 
@@ -167,6 +253,113 @@ impl StellarClient {
         };
 
         Ok(hash)
+    }
+}
+
+/// #947: Any 5xx is a node-side failure worth failing over on; 429 means the
+/// node is shedding load, so another node may still serve the request.
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+#[cfg(test)]
+mod failover_tests {
+    use super::*;
+
+    fn pool() -> StellarClient {
+        StellarClient::with_rpc_urls(vec![
+            "https://primary.example".into(),
+            "https://backup-1.example/".into(),
+            "https://backup-2.example".into(),
+        ])
+    }
+
+    #[test]
+    fn normalizes_and_dedupes_endpoints() {
+        let client = StellarClient::with_rpc_urls(vec![
+            " https://a.example/ ".into(),
+            "".into(),
+            "https://a.example".into(),
+            "https://b.example".into(),
+        ]);
+        assert_eq!(client.rpc_urls, vec!["https://a.example", "https://b.example"]);
+        assert_eq!(client.rpc_url, "https://a.example");
+    }
+
+    #[test]
+    fn empty_pool_falls_back_to_testnet() {
+        let client = StellarClient::with_rpc_urls(vec![]);
+        assert_eq!(client.rpc_urls, vec!["https://soroban-testnet.stellar.org"]);
+    }
+
+    #[test]
+    fn healthy_primary_is_sticky() {
+        let client = pool();
+        assert_eq!(client.select_endpoint(), 0);
+        client.mark_healthy(0);
+        assert_eq!(client.select_endpoint(), 0);
+    }
+
+    #[test]
+    fn fails_over_to_next_healthy_backup() {
+        let client = pool();
+        client.mark_unhealthy(0);
+        assert_eq!(client.select_endpoint(), 1);
+        client.mark_unhealthy(1);
+        assert_eq!(client.select_endpoint(), 2);
+    }
+
+    #[test]
+    fn skips_cooling_endpoint_even_if_current_points_at_it() {
+        let client = pool();
+        client.mark_unhealthy(1);
+        // current is still 0 (healthy); after 0 fails, 1 is cooling down.
+        client.mark_unhealthy(0);
+        assert_eq!(client.select_endpoint(), 2);
+    }
+
+    #[test]
+    fn concurrent_failures_on_same_endpoint_advance_once() {
+        let client = pool();
+        client.mark_unhealthy(0);
+        client.mark_unhealthy(0);
+        assert_eq!(client.current_endpoint.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn all_endpoints_down_still_returns_an_endpoint() {
+        let client = pool();
+        for idx in 0..3 {
+            client.mark_unhealthy(idx);
+        }
+        assert!(client.select_endpoint() < 3);
+    }
+
+    #[test]
+    fn success_clears_cooldown() {
+        let client = pool();
+        client.mark_unhealthy(0);
+        client.mark_healthy(0);
+        assert!(client.is_healthy(0, Instant::now()));
+        assert_eq!(client.select_endpoint(), 0);
+    }
+
+    #[test]
+    fn classifies_retryable_statuses() {
+        use reqwest::StatusCode;
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::HTTP_VERSION_NOT_SUPPORTED,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            assert!(is_retryable_status(status), "{status} should fail over");
+        }
+        for status in [StatusCode::BAD_REQUEST, StatusCode::NOT_FOUND] {
+            assert!(!is_retryable_status(status), "{status} should not retry");
+        }
     }
 }
 
