@@ -82,7 +82,10 @@ impl std::fmt::Display for PrivyAuthError {
             Self::InvalidAudience(aud) => write!(f, "Invalid Privy token audience: '{aud}'"),
             Self::InvalidIssuer(iss) => write!(f, "Invalid Privy token issuer: '{iss}'"),
             Self::InvalidDid(did) => write!(f, "Invalid Privy DID format: '{did}'"),
-            Self::WalletMismatch => write!(f, "Stellar wallet address is not authorized in Privy identity"),
+            Self::WalletMismatch => write!(
+                f,
+                "Stellar wallet address is not authorized in Privy identity"
+            ),
         }
     }
 }
@@ -224,7 +227,8 @@ impl PrivyAuthService {
         token: &str,
         expected_app_id: &str,
     ) -> Result<PrivyClaims, PrivyAuthError> {
-        let header = decode_header(token).map_err(|e| PrivyAuthError::InvalidToken(e.to_string()))?;
+        let header =
+            decode_header(token).map_err(|e| PrivyAuthError::InvalidToken(e.to_string()))?;
 
         if !ALLOWED_ALGORITHMS.contains(&header.alg) {
             return Err(PrivyAuthError::UnsupportedAlgorithm);
@@ -242,17 +246,18 @@ impl PrivyAuthService {
         validation.set_issuer(&["privy.io"]);
         validation.set_required_spec_claims(&["exp", "aud", "iss"]);
 
-        let data = decode::<PrivyClaims>(token, &decoding_key, &validation)
-            .map_err(|e| match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => PrivyAuthError::ExpiredToken,
-                jsonwebtoken::errors::ErrorKind::InvalidAudience => {
-                    PrivyAuthError::InvalidAudience(expected_app_id.to_string())
-                }
-                jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
-                    PrivyAuthError::InvalidIssuer("privy.io".to_string())
-                }
-                _ => PrivyAuthError::InvalidToken(e.to_string()),
-            })?;
+        let data = decode::<PrivyClaims>(token, &decoding_key, &validation).map_err(|e| match e
+            .kind()
+        {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => PrivyAuthError::ExpiredToken,
+            jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                PrivyAuthError::InvalidAudience(expected_app_id.to_string())
+            }
+            jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
+                PrivyAuthError::InvalidIssuer("privy.io".to_string())
+            }
+            _ => PrivyAuthError::InvalidToken(e.to_string()),
+        })?;
 
         // Ensure subject starts with 'did:'
         if !Self::is_valid_did(&data.claims.subject) {
@@ -310,7 +315,9 @@ mod tests {
     #[test]
     fn test_did_validation() {
         assert!(PrivyAuthService::is_valid_did("did:privy:user_12345678"));
-        assert!(PrivyAuthService::is_valid_did("did:key:z6MkhaXgBZDvotDkL5257faiz4574GMaPb28jWtJ32sE8pfC"));
+        assert!(PrivyAuthService::is_valid_did(
+            "did:key:z6MkhaXgBZDvotDkL5257faiz4574GMaPb28jWtJ32sE8pfC"
+        ));
         assert!(!PrivyAuthService::is_valid_did("user_12345678"));
         assert!(!PrivyAuthService::is_valid_did("did:123"));
     }
@@ -326,7 +333,9 @@ mod tests {
             linked_accounts: vec![
                 PrivyLinkedAccount {
                     account_type: "wallet".to_string(),
-                    address: Some("GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN".to_string()),
+                    address: Some(
+                        "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN".to_string(),
+                    ),
                     chain_type: Some("stellar".to_string()),
                     verified_at: None,
                 },

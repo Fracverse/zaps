@@ -979,7 +979,9 @@ pub async fn upload_avatar(
                 Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("Failed to read upload: {}", e) })),
+                        Json(
+                            serde_json::json!({ "error": format!("Failed to read upload: {}", e) }),
+                        ),
                     )
                         .into_response();
                 }

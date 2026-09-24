@@ -56,11 +56,7 @@ struct MockLinkedAccount {
 }
 
 /// Helper: Generate a mock Privy JWT token for testing
-fn create_mock_privy_token(
-    did: &str,
-    stellar_address: Option<&str>,
-    expired: bool,
-) -> String {
+fn create_mock_privy_token(did: &str, stellar_address: Option<&str>, expired: bool) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -143,11 +139,13 @@ fn mock_jwks_url() -> &'static str {
 async fn setup_test_pool() -> Option<PgPool> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/zaps_test".to_string());
-    
+
     match tokio::time::timeout(
         std::time::Duration::from_millis(500),
         PgPool::connect(&database_url),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(pool)) => Some(pool),
         _ => None,
     }
@@ -200,14 +198,14 @@ mod privy_auth_integration_tests {
             return;
         };
         let app = create_test_app(pool.clone());
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
-        
+
         let token = create_mock_privy_token(&privy_did, Some(stellar_addr), false);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")
@@ -223,7 +221,7 @@ mod privy_auth_integration_tests {
             .unwrap();
 
         let response = app.oneshot(request).await.unwrap();
-        
+
         assert_eq!(
             response.status(),
             StatusCode::CREATED,
@@ -232,11 +230,14 @@ mod privy_auth_integration_tests {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        
-        assert!(json["token"].is_string(), "Response should contain JWT token");
+
+        assert!(
+            json["token"].is_string(),
+            "Response should contain JWT token"
+        );
         assert_eq!(json["username"].as_str().unwrap(), "u_GBPK7THXDEPNBQB5K");
         assert_eq!(json["privy_did"].as_str().unwrap(), privy_did);
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
     }
 
@@ -248,13 +249,13 @@ mod privy_auth_integration_tests {
             return;
         };
         let app = create_test_app(pool.clone());
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let did_1 = format!("did:privy:test_{}", Uuid::new_v4());
         let did_2 = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
-        
+
         // First request: Link address to DID 1
         let token_1 = create_mock_privy_token(&did_1, Some(stellar_addr), false);
         let req_1 = Request::builder()
@@ -270,10 +271,10 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_1 = create_test_app(pool.clone()).oneshot(req_1).await.unwrap();
         assert_eq!(resp_1.status(), StatusCode::CREATED);
-        
+
         // Second request: Try to link same address to DID 2
         let token_2 = create_mock_privy_token(&did_2, Some(stellar_addr), false);
         let req_2 = Request::builder()
@@ -289,7 +290,7 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_2 = app.oneshot(req_2).await.unwrap();
         assert_eq!(
             resp_2.status(),
@@ -303,7 +304,7 @@ mod privy_auth_integration_tests {
             .as_str()
             .unwrap()
             .contains("already linked to a different Privy identity"));
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
     }
 
@@ -315,14 +316,14 @@ mod privy_auth_integration_tests {
             return;
         };
         let app = create_test_app(pool.clone());
-        
+
         let addr_1 = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let addr_2 = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         cleanup_test_user(&pool, addr_1).await;
         cleanup_test_user(&pool, addr_2).await;
-        
+
         // First request: Link DID to address 1
         let token_1 = create_mock_privy_token(&privy_did, Some(addr_1), false);
         let req_1 = Request::builder()
@@ -338,10 +339,10 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_1 = create_test_app(pool.clone()).oneshot(req_1).await.unwrap();
         assert_eq!(resp_1.status(), StatusCode::CREATED);
-        
+
         // Second request: Try to link same DID to address 2
         let token_2 = create_mock_privy_token(&privy_did, Some(addr_2), false);
         let req_2 = Request::builder()
@@ -357,7 +358,7 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_2 = app.oneshot(req_2).await.unwrap();
         assert_eq!(
             resp_2.status(),
@@ -371,7 +372,7 @@ mod privy_auth_integration_tests {
             .as_str()
             .unwrap()
             .contains("already linked to a different Stellar address"));
-        
+
         cleanup_test_user(&pool, addr_1).await;
         cleanup_test_user(&pool, addr_2).await;
     }
@@ -384,14 +385,14 @@ mod privy_auth_integration_tests {
             return;
         };
         let app = create_test_app(pool.clone());
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
-        
+
         let token = create_mock_privy_token(&privy_did, Some(stellar_addr), false);
-        
+
         // First authentication
         let req_1 = Request::builder()
             .method("POST")
@@ -406,10 +407,10 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_1 = create_test_app(pool.clone()).oneshot(req_1).await.unwrap();
         assert_eq!(resp_1.status(), StatusCode::CREATED);
-        
+
         // Second authentication with same credentials
         let token_2 = create_mock_privy_token(&privy_did, Some(stellar_addr), false);
         let req_2 = Request::builder()
@@ -425,7 +426,7 @@ mod privy_auth_integration_tests {
                 .to_string(),
             ))
             .unwrap();
-        
+
         let resp_2 = app.oneshot(req_2).await.unwrap();
         assert_eq!(
             resp_2.status(),
@@ -436,7 +437,7 @@ mod privy_auth_integration_tests {
         let body = resp_2.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert!(json["token"].is_string());
-        
+
         cleanup_test_user(&pool, stellar_addr).await;
     }
 
@@ -444,12 +445,12 @@ mod privy_auth_integration_tests {
     #[tokio::test]
     async fn test_privy_auth_rejects_invalid_stellar_address() {
         let app = create_mock_auth_app();
-        
+
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
         let invalid_addr = "invalid_address_123";
-        
+
         let token = create_mock_privy_token(&privy_did, Some(invalid_addr), false);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")
@@ -483,12 +484,12 @@ mod privy_auth_integration_tests {
     #[tokio::test]
     async fn test_privy_auth_rejects_invalid_did_format() {
         let app = create_mock_auth_app();
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let invalid_did = "invalid_did";
-        
+
         let token = create_mock_privy_token(invalid_did, Some(stellar_addr), false);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")
@@ -522,13 +523,13 @@ mod privy_auth_integration_tests {
     #[tokio::test]
     async fn test_privy_auth_rejects_expired_token() {
         let app = create_mock_auth_app();
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         // Create an expired token
         let expired_token = create_mock_privy_token(&privy_did, Some(stellar_addr), true);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")
@@ -551,14 +552,14 @@ mod privy_auth_integration_tests {
     #[tokio::test]
     async fn test_privy_auth_rejects_mismatched_wallet() {
         let app = create_mock_auth_app();
-        
+
         let token_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let submitted_addr = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         // Create token with token_addr but submit different address
         let token = create_mock_privy_token(&privy_did, Some(token_addr), false);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")
@@ -595,13 +596,13 @@ mod privy_auth_integration_tests {
     #[tokio::test]
     async fn test_privy_auth_rejects_token_without_stellar_wallet() {
         let app = create_mock_auth_app();
-        
+
         let stellar_addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         let privy_did = format!("did:privy:test_{}", Uuid::new_v4());
-        
+
         // Create token with NO Stellar address
         let token = create_mock_privy_token(&privy_did, None, false);
-        
+
         let request = Request::builder()
             .method("POST")
             .uri("/api/auth/privy")

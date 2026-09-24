@@ -164,7 +164,7 @@ pub async fn get_batch_detail(
         WHERE id = $1
         "#,
     )
-    .bind(&batch_id)
+    .bind(batch_id)
     .fetch_optional(&pool)
     .await
     {
@@ -218,7 +218,7 @@ pub async fn get_batch_detail(
         ORDER BY created_at ASC
         "#,
     )
-    .bind(&batch_id)
+    .bind(batch_id)
     .fetch_all(&pool)
     .await
     {
@@ -253,8 +253,7 @@ pub async fn get_batch_detail(
         })
         .collect();
 
-    Json(BatchDetailResponse { batch, recipients })
-    .into_response()
+    Json(BatchDetailResponse { batch, recipients }).into_response()
 }
 
 /// GET /api/payouts/batch/:id/export
@@ -298,7 +297,13 @@ pub async fn export_batch(
     }
 
     (
-        [(header::CONTENT_TYPE, "text/csv; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"payout-results.csv\"")],
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"payout-results.csv\"",
+            ),
+        ],
         csv,
     )
         .into_response()
@@ -354,10 +359,10 @@ pub async fn create_batch(
         "#,
     )
     .bind(&payload.idempotency_key)
-    .bind(&created_by)
+    .bind(created_by)
     .bind(&payload.currency)
-    .bind(&payload.total_recipients)
-    .bind(&payload.total_amount)
+    .bind(payload.total_recipients)
+    .bind(payload.total_amount)
     .fetch_one(&pool)
     .await
     {
@@ -596,7 +601,10 @@ pub async fn sdp_reconciliation_webhook(
         "SUBMITTED" => "SUBMITTED",
         _ => "CONFIRMED",
     };
-    let detail_msg = payload.error_message.as_deref().unwrap_or("Reconciled from SDP webhook");
+    let detail_msg = payload
+        .error_message
+        .as_deref()
+        .unwrap_or("Reconciled from SDP webhook");
 
     let _ = sqlx::query(
         r#"
@@ -733,13 +741,19 @@ mod tests {
         let mut mac2 = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
         mac2.update(body);
         let signature2 = hex::encode(mac2.finalize().into_bytes());
-        assert!(constant_time_eq(signature.as_bytes(), signature2.as_bytes()));
+        assert!(constant_time_eq(
+            signature.as_bytes(),
+            signature2.as_bytes()
+        ));
 
         // Verify that different body produces different signature
         let mut mac3 = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
         mac3.update(b"tampered body");
         let signature3 = hex::encode(mac3.finalize().into_bytes());
-        assert!(!constant_time_eq(signature.as_bytes(), signature3.as_bytes()));
+        assert!(!constant_time_eq(
+            signature.as_bytes(),
+            signature3.as_bytes()
+        ));
     }
 
     #[test]
@@ -751,7 +765,10 @@ mod tests {
         }"#;
 
         let payload: SdpReconciliationPayload = serde_json::from_str(valid_json).unwrap();
-        assert_eq!(payload.id, Some("11111111-2222-3333-4444-555555555555".to_string()));
+        assert_eq!(
+            payload.id,
+            Some("11111111-2222-3333-4444-555555555555".to_string())
+        );
         assert_eq!(payload.status, "COMPLETED");
         assert_eq!(payload.tx_hash, Some("tx-stellar-hash-123".to_string()));
     }
@@ -768,7 +785,10 @@ mod tests {
 
         let payload: SdpReconciliationPayload = serde_json::from_str(json).unwrap();
         assert_eq!(payload.id, Some("sdp-disbursement-999".to_string()));
-        assert_eq!(payload.external_id, Some("11111111-2222-3333-4444-555555555555".to_string()));
+        assert_eq!(
+            payload.external_id,
+            Some("11111111-2222-3333-4444-555555555555".to_string())
+        );
         assert_eq!(payload.status, "SUCCESS");
     }
 
@@ -807,14 +827,19 @@ mod tests {
             .unwrap();
 
         let app = Router::new()
-            .route("/sdp/webhook", axum::routing::post(sdp_reconciliation_webhook))
+            .route(
+                "/sdp/webhook",
+                axum::routing::post(sdp_reconciliation_webhook),
+            )
             .with_state(pool);
 
         let req = Request::builder()
             .method("POST")
             .uri("/sdp/webhook")
             .header("content-type", "application/json")
-            .body(Body::from(r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#))
+            .body(Body::from(
+                r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#,
+            ))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
@@ -835,15 +860,23 @@ mod tests {
             .unwrap();
 
         let app = Router::new()
-            .route("/sdp/webhook", axum::routing::post(sdp_reconciliation_webhook))
+            .route(
+                "/sdp/webhook",
+                axum::routing::post(sdp_reconciliation_webhook),
+            )
             .with_state(pool);
 
         let req = Request::builder()
             .method("POST")
             .uri("/sdp/webhook")
             .header("content-type", "application/json")
-            .header("X-SDP-Signature", "invalid_forged_signature_hex_digest_value_1234567890abcdef")
-            .body(Body::from(r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#))
+            .header(
+                "X-SDP-Signature",
+                "invalid_forged_signature_hex_digest_value_1234567890abcdef",
+            )
+            .body(Body::from(
+                r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#,
+            ))
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();

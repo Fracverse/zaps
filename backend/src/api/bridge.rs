@@ -409,9 +409,7 @@ fn parse_csv(data: &[u8]) -> Result<Vec<PayoutRecord>, String> {
         .iter()
         .position(|h| h.to_lowercase() == "amount")
         .ok_or_else(|| "CSV missing required column: amount".to_string())?;
-    let memo_col = headers
-        .iter()
-        .position(|h| h.to_lowercase() == "memo");
+    let memo_col = headers.iter().position(|h| h.to_lowercase() == "memo");
 
     let mut records = Vec::new();
     for line in lines {
@@ -421,7 +419,12 @@ fn parse_csv(data: &[u8]) -> Result<Vec<PayoutRecord>, String> {
         }
         let cols: Vec<&str> = line.splitn(headers.len(), ',').collect();
         let destination = cols.get(dest_col).copied().unwrap_or("").trim().to_string();
-        let amount = cols.get(amount_col).copied().unwrap_or("").trim().to_string();
+        let amount = cols
+            .get(amount_col)
+            .copied()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let memo = memo_col
             .and_then(|i| cols.get(i).copied())
             .map(|s| s.trim().to_string())
@@ -457,7 +460,13 @@ async fn persist_batch(
 ) -> Result<String, sqlx::Error> {
     let total_amount: f64 = records
         .iter()
-        .map(|r| r.amount.trim().replace(',', "").parse::<f64>().unwrap_or(0.0))
+        .map(|r| {
+            r.amount
+                .trim()
+                .replace(',', "")
+                .parse::<f64>()
+                .unwrap_or(0.0)
+        })
         .sum();
     let total_amount_i64 = (total_amount * 1_000_000.0).round() as i64;
 
@@ -477,9 +486,14 @@ async fn persist_batch(
     let batch_id: uuid::Uuid = batch_row.get("id");
 
     for record in records {
-        let amount_i64 =
-            (record.amount.trim().replace(',', "").parse::<f64>().unwrap_or(0.0) * 1_000_000.0)
-                .round() as i64;
+        let amount_i64 = (record
+            .amount
+            .trim()
+            .replace(',', "")
+            .parse::<f64>()
+            .unwrap_or(0.0)
+            * 1_000_000.0)
+            .round() as i64;
         sqlx::query(
             r#"
             INSERT INTO batch_recipients
@@ -487,7 +501,7 @@ async fn persist_batch(
             VALUES ($1, $2, $3, 'PENDING')
             "#,
         )
-        .bind(&batch_id)
+        .bind(batch_id)
         .bind(&record.destination)
         .bind(amount_i64)
         .execute(pool)

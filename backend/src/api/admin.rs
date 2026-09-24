@@ -18,9 +18,7 @@ pub fn admin_routes(pool: PgPool) -> Router {
         .with_state(pool)
 }
 
-pub async fn get_dashboard_stats(
-    State(pool): State<PgPool>,
-) -> impl IntoResponse {
+pub async fn get_dashboard_stats(State(pool): State<PgPool>) -> impl IntoResponse {
     let total_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&pool)
         .await
@@ -36,15 +34,17 @@ pub async fn get_dashboard_stats(
         .await
         .unwrap_or(0);
 
-    let total_withdrawals: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yield_transactions WHERE type = 'WITHDRAW'")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+    let total_withdrawals: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM yield_transactions WHERE type = 'WITHDRAW'")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
-    let active_merchants: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT user_id) FROM user_yield_balances")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+    let active_merchants: i64 =
+        sqlx::query_scalar("SELECT COUNT(DISTINCT user_id) FROM user_yield_balances")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
     (
         StatusCode::OK,
@@ -54,27 +54,30 @@ pub async fn get_dashboard_stats(
             "total_transfers": total_transfers,
             "total_withdrawals": total_withdrawals,
             "active_merchants": active_merchants.max(1),
-        }))
-    ).into_response()
+        })),
+    )
+        .into_response()
 }
 
-pub async fn get_yield_stats(
-    State(pool): State<PgPool>,
-) -> impl IntoResponse {
-    let tvl: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(earning_balance), 0) FROM user_yield_balances")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+pub async fn get_yield_stats(State(pool): State<PgPool>) -> impl IntoResponse {
+    let tvl: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(earning_balance), 0) FROM user_yield_balances")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
 
-    let total_yield_distributed: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(amount), 0) FROM yield_transactions WHERE type = 'EARNED'")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+    let total_yield_distributed: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM yield_transactions WHERE type = 'EARNED'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
 
-    let apy_bps: i32 = sqlx::query_scalar("SELECT apy FROM yield_rates_history ORDER BY created_at DESC LIMIT 1")
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(500);
+    let apy_bps: i32 =
+        sqlx::query_scalar("SELECT apy FROM yield_rates_history ORDER BY created_at DESC LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(500);
 
     // Convert micro-units to whole units for the API stats formatting
     let tvl_usd = tvl as f64 / 1_000_000.0;
@@ -87,17 +90,26 @@ pub async fn get_yield_stats(
             "total_value_locked": tvl_usd,
             "total_yield_distributed": yield_distributed_usd,
             "apy": apy,
-        }))
-    ).into_response()
+        })),
+    )
+        .into_response()
 }
 
 pub async fn list_identity_links(
     State(pool): State<PgPool>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = params.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(50);
-    let offset = params.get("offset").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
-    let query_param = params.get("query").map(|s| format!("%{}%", s.to_lowercase()));
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(50);
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    let query_param = params
+        .get("query")
+        .map(|s| format!("%{}%", s.to_lowercase()));
 
     let total: i64 = if let Some(ref q) = query_param {
         sqlx::query_scalar(
@@ -105,7 +117,7 @@ pub async fn list_identity_links(
             SELECT COUNT(*) FROM users
             WHERE privy_did IS NOT NULL
               AND (LOWER(username) LIKE $1 OR LOWER(address) LIKE $1 OR LOWER(display_name) LIKE $1)
-            "#
+            "#,
         )
         .bind(q)
         .fetch_one(&pool)
@@ -127,7 +139,7 @@ pub async fn list_identity_links(
               AND (LOWER(username) LIKE $1 OR LOWER(address) LIKE $1 OR LOWER(display_name) LIKE $1)
             ORDER BY privy_linked_at DESC
             LIMIT $2 OFFSET $3
-            "#
+            "#,
         )
         .bind(q)
         .bind(limit)
@@ -142,7 +154,7 @@ pub async fn list_identity_links(
             WHERE privy_did IS NOT NULL
             ORDER BY privy_linked_at DESC
             LIMIT $1 OFFSET $2
-            "#
+            "#,
         )
         .bind(limit)
         .bind(offset)
@@ -171,11 +183,17 @@ pub async fn list_identity_links(
                 })
             }).collect();
 
-            (StatusCode::OK, Json(serde_json::json!({ "links": links, "total": total }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "links": links, "total": total })),
+            )
+                .into_response()
         }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -185,7 +203,13 @@ pub async fn get_identity_link(
 ) -> impl IntoResponse {
     let user_uuid = match Uuid::parse_str(&user_id) {
         Ok(uid) => uid,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid user ID" }))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Invalid user ID" })),
+            )
+                .into_response()
+        }
     };
 
     let row = sqlx::query(
@@ -193,7 +217,7 @@ pub async fn get_identity_link(
         SELECT id, address, username, display_name, privy_did, privy_linked_at
         FROM users
         WHERE id = $1 AND privy_did IS NOT NULL
-        "#
+        "#,
     )
     .bind(user_uuid)
     .fetch_optional(&pool)
@@ -221,7 +245,15 @@ pub async fn get_identity_link(
                 }))
             ).into_response()
         }
-        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Identity link not found" }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Identity link not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }

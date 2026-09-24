@@ -68,11 +68,7 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
 ///     auth_cache,
 /// );
 /// ```
-pub fn protected_routes(
-    router: Router,
-    pool: sqlx::PgPool,
-    cache: AuthTokenCache,
-) -> Router {
+pub fn protected_routes(router: Router, pool: sqlx::PgPool, cache: AuthTokenCache) -> Router {
     router.layer(middleware::from_fn_with_state(
         AuthMiddlewareState { pool, cache },
         auth_middleware,

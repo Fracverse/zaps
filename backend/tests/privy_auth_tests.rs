@@ -222,7 +222,9 @@ fn create_test_app(pool: PgPool) -> Router {
 fn create_mock_auth_app() -> Router {
     // Uses dummy pool configuration or dummy state
     let state = AuthState {
-        pool: sqlx::postgres::PgPoolOptions::new().connect_lazy("postgres://localhost/dummy").unwrap(),
+        pool: sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/dummy")
+            .unwrap(),
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
     };
@@ -890,17 +892,22 @@ mod privy_auth_integration_tests {
         assert_eq!(extracted_did, privy_did);
 
         // 3. Verify linked Stellar address extraction
-        let addresses = zaps_backend::services::auth::PrivyAuthService::get_linked_stellar_addresses(&claims);
+        let addresses =
+            zaps_backend::services::auth::PrivyAuthService::get_linked_stellar_addresses(&claims);
         assert_eq!(addresses, vec![stellar_addr]);
 
-        assert!(zaps_backend::services::auth::PrivyAuthService::verify_stellar_address_match(
-            &claims,
-            stellar_addr
-        ));
-        assert!(!zaps_backend::services::auth::PrivyAuthService::verify_stellar_address_match(
-            &claims,
-            "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
-        ));
+        assert!(
+            zaps_backend::services::auth::PrivyAuthService::verify_stellar_address_match(
+                &claims,
+                stellar_addr
+            )
+        );
+        assert!(
+            !zaps_backend::services::auth::PrivyAuthService::verify_stellar_address_match(
+                &claims,
+                "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+            )
+        );
     }
 
     /// Test 15 - Issue #940/#945: PrivyAuthService correctly rejects expired tokens
@@ -942,7 +949,9 @@ mod privy_auth_integration_tests {
         let result = service.verify_token(&forged_token, TEST_APP_ID).await;
         assert!(matches!(
             result,
-            Err(zaps_backend::services::auth::PrivyAuthError::InvalidToken(_))
+            Err(zaps_backend::services::auth::PrivyAuthError::InvalidToken(
+                _
+            ))
         ));
     }
 }

@@ -85,8 +85,8 @@ impl DisbursementWorkerConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_LEASE_TIMEOUT_SECS);
-        let sdp_base_url = std::env::var("SDP_BASE_URL")
-            .unwrap_or_else(|_| "https://sdp.stellar.org".into());
+        let sdp_base_url =
+            std::env::var("SDP_BASE_URL").unwrap_or_else(|_| "https://sdp.stellar.org".into());
         let sdp_api_token = std::env::var("SDP_API_TOKEN").ok();
         // Hostname keeps lock ownership meaningful across replicas; the uuid
         // suffix disambiguates multiple workers on the same host.
@@ -213,46 +213,59 @@ async fn process_cycle(
             let attempt = recipient.attempt_count + 1;
             let outcome = dispatch_one(recipient, sdp_client).await;
 
-        match outcome {
-            SdpOutcome::Submitted {
-                payment_id: sdp_payment_id,
-                tx_hash,
-            } => {
-                mark_submitted(pool, recipient, sdp_payment_id.as_deref(), tx_hash.as_deref())
+            match outcome {
+                SdpOutcome::Submitted {
+                    payment_id: sdp_payment_id,
+                    tx_hash,
+                } => {
+                    mark_submitted(
+                        pool,
+                        recipient,
+                        sdp_payment_id.as_deref(),
+                        tx_hash.as_deref(),
+                    )
                     .await?;
-                log_dispatch(pool, batch_id, Some(recipient.id), attempt, "SUBMITTED", None, None)
+                    log_dispatch(
+                        pool,
+                        batch_id,
+                        Some(recipient.id),
+                        attempt,
+                        "SUBMITTED",
+                        None,
+                        None,
+                    )
                     .await?;
-            }
-            SdpOutcome::Retryable(err) if attempt < config.max_attempts => {
-                mark_retry(pool, recipient, &err).await?;
-                log_dispatch(
-                    pool,
-                    batch_id,
-                    Some(recipient.id),
-                    attempt,
-                    "RETRY_SCHEDULED",
-                    None,
-                    Some(&err),
-                )
-                .await?;
-            }
-            SdpOutcome::Retryable(err) | SdpOutcome::Permanent(err) => {
-                // Either permanently bad, or out of retries. Fail this row only
-                // — one dead recipient must not strand the rest of the batch.
-                mark_failed(pool, recipient, &err).await?;
-                log_dispatch(
-                    pool,
-                    batch_id,
-                    Some(recipient.id),
-                    attempt,
-                    "FAILED",
-                    None,
-                    Some(&err),
-                )
-                .await?;
+                }
+                SdpOutcome::Retryable(err) if attempt < config.max_attempts => {
+                    mark_retry(pool, recipient, &err).await?;
+                    log_dispatch(
+                        pool,
+                        batch_id,
+                        Some(recipient.id),
+                        attempt,
+                        "RETRY_SCHEDULED",
+                        None,
+                        Some(&err),
+                    )
+                    .await?;
+                }
+                SdpOutcome::Retryable(err) | SdpOutcome::Permanent(err) => {
+                    // Either permanently bad, or out of retries. Fail this row only
+                    // — one dead recipient must not strand the rest of the batch.
+                    mark_failed(pool, recipient, &err).await?;
+                    log_dispatch(
+                        pool,
+                        batch_id,
+                        Some(recipient.id),
+                        attempt,
+                        "FAILED",
+                        None,
+                        Some(&err),
+                    )
+                    .await?;
+                }
             }
         }
-    }
     } // end chunk loop
 
     finalize_batch(pool, batch_id).await?;
@@ -328,10 +341,7 @@ async fn claim_recipients(
 }
 
 /// Submits a single recipient to SDP using the SdpClient.
-async fn dispatch_one(
-    recipient: &BatchRecipient,
-    sdp_client: &SdpClient,
-) -> SdpOutcome {
+async fn dispatch_one(recipient: &BatchRecipient, sdp_client: &SdpClient) -> SdpOutcome {
     let Some(destination) = recipient.destination_address.as_deref() else {
         // The schema guarantees a user_id when there is no address, but this
         // worker sends to addresses. A row that reached here without one was
@@ -651,7 +661,10 @@ mod tests {
             worker_id: "test-worker".into(),
         };
 
-        assert!(config.max_attempts >= 1, "a row must get at least one attempt");
+        assert!(
+            config.max_attempts >= 1,
+            "a row must get at least one attempt"
+        );
         assert!(config.claim_size > 0);
         // The lease has to outlast a full claim of sequential submissions, or
         // workers reclaim rows that are still legitimately in flight.

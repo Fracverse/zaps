@@ -9,7 +9,6 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use redis;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
