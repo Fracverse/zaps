@@ -25,27 +25,40 @@ pub use auth_middleware::{
 /// Builds the auth router from an already-assembled `AuthState` (pool +
 /// Privy JWKS client). Prefer this when the caller wants control over the
 /// JWKS URL / app ID (e.g. tests pointing at a mock JWKS server).
+///
+/// Uses an in-process rate limiter; see `auth_routes_with_limiter` for the
+/// Redis-backed one.
 pub fn auth_routes_with_state(state: auth::AuthState) -> Router {
+    auth_routes_with_limiter(state, auth::AuthRateLimiter::new())
+}
+
+/// #949: Auth router rate-limited by `limiter` (e.g. the Redis sliding
+/// window from `AuthRateLimiter::from_redis_url`).
+pub fn auth_routes_with_limiter(state: auth::AuthState, limiter: auth::AuthRateLimiter) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
-            auth::AuthRateLimiter::new(),
+            limiter,
             auth::auth_rate_limit,
         ))
 }
 
 /// Convenience wrapper that builds `AuthState` from `PRIVY_APP_ID` /
-/// `PRIVY_JWKS_URL` env vars (see `config::Config`).
+/// `PRIVY_JWKS_URL` env vars and the rate limiter from `REDIS_URL` (see
+/// `config::Config`).
 pub fn auth_routes(pool: sqlx::PgPool) -> Router {
     let config = crate::config::Config::from_env();
-    auth_routes_with_state(auth::AuthState {
-        pool,
-        privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
-        privy_app_id: config.privy_app_id,
-    })
+    auth_routes_with_limiter(
+        auth::AuthState {
+            pool,
+            privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
+            privy_app_id: config.privy_app_id,
+        },
+        auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
+    )
 }
 
 /// #561 — Session Refresh & Auth Middleware
