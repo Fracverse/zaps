@@ -47,6 +47,24 @@ export const Colors = {
     warning: "#F59E0B",
     error: "#EF4444",
   },
+  /**
+   * High-contrast dark palette — WCAG-friendly for low-vision users:
+   * near-black backgrounds with the brightest foregrounds and borders so
+   * text and controls stay clearly distinguishable from their surfaces.
+   */
+  highContrast: {
+    primary: "#A7FFBE",
+    secondary: "#00311F",
+    text: "#FFFFFF",
+    textSecondary: "#E8E8E8",
+    background: "#000000",
+    backgroundRoot: "#000000",
+    backgroundDefault: "#141414",
+    border: "#9E9E9E",
+    success: "#00E05A",
+    warning: "#FFC400",
+    error: "#FF5252",
+  },
 };
 
 export type ThemeColors = typeof Colors.light;

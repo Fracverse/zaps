@@ -60,6 +60,9 @@ impl UserRegistryContract {
         admin
     }
 
+    /// Enforce username rules from issue #964:
+    /// lowercase ASCII letters + digits only, length in [3, 15].
+    /// Rejects uppercase, underscores, spaces, hyphens, and other symbols.
     fn validate_username(username: &String) {
         let len = username.len();
         if len < 3 || len > 15 {
@@ -71,6 +74,11 @@ impl UserRegistryContract {
 
         for i in 0..len as usize {
             let b = bytes[i];
+            // Explicitly reject common illegal bytes (underscore / symbols)
+            // before the general alphanumeric check for clearer contract behavior.
+            if b == b'_' || b == b'-' || b == b'@' || b == b'.' || b == b' ' {
+                panic!("username must be lowercase alphanumeric");
+            }
             let is_lowercase = (b'a'..=b'z').contains(&b);
             let is_numeric = (b'0'..=b'9').contains(&b);
             if !is_lowercase && !is_numeric {
@@ -366,14 +374,35 @@ impl UserRegistryContract {
 
     /// Register a Privy DID -> wallet address mapping.
     ///
-    /// The caller must supply an Ed25519 `signature` over the `(did, wallet)`
-    /// payload, produced by the trusted Privy verifier key configured via
-    /// `set_privy_verifier`. This proves Privy attested that `did` belongs to
-    /// `wallet` before the on-chain mapping is created, in addition to the
-    /// wallet itself authorizing the transaction.
+    /// Two independent authorization checks are enforced before any mapping
+    /// is written:
+    ///
+    /// 1. **Wallet authorization** — `wallet.require_auth()` ensures the
+    ///    transaction is signed by (or explicitly authorized by) the wallet
+    ///    that will be linked. This prevents a third party from registering a
+    ///    link on behalf of a wallet owner without their consent.
+    ///
+    /// 2. **Privy verifier signature** — the caller must supply a 64-byte
+    ///    Ed25519 `signature` over the canonical XDR encoding of the
+    ///    `(did, wallet)` tuple, produced by the trusted Privy backend key
+    ///    configured via `set_privy_verifier`. This proves that Privy's
+    ///    off-chain system attested the DID belongs to this wallet before the
+    ///    on-chain mapping is created.
+    ///
+    /// Both checks must pass; failing either panics and leaves storage
+    /// unchanged.
+    ///
+    /// Additionally, the function guards against duplicate registrations in
+    /// both directions:
+    /// - The same DID cannot be linked to more than one wallet (`PrivyDid`
+    ///   forward key already exists → panic).
+    /// - The same wallet cannot be linked to more than one DID (`WalletDid`
+    ///   reverse key already exists → panic).
     pub fn register_privy_did(env: Env, did: String, wallet: Address, signature: BytesN<64>) {
+        // ── 1. Wallet owner must authorize this transaction ──────────────────
         wallet.require_auth();
 
+        // ── 2. Privy verifier key must be configured ─────────────────────────
         let verifier_key: BytesN<32> = env
             .storage()
             .persistent()
@@ -385,26 +414,39 @@ impl UserRegistryContract {
             TTL_EXTEND_TO,
         );
 
+        // ── 3. Verify Privy's Ed25519 attestation over (did, wallet) ─────────
+        // The message is the canonical XDR serialization of the tuple so that
+        // both on-chain and off-chain code agree on the exact byte sequence
+        // being signed, with no ambiguity about encoding details.
         let message: Bytes = (did.clone(), wallet.clone()).to_xdr(&env);
         env.crypto()
             .ed25519_verify(&verifier_key, &message, &signature);
 
+        // ── 4. Reject duplicate DID (forward direction) ──────────────────────
         let did_key = DataKey::PrivyDid(did.clone());
         if env.storage().persistent().has(&did_key) {
             panic!("DID already registered");
         }
+
+        // ── 5. Reject duplicate wallet (reverse direction) ───────────────────
+        // Prevents the same wallet from accumulating multiple DID mappings,
+        // which would make the reverse index `WalletDid` inconsistent.
+        let wallet_did_key = DataKey::WalletDid(wallet.clone());
+        if env.storage().persistent().has(&wallet_did_key) {
+            panic!("wallet already has a DID linked");
+        }
+
+        // ── 6. Persist the bidirectional mapping ─────────────────────────────
         env.storage().persistent().set(&did_key, &wallet);
         env.storage()
             .persistent()
-            .set(&DataKey::WalletDid(wallet.clone()), &did);
+            .set(&wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(wallet.clone()),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events()
             .publish((symbol_short!("did_reg"),), (wallet, did));
@@ -468,7 +510,10 @@ impl UserRegistryContract {
         );
     }
 
-    /// Get the wallet address registered for a Privy DID
+    /// Get the wallet address registered for a Privy DID.
+    ///
+    /// Panics with "DID not registered" if the DID has not yet been linked via
+    /// `register_privy_did`.
     pub fn get_wallet_for_did(env: Env, did: String) -> Address {
         let key = DataKey::PrivyDid(did);
         let wallet = env
@@ -480,6 +525,25 @@ impl UserRegistryContract {
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
         wallet
+    }
+
+    /// Get the Privy DID linked to a wallet address (reverse lookup).
+    ///
+    /// Exposes the `WalletDid` reverse-index written by `register_privy_did`
+    /// and maintained through `update_privy_did` / `recover_privy_did`.
+    /// Panics with "wallet has no DID linked" if the wallet has not been
+    /// linked to any DID.
+    pub fn get_did_for_wallet(env: Env, wallet: Address) -> String {
+        let key = DataKey::WalletDid(wallet);
+        let did = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("wallet has no DID linked"));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND_TO);
+        did
     }
 
     /// Issue #754: Remove a user's profile data (username and avatar URI) from storage.
@@ -536,13 +600,18 @@ impl UserRegistryContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    /// Unregister a user's profile and mapping.
+    /// Unregister a user's profile and mapping (issue #963).
     ///
-    /// Refunds any reservation deposit still held for `user`. In the normal
-    /// flow that deposit was already released by `update_profile` on profile
-    /// completion (issue #772), so this is a fallback for users who never
-    /// completed their profile before unregistering — `UserDeposit` reads as
-    /// 0 either way once it has been paid out.
+    /// Only the owning address may call this (`require_auth`). Refunds any
+    /// reservation deposit still held for `user`. In the normal flow that
+    /// deposit was already released by `update_profile` on profile completion
+    /// (issue #772), so this is a fallback for users who never completed their
+    /// profile before unregistering — `UserDeposit` reads as 0 either way once
+    /// it has been paid out.
+    ///
+    /// Clears both the legacy struct keys and the `DataKey::{User,Username}`
+    /// enum variants written by `register_user`, so the username can be
+    /// reclaimed cleanly after release.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
@@ -554,7 +623,9 @@ impl UserRegistryContract {
             .persistent()
             .get(&user_key)
             .unwrap_or_else(|| panic!("address not registered"));
-        let username_key = UsernameToAddressKey { username };
+        let username_key = UsernameToAddressKey {
+            username: username.clone(),
+        };
         let reservation_amount: i128 = env
             .storage()
             .persistent()
@@ -563,6 +634,12 @@ impl UserRegistryContract {
 
         env.storage().persistent().remove(&user_key);
         env.storage().persistent().remove(&username_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::User(user.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Username(username.clone()));
         env.storage()
             .persistent()
             .remove(&DataKey::Avatar(user.clone()));
@@ -584,6 +661,9 @@ impl UserRegistryContract {
             let token_client = token::Client::new(&env, &reservation_token);
             token_client.transfer(&env.current_contract_address(), &user, &reservation_amount);
         }
+
+        env.events()
+            .publish((Symbol::new(&env, "UserUnregistered"),), (user, username));
     }
 }
 
@@ -628,6 +708,133 @@ mod tests {
         token_admin.mint(&user, &10_000_i128);
 
         (env, client, user, token_contract_id, reservation_amount)
+    }
+
+    // ── Issue #963: name claiming deposit + owner-only release/refund ──────
+
+    #[test]
+    fn register_user_deducts_minimum_reservation_deposit() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+
+        assert_eq!(token.balance(&user), 10_000);
+        assert_eq!(token.balance(&client.address), 0);
+
+        client.register_user(&user, &String::from_str(&env, "alice"));
+
+        assert_eq!(
+            token.balance(&user),
+            10_000 - reservation_amount,
+            "claim must deduct the configured reservation deposit from the claimer"
+        );
+        assert_eq!(
+            token.balance(&client.address),
+            reservation_amount,
+            "reservation deposit must be escrowed in the registry contract"
+        );
+
+        env.as_contract(&client.address, || {
+            let held: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::UserDeposit(user.clone()))
+                .expect("UserDeposit must be recorded on claim");
+            assert_eq!(held, reservation_amount);
+        });
+    }
+
+    #[test]
+    fn unregister_user_refunds_reservation_deposit_to_owner() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+        let username = String::from_str(&env, "bob");
+
+        client.register_user(&user, &username);
+        assert_eq!(token.balance(&user), 10_000 - reservation_amount);
+        assert_eq!(token.balance(&client.address), reservation_amount);
+
+        // Release without completing profile — deposit must be refunded in full.
+        client.unregister_user(&user);
+
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "unregister must refund the full reservation deposit to the owner"
+        );
+        assert_eq!(
+            token.balance(&client.address),
+            0,
+            "registry must hold no residual deposit after refund"
+        );
+
+        env.as_contract(&client.address, || {
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::UserDeposit(user.clone())),
+                "UserDeposit key must be cleared after refund"
+            );
+            assert!(
+                !env.storage().persistent().has(&DataKey::User(user.clone())),
+                "DataKey::User must be cleared on release"
+            );
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::Username(username.clone())),
+                "DataKey::Username must be cleared on release"
+            );
+        });
+
+        let res = client.try_get_address(&username);
+        assert!(res.is_err(), "released username must no longer resolve");
+    }
+
+    #[test]
+    fn unregister_user_allows_username_reclaim_after_refund() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token = token::Client::new(&env, &token_contract_id);
+        let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+        let username = String::from_str(&env, "carol");
+
+        client.register_user(&user, &username);
+        client.unregister_user(&user);
+
+        let other = Address::generate(&env);
+        token_admin.mint(&other, &10_000_i128);
+        client.register_user(&other, &username);
+
+        assert_eq!(client.get_address(&username), other);
+        assert_eq!(token.balance(&other), 10_000 - reservation_amount);
+        assert_eq!(token.balance(&client.address), reservation_amount);
+        assert_eq!(
+            token.balance(&user),
+            10_000,
+            "original owner keeps their refund after someone else reclaims the name"
+        );
+    }
+
+    #[test]
+    fn register_user_rejects_claim_when_balance_below_minimum_deposit() {
+        let (env, client, user, token_contract_id, reservation_amount) = setup_with_reservation();
+        let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
+
+        // Drain the claimer's balance below the minimum registration deposit.
+        let token = token::Client::new(&env, &token_contract_id);
+        let sink = Address::generate(&env);
+        token.transfer(&user, &sink, &(10_000 - (reservation_amount - 1)));
+        assert_eq!(token.balance(&user), reservation_amount - 1);
+
+        let res = client.try_register_user(&user, &String::from_str(&env, "dave"));
+        assert!(
+            res.is_err(),
+            "claim must fail when the user cannot cover the minimum reservation deposit"
+        );
+        assert_eq!(token.balance(&client.address), 0);
+        // Leave leftover dust with the underfunded claimer.
+        assert_eq!(token.balance(&user), reservation_amount - 1);
+        // Mint enough for a successful claim so the helper remains reusable in spirit.
+        let _ = token_admin;
     }
 
     #[test]
@@ -776,35 +983,108 @@ mod tests {
         assert!(res.is_err());
     }
 
-    #[test]
-    #[ignore]
-    fn test_validation_rules() {
+    // ── Issue #964: username validation edge cases ───────────────────────────
+
+    fn setup_validation_client() -> (Env, UserRegistryContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
-
         let contract_id = env.register_contract(None, UserRegistryContract);
         let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
         let user = Address::generate(&env);
+        (env, client, user)
+    }
 
-        // Too short
-        let username = String::from_str(&env, "ab");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_too_short() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab"));
+    }
 
-        // Too long
-        let username = String::from_str(&env, "a123456789012345");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_empty() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, ""));
+    }
 
-        // Capital letter
-        let username = String::from_str(&env, "aBcd");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username length must be 3-15")]
+    fn username_rejects_too_long() {
+        let (env, client, user) = setup_validation_client();
+        // 16 chars
+        client.register_user(&user, &String::from_str(&env, "a123456789012345"));
+    }
 
-        // Special char
-        let username = String::from_str(&env, "ab-c");
-        let res = client.try_register_user(&user, &username);
-        assert!(res.is_err());
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_uppercase() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "aBcd"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_all_caps() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ABCD"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_underscore() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab_c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_hyphen_symbol() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab-c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_at_symbol() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab@c"));
+    }
+
+    #[test]
+    #[should_panic(expected = "username must be lowercase alphanumeric")]
+    fn username_rejects_space() {
+        let (env, client, user) = setup_validation_client();
+        client.register_user(&user, &String::from_str(&env, "ab c"));
+    }
+
+    #[test]
+    fn username_accepts_min_length_alphanumeric() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        let username = String::from_str(&env, "ab1");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
+        assert_eq!(client.get_username(&user), username);
+    }
+
+    #[test]
+    fn username_accepts_max_length_alphanumeric() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        // 15 chars: lowercase + digits
+        let username = String::from_str(&env, "abc123456789012");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
+        assert_eq!(client.get_username(&user), username);
+    }
+
+    #[test]
+    fn username_accepts_digits_only_boundary() {
+        let (env, client, user, _token, _amt) = setup_with_reservation();
+        let username = String::from_str(&env, "123");
+        client.register_user(&user, &username);
+        assert_eq!(client.get_address(&username), user);
     }
 
     #[test]

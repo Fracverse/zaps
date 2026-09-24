@@ -6,11 +6,20 @@ import { Avatar } from "./Avatar";
 import { VerificationBadge } from "./VerificationBadge";
 import type { ZapsUser } from "../types/user";
 
+interface TransferFeeEstimate {
+  baseFee: string;
+  minResourceFee: string;
+  totalFee: string;
+  cpuInsns?: string;
+  memBytes?: string;
+}
+
 interface TransferConfirmationCardProps {
   recipient: ZapsUser;
   amount: string;
   tokenSymbol: string;
   description?: string;
+  feeEstimate?: TransferFeeEstimate | null;
 }
 
 export const TransferConfirmationCard = React.memo(
@@ -19,7 +28,13 @@ export const TransferConfirmationCard = React.memo(
     amount,
     tokenSymbol,
     description,
+    feeEstimate,
   }: TransferConfirmationCardProps) {
+    const formatStroops = (value?: string) => {
+      const numeric = Number(value ?? "0");
+      return `${Number.isFinite(numeric) ? numeric.toLocaleString() : "0"} stroops`;
+    };
+
     return (
       <View style={styles.card}>
         <Avatar uri={recipient.avatar_url} name={recipient.username} size={80} />
@@ -59,6 +74,46 @@ export const TransferConfirmationCard = React.memo(
               <Text style={styles.detailValue}>{description || "No note"}</Text>
             </View>
           </View>
+
+          {feeEstimate && (
+            <>
+              <View style={[styles.detailRow, { marginTop: 16 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="server-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Network base fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.baseFee)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.detailRow, { marginTop: 12 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="flash-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Soroban resource fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.minResourceFee)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.detailRow, { marginTop: 12 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="calculator-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Estimated total fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.totalFee)}
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
         </View>
       </View>
     );

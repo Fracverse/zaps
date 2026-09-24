@@ -608,9 +608,7 @@ pub struct YieldRateHistoryResponse {
     pub rates: Vec<YieldRateHistoryItem>,
 }
 
-pub async fn get_rate_history(
-    State(pool): State<sqlx::PgPool>,
-) -> impl IntoResponse {
+pub async fn get_rate_history(State(pool): State<sqlx::PgPool>) -> impl IntoResponse {
     let rows = match crate::db::r#yield::get_yield_rate_history(&pool, 200).await {
         Ok(r) => r,
         Err(e) => {
@@ -709,7 +707,9 @@ where
                 Err(D::Error::custom("invalid number in string"))
             }
         }
-        _ => Err(D::Error::custom("expected a number or string representing a number")),
+        _ => Err(D::Error::custom(
+            "expected a number or string representing a number",
+        )),
     }
 }
 
@@ -950,22 +950,19 @@ pub async fn withdraw(
         }
     };
 
-    let envelope_xdr = match build_stellar_envelope_xdr(
-        &auth.address,
-        "yield_withdraw",
-        payload.amount,
-        &tx_hash,
-    ) {
-        Ok(xdr) => xdr,
-        Err(e) => {
-            tracing::error!("yield withdraw envelope build error: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to build transaction envelope" })),
-            )
-                .into_response();
-        }
-    };
+    let envelope_xdr =
+        match build_stellar_envelope_xdr(&auth.address, "yield_withdraw", payload.amount, &tx_hash)
+        {
+            Ok(xdr) => xdr,
+            Err(e) => {
+                tracing::error!("yield withdraw envelope build error: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": "Failed to build transaction envelope" })),
+                )
+                    .into_response();
+            }
+        };
 
     Json(WithdrawResponse {
         available_balance: updated.available_balance,
@@ -1014,8 +1011,8 @@ fn build_stellar_envelope_xdr(
     // Amount encoded as 8-byte big-endian so it survives a round-trip through
     // XDR without any floating-point representation issues.
     let amount_bytes = amount.to_be_bytes();
-    let data_value = DataValue::from_slice(&amount_bytes)
-        .map_err(|e| format!("invalid data value: {e}"))?;
+    let data_value =
+        DataValue::from_slice(&amount_bytes).map_err(|e| format!("invalid data value: {e}"))?;
 
     let manage_data_op = Operation::new_manage_data()
         .with_data_name(data_name)
@@ -1333,8 +1330,8 @@ fn build_soroban_manage_data_xdr(
 
     // Amount as 8-byte big-endian in the data value.
     let amount_bytes = amount.to_be_bytes();
-    let data_value = DataValue::from_slice(&amount_bytes)
-        .map_err(|e| format!("data value error: {e}"))?;
+    let data_value =
+        DataValue::from_slice(&amount_bytes).map_err(|e| format!("data value error: {e}"))?;
 
     let op = Operation::new_manage_data()
         .with_data_name(data_name)
@@ -1366,11 +1363,15 @@ fn build_soroban_manage_data_xdr(
     // Sequence 0 is a sentinel; the client MUST substitute account.sequence + 1.
     let sequence: i64 = 0;
 
-    let tx = Transaction::builder(source_pk, sequence, stellar_base::amount::Stroops::new(fee as i64))
-        .with_memo(memo)
-        .add_operation(op)
-        .into_transaction()
-        .map_err(|e| format!("transaction build error: {e}"))?;
+    let tx = Transaction::builder(
+        source_pk,
+        sequence,
+        stellar_base::amount::Stroops::new(fee as i64),
+    )
+    .with_memo(memo)
+    .add_operation(op)
+    .into_transaction()
+    .map_err(|e| format!("transaction build error: {e}"))?;
 
     let network = match std::env::var("STELLAR_NETWORK")
         .unwrap_or_default()
@@ -1483,7 +1484,7 @@ mod tests {
     #[test]
     fn valid_stellar_address_passes() {
         // 56-char G-prefix address
-        let addr = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let addr = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
         assert_eq!(addr.len(), 56);
         assert!(is_valid_stellar_address(addr));
     }
@@ -1496,38 +1497,44 @@ mod tests {
 
     #[test]
     fn valid_contract_address_passes() {
-        let addr = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let addr = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         assert_eq!(addr.len(), 56);
         assert!(is_valid_contract_address(addr));
     }
 
     #[test]
     fn build_soroban_manage_data_xdr_produces_base64() {
-        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let user = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let vault = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         let result = build_soroban_manage_data_xdr(user, vault, "deposit", 1_000_000, 100);
         assert!(result.is_ok(), "unexpected error: {:?}", result.err());
         let xdr = result.unwrap();
         // Base64 XDR is non-empty and uses standard base64 alphabet.
         assert!(!xdr.is_empty());
         assert!(
-            xdr.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='),
+            xdr.chars()
+                .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='),
             "XDR is not valid base64"
         );
     }
 
     #[test]
     fn build_soroban_manage_data_xdr_withdraw() {
-        let user = "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-        let vault = "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+        let user = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let vault = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM";
         let result = build_soroban_manage_data_xdr(user, vault, "withdraw", 500_000, 200);
         assert!(result.is_ok());
     }
 
     #[test]
     fn build_soroban_manage_data_xdr_rejects_bad_address() {
-        let result =
-            build_soroban_manage_data_xdr("NOTANADDRESS", "CABC1234EXAMPLECONTRACTADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "deposit", 100, 100);
+        let result = build_soroban_manage_data_xdr(
+            "NOTANADDRESS",
+            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM",
+            "deposit",
+            100,
+            100,
+        );
         assert!(result.is_err());
     }
 }

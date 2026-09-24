@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use stellar_base::{
     amount::Stroops,
     network::Network,
@@ -71,14 +71,10 @@ impl StellarClient {
                 "params": params
             });
 
-            let endpoint_index = self.next_endpoint.fetch_add(1, Ordering::Relaxed) % self.rpc_urls.len();
+            let endpoint_index =
+                self.next_endpoint.fetch_add(1, Ordering::Relaxed) % self.rpc_urls.len();
             let endpoint = &self.rpc_urls[endpoint_index];
-            let response = self
-                .http_client
-                .post(endpoint)
-                .json(&payload)
-                .send()
-                .await;
+            let response = self.http_client.post(endpoint).json(&payload).send().await;
 
             match response {
                 Ok(resp) => {
@@ -167,7 +163,7 @@ impl StellarClient {
             .and_then(|h| h.as_str())
         {
             Some(h) => h.to_string(),
-            None => return Err(format!("Missing transaction hash in RPC response").into()),
+            None => return Err("Missing transaction hash in RPC response".into()),
         };
 
         Ok(hash)
@@ -295,10 +291,7 @@ impl SdpClient {
     /// (network failures, 5xx) return `SdpOutcome::Retryable`. Permanent
     /// errors (4xx) return `SdpOutcome::Permanent`. Success returns
     /// `SdpOutcome::Submitted`.
-    pub async fn submit_disbursement(
-        &self,
-        request: &SdpDisbursementRequest<'_>,
-    ) -> SdpOutcome {
+    pub async fn submit_disbursement(&self, request: &SdpDisbursementRequest<'_>) -> SdpOutcome {
         let Some(token) = self.api_token.as_deref() else {
             // Dry-run mode: return synthetic success without contacting SDP
             return SdpOutcome::Submitted {
@@ -413,7 +406,7 @@ impl SdpClient {
         }
 
         if !query_parts.is_empty() {
-            url.push_str("?");
+            url.push('?');
             url.push_str(&query_parts.join("&"));
         }
 

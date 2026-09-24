@@ -164,7 +164,7 @@ pub async fn get_batch_detail(
         WHERE id = $1
         "#,
     )
-    .bind(&batch_id)
+    .bind(batch_id)
     .fetch_optional(&pool)
     .await
     {
@@ -218,7 +218,7 @@ pub async fn get_batch_detail(
         ORDER BY created_at ASC
         "#,
     )
-    .bind(&batch_id)
+    .bind(batch_id)
     .fetch_all(&pool)
     .await
     {
@@ -253,8 +253,7 @@ pub async fn get_batch_detail(
         })
         .collect();
 
-    Json(BatchDetailResponse { batch, recipients })
-    .into_response()
+    Json(BatchDetailResponse { batch, recipients }).into_response()
 }
 
 /// GET /api/payouts/batch/:id/export
@@ -298,7 +297,13 @@ pub async fn export_batch(
     }
 
     (
-        [(header::CONTENT_TYPE, "text/csv; charset=utf-8"), (header::CONTENT_DISPOSITION, "attachment; filename=\"payout-results.csv\"")],
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"payout-results.csv\"",
+            ),
+        ],
         csv,
     )
         .into_response()
@@ -354,10 +359,10 @@ pub async fn create_batch(
         "#,
     )
     .bind(&payload.idempotency_key)
-    .bind(&created_by)
+    .bind(created_by)
     .bind(&payload.currency)
-    .bind(&payload.total_recipients)
-    .bind(&payload.total_amount)
+    .bind(payload.total_recipients)
+    .bind(payload.total_amount)
     .fetch_one(&pool)
     .await
     {
@@ -388,19 +393,27 @@ pub async fn create_batch(
 ///
 /// Stellar Disbursement Platform (SDP) reconciliation webhook receiver.
 ///
-/// 1. Validates the `X-SDP-Signature` header as an HMAC-SHA256 of the raw
-///    request body keyed by `SDP_WEBHOOK_SECRET` (constant-time compare).
-/// 2. On success, updates the referenced batch recipient's state in the
-///    database (status + tx_hash).  See issue #727.
+/// 1. Validates the `X-SDP-Signature` (or `X-Payload-Signature` / `X-Stellar-Signature`)
+///    header as an HMAC-SHA256 of the raw request body keyed by `SDP_WEBHOOK_SECRET`
+///    (using constant-time comparison to prevent timing attacks).
+/// 2. Normalizes the incoming disbursement status to match the database constraint
+///    ('PENDING', 'SUBMITTED', 'CONFIRMED', 'FAILED').
+/// 3. Updates the recipient state in `batch_recipients` by recipient ID or `sdp_payment_id`.
+/// 4. Records an audit entry in `dispatch_logs`.
+/// 5. Automatically updates parent batch totals and terminal status in `payout_batches`.
 pub async fn sdp_reconciliation_webhook(
     State(pool): State<PgPool>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
     // ── 1. Resolve the webhook secret ────────────────────────────────────────
-    let secret = match std::env::var("SDP_WEBHOOK_SECRET") {
+    let secret = match std::env::var("SDP_WEBHOOK_SECRET")
+        .or_else(|_| std::env::var("ANCHOR_WEBHOOK_SECRET"))
+        .or_else(|_| std::env::var("PLATFORM_SECRET_KEY"))
+    {
         Ok(s) if !s.is_empty() => s,
         _ => {
+            tracing::error!("SDP webhook secret not configured");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Webhook secret not configured" })),
@@ -410,11 +423,17 @@ pub async fn sdp_reconciliation_webhook(
     };
 
     // ── 2. Read the supplied signature ───────────────────────────────────────
-    let signature = match headers
+    let signature = headers
         .get("X-SDP-Signature")
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(s) => s,
+        .or_else(|| headers.get("x-sdp-signature"))
+        .or_else(|| headers.get("X-Payload-Signature"))
+        .or_else(|| headers.get("x-payload-signature"))
+        .or_else(|| headers.get("X-Stellar-Signature"))
+        .or_else(|| headers.get("x-stellar-signature"))
+        .and_then(|v| v.to_str().ok());
+
+    let signature = match signature {
+        Some(s) => s.trim(),
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -439,6 +458,7 @@ pub async fn sdp_reconciliation_webhook(
     let computed = hex::encode(mac.finalize().into_bytes());
 
     if !constant_time_eq(computed.as_bytes(), signature.as_bytes()) {
+        tracing::warn!("SDP webhook signature verification failed");
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Invalid signature" })),
@@ -459,53 +479,218 @@ pub async fn sdp_reconciliation_webhook(
         }
     };
 
-    let recipient_id: Uuid = match payload.id.parse() {
-        Ok(id) => id,
-        Err(_) => {
+    // Determine recipient UUID from external_id (our recipient_id) or id
+    let recipient_id = payload
+        .external_id
+        .as_deref()
+        .or(payload.recipient_id.as_deref())
+        .or(payload.id.as_deref())
+        .and_then(|id_str| Uuid::parse_str(id_str).ok());
+
+    let sdp_payment_id = payload.sdp_payment_id.as_deref().or(payload.id.as_deref());
+
+    if recipient_id.is_none() && sdp_payment_id.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Missing valid recipient or payment identifier" })),
+        )
+            .into_response();
+    }
+
+    // Normalize status according to database CHECK constraints
+    let normalized_status = match payload.status.to_uppercase().as_str() {
+        "SUCCESS" | "SUCCESSFUL" | "COMPLETED" | "CONFIRMED" => "CONFIRMED",
+        "FAILED" | "CANCELLED" | "CANCELED" | "ERROR" => "FAILED",
+        "SUBMITTED" => "SUBMITTED",
+        "PENDING" => "PENDING",
+        _ => "FAILED",
+    };
+
+    // ── 5. Update the batch item state ──────────────────────────────────────
+    let updated_row = match (recipient_id, sdp_payment_id) {
+        (Some(rec_id), Some(sdp_id)) => {
+            sqlx::query(
+                r#"
+                UPDATE batch_recipients
+                SET status = $1,
+                    tx_hash = COALESCE($2, tx_hash),
+                    sdp_payment_id = COALESCE($3, sdp_payment_id),
+                    last_error = COALESCE($4, last_error),
+                    updated_at = NOW()
+                WHERE id = $5 OR (sdp_payment_id IS NOT NULL AND sdp_payment_id = $3)
+                RETURNING id, batch_id, status
+                "#,
+            )
+            .bind(normalized_status)
+            .bind(&payload.tx_hash)
+            .bind(sdp_id)
+            .bind(&payload.error_message)
+            .bind(rec_id)
+            .fetch_optional(&pool)
+            .await
+        }
+        (Some(rec_id), None) => {
+            sqlx::query(
+                r#"
+                UPDATE batch_recipients
+                SET status = $1,
+                    tx_hash = COALESCE($2, tx_hash),
+                    last_error = COALESCE($3, last_error),
+                    updated_at = NOW()
+                WHERE id = $4
+                RETURNING id, batch_id, status
+                "#,
+            )
+            .bind(normalized_status)
+            .bind(&payload.tx_hash)
+            .bind(&payload.error_message)
+            .bind(rec_id)
+            .fetch_optional(&pool)
+            .await
+        }
+        (None, Some(sdp_id)) => {
+            sqlx::query(
+                r#"
+                UPDATE batch_recipients
+                SET status = $1,
+                    tx_hash = COALESCE($2, tx_hash),
+                    last_error = COALESCE($3, last_error),
+                    updated_at = NOW()
+                WHERE sdp_payment_id = $4
+                RETURNING id, batch_id, status
+                "#,
+            )
+            .bind(normalized_status)
+            .bind(&payload.tx_hash)
+            .bind(&payload.error_message)
+            .bind(sdp_id)
+            .fetch_optional(&pool)
+            .await
+        }
+        (None, None) => unreachable!(),
+    };
+
+    let (rec_id, batch_id) = match updated_row {
+        Ok(Some(row)) => {
+            let r_id: Uuid = row.get("id");
+            let b_id: Uuid = row.get("batch_id");
+            (r_id, b_id)
+        }
+        Ok(None) => {
+            tracing::warn!("SDP webhook received for non-existent recipient");
             return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Invalid recipient id" })),
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Recipient record not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("Failed to update batch recipient from webhook: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Database update failed" })),
             )
                 .into_response();
         }
     };
 
-    // ── 5. Update the batch item state ──────────────────────────────────────
-    match sqlx::query(
-        "UPDATE batch_recipients SET status = $1, tx_hash = COALESCE($2, tx_hash) WHERE id = $3",
+    // ── 6. Record audit log in dispatch_logs ────────────────────────────────
+    let log_event = match normalized_status {
+        "CONFIRMED" => "CONFIRMED",
+        "FAILED" => "FAILED",
+        "SUBMITTED" => "SUBMITTED",
+        _ => "CONFIRMED",
+    };
+    let detail_msg = payload
+        .error_message
+        .as_deref()
+        .unwrap_or("Reconciled from SDP webhook");
+
+    let _ = sqlx::query(
+        r#"
+        INSERT INTO dispatch_logs (batch_id, recipient_id, attempt, event, detail)
+        VALUES ($1, $2, 1, $3, $4)
+        "#,
     )
-    .bind(&payload.status)
-    .bind(&payload.tx_hash)
-    .bind(recipient_id)
+    .bind(batch_id)
+    .bind(rec_id)
+    .bind(log_event)
+    .bind(detail_msg)
     .execute(&pool)
-    .await
-    {
-        Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "status": "ok" }))).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to update batch recipient {}: {e}", payload.id);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to update batch item" })),
-            )
-                .into_response()
-        }
-    }
+    .await;
+
+    // ── 7. Reconcile parent batch status ────────────────────────────────────
+    let _ = sqlx::query(
+        r#"
+        UPDATE payout_batches
+        SET succeeded_count = (SELECT COUNT(*) FROM batch_recipients WHERE batch_id = $1 AND status = 'CONFIRMED'),
+            failed_count = (SELECT COUNT(*) FROM batch_recipients WHERE batch_id = $1 AND status = 'FAILED'),
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(batch_id)
+    .execute(&pool)
+    .await;
+
+    let _ = sqlx::query(
+        r#"
+        UPDATE payout_batches
+        SET status = CASE
+                WHEN failed_count = 0 THEN 'COMPLETED'
+                WHEN succeeded_count = 0 THEN 'FAILED'
+                ELSE 'PARTIALLY_FAILED'
+            END,
+            completed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+          AND status IN ('PENDING', 'PROCESSING')
+          AND (succeeded_count + failed_count) >= total_recipients
+          AND total_recipients > 0
+        "#,
+    )
+    .bind(batch_id)
+    .execute(&pool)
+    .await;
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "recipient_id": rec_id,
+            "reconciled_status": normalized_status
+        })),
+    )
+        .into_response()
 }
 
-/// SDP reconciliation webhook payload.
+/// SDP reconciliation webhook payload format supporting standard and custom SDP callbacks.
 #[derive(Debug, Deserialize)]
-struct SdpReconciliationPayload {
-    /// Batch recipient id (UUID string).
-    pub id: String,
-    /// New disbursement status reported by SDP (e.g. "SUCCESS", "FAILED").
+pub struct SdpReconciliationPayload {
+    /// Batch recipient id or SDP payment id (UUID or string).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// External recipient id provided during disbursement creation.
+    #[serde(default)]
+    pub external_id: Option<String>,
+    /// Optional recipient id field alias.
+    #[serde(default)]
+    pub recipient_id: Option<String>,
+    /// SDP internal payment id.
+    #[serde(default)]
+    pub sdp_payment_id: Option<String>,
+    /// New disbursement status reported by SDP (e.g. "SUCCESS", "COMPLETED", "CONFIRMED", "FAILED").
     pub status: String,
     /// Transaction hash, when available.
     #[serde(default)]
     pub tx_hash: Option<String>,
+    /// Optional error or failure message.
+    #[serde(default)]
+    pub error_message: Option<String>,
 }
 
-/// Constant-time comparison to avoid leaking the signature via timing.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+/// Constant-time comparison to avoid leaking the signature via timing attacks.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -514,4 +699,187 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_constant_time_eq_matching() {
+        let a = b"5d41402abc4b2a76b9719d911017c592";
+        let b = b"5d41402abc4b2a76b9719d911017c592";
+        assert!(constant_time_eq(a, b));
+    }
+
+    #[test]
+    fn test_constant_time_eq_mismatch() {
+        let a = b"5d41402abc4b2a76b9719d911017c592";
+        let b = b"5d41402abc4b2a76b9719d911017c593";
+        assert!(!constant_time_eq(a, b));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        let a = b"5d41402abc";
+        let b = b"5d41402abc4b2a76b9719d911017c592";
+        assert!(!constant_time_eq(a, b));
+    }
+
+    #[test]
+    fn test_hmac_sha256_computation() {
+        let secret = "test_webhook_secret_key";
+        let body = br#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS","tx_hash":"0xabc123"}"#;
+
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        let signature = hex::encode(mac.finalize().into_bytes());
+
+        assert_eq!(signature.len(), 64);
+
+        // Verify that same input produces identical signature
+        let mut mac2 = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac2.update(body);
+        let signature2 = hex::encode(mac2.finalize().into_bytes());
+        assert!(constant_time_eq(
+            signature.as_bytes(),
+            signature2.as_bytes()
+        ));
+
+        // Verify that different body produces different signature
+        let mut mac3 = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac3.update(b"tampered body");
+        let signature3 = hex::encode(mac3.finalize().into_bytes());
+        assert!(!constant_time_eq(
+            signature.as_bytes(),
+            signature3.as_bytes()
+        ));
+    }
+
+    #[test]
+    fn test_sdp_payload_deserialization() {
+        let valid_json = r#"{
+            "id": "11111111-2222-3333-4444-555555555555",
+            "status": "COMPLETED",
+            "tx_hash": "tx-stellar-hash-123"
+        }"#;
+
+        let payload: SdpReconciliationPayload = serde_json::from_str(valid_json).unwrap();
+        assert_eq!(
+            payload.id,
+            Some("11111111-2222-3333-4444-555555555555".to_string())
+        );
+        assert_eq!(payload.status, "COMPLETED");
+        assert_eq!(payload.tx_hash, Some("tx-stellar-hash-123".to_string()));
+    }
+
+    #[test]
+    fn test_sdp_payload_with_external_id() {
+        let json = r#"{
+            "id": "sdp-disbursement-999",
+            "external_id": "11111111-2222-3333-4444-555555555555",
+            "status": "SUCCESS",
+            "tx_hash": "tx-hash-456",
+            "error_message": null
+        }"#;
+
+        let payload: SdpReconciliationPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.id, Some("sdp-disbursement-999".to_string()));
+        assert_eq!(
+            payload.external_id,
+            Some("11111111-2222-3333-4444-555555555555".to_string())
+        );
+        assert_eq!(payload.status, "SUCCESS");
+    }
+
+    #[test]
+    fn test_sdp_status_normalization_logic() {
+        let normalize = |s: &str| match s.to_uppercase().as_str() {
+            "SUCCESS" | "SUCCESSFUL" | "COMPLETED" | "CONFIRMED" => "CONFIRMED",
+            "FAILED" | "CANCELLED" | "CANCELED" | "ERROR" => "FAILED",
+            "SUBMITTED" => "SUBMITTED",
+            "PENDING" => "PENDING",
+            _ => "FAILED",
+        };
+
+        assert_eq!(normalize("SUCCESS"), "CONFIRMED");
+        assert_eq!(normalize("completed"), "CONFIRMED");
+        assert_eq!(normalize("CONFIRMED"), "CONFIRMED");
+        assert_eq!(normalize("FAILED"), "FAILED");
+        assert_eq!(normalize("cancelled"), "FAILED");
+        assert_eq!(normalize("error"), "FAILED");
+        assert_eq!(normalize("SUBMITTED"), "SUBMITTED");
+        assert_eq!(normalize("pending"), "PENDING");
+        assert_eq!(normalize("unknown_status"), "FAILED");
+    }
+
+    #[tokio::test]
+    async fn test_sdp_webhook_rejects_missing_signature() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        std::env::set_var("SDP_WEBHOOK_SECRET", "test_secret_123");
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/dummy")
+            .unwrap();
+
+        let app = Router::new()
+            .route(
+                "/sdp/webhook",
+                axum::routing::post(sdp_reconciliation_webhook),
+            )
+            .with_state(pool);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/sdp/webhook")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#,
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_sdp_webhook_rejects_invalid_signature() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use axum::Router;
+        use tower::ServiceExt;
+
+        std::env::set_var("SDP_WEBHOOK_SECRET", "test_secret_123");
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/dummy")
+            .unwrap();
+
+        let app = Router::new()
+            .route(
+                "/sdp/webhook",
+                axum::routing::post(sdp_reconciliation_webhook),
+            )
+            .with_state(pool);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/sdp/webhook")
+            .header("content-type", "application/json")
+            .header(
+                "X-SDP-Signature",
+                "invalid_forged_signature_hex_digest_value_1234567890abcdef",
+            )
+            .body(Body::from(
+                r#"{"id":"00000000-0000-0000-0000-000000000001","status":"SUCCESS"}"#,
+            ))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
 }

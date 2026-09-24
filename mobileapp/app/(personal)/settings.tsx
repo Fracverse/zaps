@@ -137,6 +137,12 @@ export default function SettingsScreen() {
             onPress={() => router.push("/language")}
           />
           <SettingsItem
+            icon="color-palette-outline"
+            label="Appearance"
+            sublabel="Theme & high contrast"
+            onPress={() => router.push("/appearance")}
+          />
+          <SettingsItem
             icon="help-circle-outline"
             label="Help & Support"
             sublabel="Reach out for assistance"

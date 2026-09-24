@@ -54,7 +54,11 @@ pub async fn run(pool: PgPool, config: SweepSchedulerConfig) {
         "Starting sweep-failure alert scheduler (interval={:?}, threshold={}, webhook={})",
         config.poll_interval,
         config.repeated_failure_threshold,
-        config.ops_webhook_url.as_deref().map(|_| "configured").unwrap_or("disabled")
+        config
+            .ops_webhook_url
+            .as_deref()
+            .map(|_| "configured")
+            .unwrap_or("disabled")
     );
 
     let mut interval = tokio::time::interval(config.poll_interval);
@@ -149,6 +153,6 @@ mod tests {
     fn threshold_requires_more_than_one_failure() {
         // A single transient failure shouldn't page operations; only repeated
         // failures (>= 3) are alert-worthy.
-        assert!(DEFAULT_REPEATED_FAILURE_THRESHOLD > 1);
+        const { assert!(DEFAULT_REPEATED_FAILURE_THRESHOLD > 1) };
     }
 }

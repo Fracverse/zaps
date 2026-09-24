@@ -73,8 +73,7 @@ impl Config {
             aws_s3_bucket: std::env::var("AWS_S3_BUCKET")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            aws_s3_region: std::env::var("AWS_S3_REGION")
-                .unwrap_or_else(|_| "us-east-1".into()),
+            aws_s3_region: std::env::var("AWS_S3_REGION").unwrap_or_else(|_| "us-east-1".into()),
             aws_s3_public_url_base: std::env::var("AWS_S3_PUBLIC_URL_BASE")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
