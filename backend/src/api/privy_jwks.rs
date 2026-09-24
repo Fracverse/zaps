@@ -157,8 +157,8 @@ impl PrivyJwksClient {
         // them would skip audience/issuer checks entirely.
         validation.set_required_spec_claims(&["exp", "aud", "iss"]);
 
-        let data = decode::<T>(token, &decoding_key, &validation)
-            .map_err(PrivyAuthError::InvalidToken)?;
+        let data =
+            decode::<T>(token, &decoding_key, &validation).map_err(PrivyAuthError::InvalidToken)?;
 
         Ok(data.claims)
     }

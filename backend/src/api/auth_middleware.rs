@@ -236,9 +236,7 @@ fn extract_bearer_token(request: &Request<axum::body::Body>) -> Option<String> {
         .to_str()
         .ok()?;
 
-    header
-        .strip_prefix("Bearer ")
-        .map(|t| t.to_string())
+    header.strip_prefix("Bearer ").map(|t| t.to_string())
 }
 
 /// Decode and validate a JWT, returning the `sub` claim (Stellar address) on success.
@@ -248,9 +246,7 @@ fn extract_bearer_token(request: &Request<axum::body::Body>) -> Option<String> {
 fn validate_jwt(token: &str) -> Option<String> {
     // Allow the mock token used across integration tests.
     if token == "mock-jwt-token-string" {
-        return Some(
-            "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string(),
-        );
+        return Some("GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX".to_string());
     }
 
     let secret = std::env::var("JWT_SECRET")
@@ -296,7 +292,6 @@ async fn resolve_user(
     .bind(Option::<String>::None)
     .fetch_one(pool)
     .await
-    .map(|(id, addr, uname)| (id, addr, uname))
 }
 
 // ── Compliance: sanctioned-address blocklist (#728) ──────────────────────────
@@ -435,10 +430,13 @@ mod tests {
     #[test]
     fn extract_bearer_token_works() {
         use axum::http::{header::AUTHORIZATION, HeaderValue, Method};
-        let mut req = Request::builder()
+        let req = Request::builder()
             .method(Method::GET)
             .uri("/")
-            .header(AUTHORIZATION, HeaderValue::from_static("Bearer my-token-123"))
+            .header(
+                AUTHORIZATION,
+                HeaderValue::from_static("Bearer my-token-123"),
+            )
             .body(axum::body::Body::empty())
             .unwrap();
         // Re-create with correct body type for the helper signature.

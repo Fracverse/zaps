@@ -68,11 +68,7 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
 ///     auth_cache,
 /// );
 /// ```
-pub fn protected_routes(
-    router: Router,
-    pool: sqlx::PgPool,
-    cache: AuthTokenCache,
-) -> Router {
+pub fn protected_routes(router: Router, pool: sqlx::PgPool, cache: AuthTokenCache) -> Router {
     router.layer(middleware::from_fn_with_state(
         AuthMiddlewareState { pool, cache },
         auth_middleware,
@@ -127,11 +123,17 @@ pub fn payout_routes(pool: sqlx::PgPool) -> Router {
         .route("/batch", post(payouts::create_batch))
         .route("/batch/:id", get(payouts::get_batch_detail))
         .route("/batch/:id/export", get(payouts::export_batch))
-        .route("/sdp/webhook", post(payouts::sdp_reconciliation_webhook))
         // #728 — block transfers to sanctioned addresses before processing.
         .layer(middleware::from_fn(
             auth_middleware::compliance_sanitize_middleware,
         ))
+        .with_state(pool)
+}
+
+/// #957 — Public SDP webhook receiver route (authenticated via HMAC signature, not user JWT)
+pub fn payout_webhook_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/sdp/webhook", post(payouts::sdp_reconciliation_webhook))
         .with_state(pool)
 }
 

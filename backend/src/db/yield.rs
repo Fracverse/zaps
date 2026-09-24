@@ -352,9 +352,7 @@ pub async fn touch_yield_sync_at(pool: &PgPool, user_id: Uuid) -> Result<(), sql
 }
 
 /// BE-053: Users currently in sweep-failure backoff (excluded from this cycle).
-pub async fn list_sweep_backoff_excluded_users(
-    pool: &PgPool,
-) -> Result<Vec<Uuid>, sqlx::Error> {
+pub async fn list_sweep_backoff_excluded_users(pool: &PgPool) -> Result<Vec<Uuid>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         SELECT user_id FROM sweep_failure_history
@@ -489,7 +487,7 @@ pub async fn get_user_yield_totals(
             COUNT(*) as transaction_count
         FROM yield_transactions
         WHERE user_id = $1
-        "#
+        "#,
     )
     .bind(user_id)
     .fetch_one(pool)
@@ -503,9 +501,7 @@ pub async fn get_user_yield_totals(
     })
 }
 
-pub async fn get_platform_yield_totals(
-    pool: &PgPool,
-) -> Result<PlatformYieldTotals, sqlx::Error> {
+pub async fn get_platform_yield_totals(pool: &PgPool) -> Result<PlatformYieldTotals, sqlx::Error> {
     let row = sqlx::query(
         r#"
         SELECT
@@ -513,16 +509,15 @@ pub async fn get_platform_yield_totals(
             COALESCE(SUM(available_balance), 0) as total_available,
             COUNT(CASE WHEN earning_balance > 0 THEN 1 END) as active_accounts
         FROM user_yield_balances
-        "#
+        "#,
     )
     .fetch_one(pool)
     .await?;
 
-    let auto_earn_accounts: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE auto_earn_enabled = true"
-    )
-    .fetch_one(pool)
-    .await?;
+    let auto_earn_accounts: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE auto_earn_enabled = true")
+            .fetch_one(pool)
+            .await?;
 
     Ok(PlatformYieldTotals {
         tvl: row.get("tvl"),
@@ -531,4 +526,3 @@ pub async fn get_platform_yield_totals(
         auto_earn_accounts,
     })
 }
-

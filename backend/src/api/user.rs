@@ -979,7 +979,9 @@ pub async fn upload_avatar(
                 Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({ "error": format!("Failed to read upload: {}", e) })),
+                        Json(
+                            serde_json::json!({ "error": format!("Failed to read upload: {}", e) }),
+                        ),
                     )
                         .into_response();
                 }
@@ -1027,8 +1029,8 @@ pub async fn upload_avatar(
     let key = format!("avatars/{}.jpg", auth.id);
 
     // Upload to S3.
-    let aws_config = aws_config::from_env()
-        .region(&config.aws_s3_region)
+    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(aws_config::Region::new(config.aws_s3_region.clone()))
         .load()
         .await;
     let s3_client = aws_sdk_s3::Client::new(&aws_config);
@@ -1040,7 +1042,7 @@ pub async fn upload_avatar(
         .bucket(&bucket)
         .key(&key)
         .body(jpeg_buf.into())
-        .content_type(&content_type)
+        .content_type(content_type)
         .send()
         .await
     {
