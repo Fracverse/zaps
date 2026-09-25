@@ -143,6 +143,7 @@ impl NairaTokenContract {
     pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
         Self::require_not_paused(&env);
         spender.require_auth();
+        assert!(!env.storage().persistent().has(&DataKey::Blacklisted(from.clone())), "AddressBlacklisted");
         assert!(amount > 0, "amount must be positive");
         let allowance_key = DataKey::Allowance(from.clone(), spender.clone());
         let allowance: i128 = env.storage().persistent().get(&allowance_key).unwrap_or(0);
@@ -438,5 +439,65 @@ mod tests {
 
         assert_eq!(client.balance(&user), 900);
         assert_eq!(client.balance(&admin), 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "AddressBlacklisted")]
+    fn test_blacklisted_address_cannot_burn() {
+        let (env, client, _admin, user) = setup();
+        env.mock_all_auths();
+
+        // Mint tokens to the user
+        client.mint(&user, &1000);
+
+        // Admin blacklists the user
+        client.blacklist(&user);
+
+        // Attempt burn from blacklisted address → should panic with "AddressBlacklisted"
+        client.burn(&user, &100);
+    }
+
+    #[test]
+    #[should_panic(expected = "AddressBlacklisted")]
+    fn test_blacklisted_address_cannot_transfer_from() {
+        let (env, client, admin, user) = setup();
+        env.mock_all_auths();
+
+        let spender = Address::generate(&env);
+
+        // Mint tokens to the user and approve spender
+        client.mint(&user, &1000);
+        client.approve(&user, &spender, &500);
+
+        // Admin blacklists the user
+        client.blacklist(&user);
+
+        // Verify the user is blacklisted
+        assert!(client.is_blacklisted(&user), "User should be blacklisted");
+
+        // Attempt transfer_from on behalf of blacklisted address → should panic with "AddressBlacklisted"
+        client.transfer_from(&spender, &user, &admin, &100);
+    }
+
+    #[test]
+    #[should_panic(expected = "AddressBlacklisted")]
+    fn test_blacklisted_address_cannot_burn_from() {
+        let (env, client, _admin, user) = setup();
+        env.mock_all_auths();
+
+        let spender = Address::generate(&env);
+
+        // Mint tokens to the user and approve spender
+        client.mint(&user, &1000);
+        client.approve(&user, &spender, &500);
+
+        // Admin blacklists the user
+        client.blacklist(&user);
+
+        // Verify the user is blacklisted
+        assert!(client.is_blacklisted(&user), "User should be blacklisted");
+
+        // Attempt burn_from on behalf of blacklisted address → should panic with "AddressBlacklisted"
+        client.burn_from(&spender, &user, &100);
     }
 }
