@@ -177,6 +177,27 @@ fn test_recover_privy_did_as_admin() {
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
 }
 
+/// Verify that update and recovery cannot move a DID onto a wallet that is
+/// already linked to another DID (one wallet -> one DID).
+#[test]
+#[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
+fn test_update_and_recover_reject_wallet_already_linked() {
+    let (env, client, signing_key) = setup();
+    let wallet_a = Address::generate(&env);
+    let wallet_b = Address::generate(&env);
+    let did_a = String::from_str(&env, "did:privy:a");
+    let did_b = String::from_str(&env, "did:privy:b");
+    let sig_a = sign_did_link(&env, &signing_key, &did_a, &wallet_a);
+    let sig_b = sign_did_link(&env, &signing_key, &did_b, &wallet_b);
+    client.register_privy_did(&did_a, &wallet_a, &sig_a);
+    client.register_privy_did(&did_b, &wallet_b, &sig_b);
+
+    assert!(client.try_update_privy_did(&did_a, &wallet_a, &wallet_b).is_err());
+    assert!(client.try_recover_privy_did(&did_a, &wallet_b).is_err());
+    assert_eq!(client.get_wallet_for_did(&did_a), wallet_a);
+    assert_eq!(client.get_did_for_wallet(&wallet_b), did_b);
+}
+
 /// Verify that querying an unregistered DID returns an error.
 #[test]
 #[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
