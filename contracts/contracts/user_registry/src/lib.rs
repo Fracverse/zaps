@@ -455,6 +455,14 @@ impl UserRegistryContract {
         if stored_wallet != old_wallet {
             panic!("unauthorized: old wallet does not match registered wallet");
         }
+        // One wallet -> one DID: the new wallet must not already be linked.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::WalletDid(new_wallet.clone()))
+        {
+            panic!("wallet already has a DID linked");
+        }
         // Remove old reverse mapping
         env.storage()
             .persistent()
@@ -480,6 +488,14 @@ impl UserRegistryContract {
         let admin = Self::require_admin(&env);
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
+        // One wallet -> one DID: the new wallet must not already be linked.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::WalletDid(new_wallet.clone()))
+        {
+            panic!("wallet already has a DID linked");
+        }
         // Remove old reverse mapping if present
         if let Some(old_wallet) = env.storage().persistent().get::<DataKey, Address>(&did_key) {
             env.storage()
