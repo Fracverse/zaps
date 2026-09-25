@@ -706,9 +706,11 @@ async fn test_yield_service_daily_snapshots() {
     .expect("Failed to log test yield rate");
 
     // 4. Run the daily snapshot service
+    let before_snapshot = chrono::Utc::now().naive_utc();
     let snapshot_count = YieldService::create_daily_snapshots(&pool)
         .await
         .expect("Failed to run yield daily snapshot service");
+    let after_snapshot = chrono::Utc::now().naive_utc();
 
     // At least our user should be snapshotted (maybe others too depending on database state)
     assert!(snapshot_count >= 1);
@@ -723,6 +725,8 @@ async fn test_yield_service_daily_snapshots() {
     assert_eq!(snapshot.user_id, user_id);
     assert_eq!(snapshot.earning_balance, 100000000000);
     assert_eq!(snapshot.apy, 800);
+    assert!(snapshot.created_at >= before_snapshot);
+    assert!(snapshot.created_at <= after_snapshot);
 
     // Expected daily interest: (100,000,000,000 * 800 * 86,400) / (10,000 * 31,536,000) = 21,921,080
     // Let's verify it matches the database calculation
