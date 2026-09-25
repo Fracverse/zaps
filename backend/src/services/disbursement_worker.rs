@@ -111,8 +111,12 @@ impl DisbursementWorkerConfig {
 /// Outcome of one dispatch attempt (alias of SdpOutcome for backward compat).
 type DispatchOutcome = SdpOutcome;
 
-/// Entry point. Runs until the process exits.
-pub async fn run(pool: PgPool, config: DisbursementWorkerConfig) {
+/// Entry point. Runs until shutdown is requested.
+pub async fn run(
+    pool: PgPool,
+    config: DisbursementWorkerConfig,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
+) {
     tracing::info!(
         worker_id = %config.worker_id,
         "Starting disbursement worker (interval={:?}, claim_size={}, max_attempts={})",
@@ -132,7 +136,14 @@ pub async fn run(pool: PgPool, config: DisbursementWorkerConfig) {
     let mut interval = tokio::time::interval(config.poll_interval);
 
     loop {
-        interval.tick().await;
+        tokio::select! {
+            biased;
+            _ = &mut shutdown => {
+                tracing::info!("Disbursement worker shutdown requested");
+                break;
+            }
+            _ = interval.tick() => {}
+        }
 
         if let Err(err) = reclaim_stale_leases(&pool, config.lease_timeout_secs).await {
             tracing::error!("Failed to reclaim stale leases: {err:?}");
