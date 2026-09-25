@@ -1178,4 +1178,15 @@ mod tests {
         assert_eq!(escape_like_pattern(r"a\b"), r"a\\b");
         assert_eq!(escape_like_pattern("ebube"), "ebube");
     }
+
+    #[test]
+    fn autocomplete_prefix_pattern_formats_correctly() {
+        let term = "alice";
+        let pattern = format!("{}%", escape_like_pattern(&term.trim().to_lowercase()));
+        assert_eq!(pattern, "alice%");
+
+        let special = "test%_user";
+        let escaped_pattern = format!("{}%", escape_like_pattern(&special.trim().to_lowercase()));
+        assert_eq!(escaped_pattern, r"test\%\_user%");
+    }
 }

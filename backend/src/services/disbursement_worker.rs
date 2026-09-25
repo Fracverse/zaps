@@ -41,6 +41,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use crate::db::models::BatchRecipient;
+use crate::services::redis_cache::BatchLock;
 use crate::services::stellar::{SdpClient, SdpDisbursementRequest, SdpOutcome};
 
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 15;
@@ -65,6 +66,8 @@ pub struct DisbursementWorkerConfig {
     pub sdp_api_token: Option<String>,
     /// Identifies this process in `batch_recipients.locked_by`.
     pub worker_id: String,
+    /// #952: Distributed lock to prevent duplicate batch execution across workers.
+    pub batch_lock: Option<BatchLock>,
 }
 
 impl DisbursementWorkerConfig {
@@ -95,6 +98,9 @@ impl DisbursementWorkerConfig {
             std::env::var("HOSTNAME").unwrap_or_else(|_| "worker".into()),
             Uuid::new_v4()
         );
+        let batch_lock = std::env::var("REDIS_URL")
+            .ok()
+            .and_then(|url| BatchLock::connect(&url).ok());
 
         Self {
             poll_interval: Duration::from_secs(poll_secs),
@@ -104,6 +110,7 @@ impl DisbursementWorkerConfig {
             sdp_base_url,
             sdp_api_token,
             worker_id,
+            batch_lock,
         }
     }
 }
@@ -183,6 +190,53 @@ async fn process_cycle(
         return Ok(());
     };
 
+    // #952: Acquire distributed lock key `lock:batch:{id}` with TTL before executing batch disbursement.
+    let lock_acquired = if let Some(lock) = &config.batch_lock {
+        match lock.acquire(&batch_id.to_string(), None).await {
+            Ok(true) => {
+                tracing::info!(batch_id = %batch_id, "Acquired distributed lock lock:batch:{batch_id}");
+                true
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    batch_id = %batch_id,
+                    "Another worker instance holds lock:batch:{batch_id}; skipping duplicate batch disbursement"
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    batch_id = %batch_id,
+                    "Redis lock acquisition error ({e}); falling back to DB lease"
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    let result = execute_batch_claim(pool, batch_id, config, sdp_client).await;
+
+    // Release lock once batch execution cycle finishes.
+    if lock_acquired {
+        if let Some(lock) = &config.batch_lock {
+            if let Err(e) = lock.release(&batch_id.to_string()).await {
+                tracing::warn!(batch_id = %batch_id, "Failed to release lock:batch:{batch_id}: {e}");
+            }
+        }
+    }
+
+    result
+}
+
+/// Executes processing for claimed batch recipients in chunks of 50 operations (#951).
+async fn execute_batch_claim(
+    pool: &PgPool,
+    batch_id: Uuid,
+    config: &DisbursementWorkerConfig,
+    sdp_client: &SdpClient,
+) -> Result<(), sqlx::Error> {
     let recipients = claim_recipients(pool, batch_id, config).await?;
     if recipients.is_empty() {
         // Nothing left to send — settle the batch's terminal status.
@@ -196,15 +250,17 @@ async fn process_cycle(
         "Dispatching payout batch"
     );
 
-    // Process recipients in sub-chunks of CHUNK_SIZE to prevent gas limit
+    // #951: Process recipients in sub-chunks of CHUNK_SIZE (50) to prevent gas limit
     // issues on-chain and keep SDP submissions bounded. Each chunk is
     // submitted sequentially; recipients within a chunk are also sequential
     // (SDP rate-limits per account, and parallel submissions contend on
     // the Stellar sequence number).
+    let total_chunks = recipients.len().div_ceil(CHUNK_SIZE);
     for (chunk_idx, chunk) in recipients.chunks(CHUNK_SIZE).enumerate() {
         tracing::debug!(
             batch_id = %batch_id,
             chunk = chunk_idx + 1,
+            total_chunks = total_chunks,
             chunk_size = chunk.len(),
             "Processing chunk"
         );
@@ -266,9 +322,50 @@ async fn process_cycle(
                 }
             }
         }
+
+        // #951: Record progress and update database status per chunk
+        record_chunk_progress(pool, batch_id, chunk_idx, total_chunks, chunk.len()).await?;
     } // end chunk loop
 
     finalize_batch(pool, batch_id).await?;
+    Ok(())
+}
+
+/// #951: Update database status and record progress per chunk of 50 operations.
+async fn record_chunk_progress(
+    pool: &PgPool,
+    batch_id: Uuid,
+    chunk_idx: usize,
+    total_chunks: usize,
+    chunk_size: usize,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        UPDATE payout_batches
+           SET updated_at = NOW()
+         WHERE id = $1
+        "#,
+    )
+    .bind(batch_id)
+    .execute(pool)
+    .await?;
+
+    log_dispatch(
+        pool,
+        batch_id,
+        None,
+        (chunk_idx + 1) as i32,
+        "CHUNK_COMPLETED",
+        None,
+        Some(&format!(
+            "Completed chunk {}/{} ({} operations)",
+            chunk_idx + 1,
+            total_chunks,
+            chunk_size
+        )),
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -659,6 +756,7 @@ mod tests {
             sdp_base_url: "https://sdp.example.org".into(),
             sdp_api_token: None,
             worker_id: "test-worker".into(),
+            batch_lock: None,
         };
 
         assert!(
@@ -669,5 +767,16 @@ mod tests {
         // The lease has to outlast a full claim of sequential submissions, or
         // workers reclaim rows that are still legitimately in flight.
         assert!(config.lease_timeout_secs > config.poll_interval.as_secs() as i64);
+        assert_eq!(CHUNK_SIZE, 50, "Operations must be processed in chunks of 50");
+    }
+
+    #[test]
+    fn chunking_slices_recipients_into_chunks_of_50() {
+        let items: Vec<usize> = (0..125).collect();
+        let chunks: Vec<_> = items.chunks(CHUNK_SIZE).collect();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), 50);
+        assert_eq!(chunks[1].len(), 50);
+        assert_eq!(chunks[2].len(), 25);
     }
 }
