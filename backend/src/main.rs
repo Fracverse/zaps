@@ -285,13 +285,17 @@ async fn main() {
     let sensitive_routes = Router::new()
         .nest(
             "/api/auth",
-            api::auth_routes_with_state(api::auth::AuthState {
-                pool: pool.clone(),
-                privy: Arc::new(api::privy_jwks::PrivyJwksClient::new(
-                    config.privy_jwks_url.clone(),
-                )),
-                privy_app_id: config.privy_app_id.clone(),
-            }),
+            api::auth_routes_with_limiter(
+                api::auth::AuthState {
+                    pool: pool.clone(),
+                    privy: Arc::new(api::privy_jwks::PrivyJwksClient::new(
+                        config.privy_jwks_url.clone(),
+                    )),
+                    privy_app_id: config.privy_app_id.clone(),
+                },
+                // #949: Redis sliding window shared across API instances.
+                api::auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
+            ),
         )
         .nest(
             "/api/users",
@@ -331,6 +335,14 @@ async fn main() {
 
     let other_routes = auth_required_routes;
 
+    // #950: Live Soroban ledger events, polled from getEvents (with Horizon
+    // failover) and fanned out to WebSocket clients via a broadcast channel.
+    let (event_broadcaster, event_streamer_handle) =
+        indexer::soroban::spawn(config.stellar_rpc_url.clone());
+    let event_stream_routes = Router::new()
+        .route("/api/events/ws", get(indexer::soroban::ws_handler))
+        .with_state(event_broadcaster);
+
     let app = Router::new()
         .merge(public_routes)
         .merge(sensitive_routes.layer(middleware::from_fn_with_state(
@@ -338,6 +350,7 @@ async fn main() {
             rate_limiter_middleware,
         )))
         .merge(other_routes)
+        .merge(event_stream_routes)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<_>| {
@@ -383,6 +396,7 @@ async fn main() {
     // #726 — Track background worker tasks so they can be allowed to finish
     // their current batch item before the process exits on shutdown.
     let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    worker_handles.push(event_streamer_handle);
 
     // Spawn indexer in the background
     let indexer_pool = pool.clone();
