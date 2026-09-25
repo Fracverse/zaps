@@ -410,25 +410,13 @@ impl SocialPaymentContract {
 
     // ── Payment methods ───────────────────────────────────────────────────────
 
-    /// SC-005: Execute a P2P social payment using the configured Naira token.
-    /// For Public payments a 0.1% platform fee is routed to the treasury.
-    /// For Friends/Private payments the full amount goes to the receiver.
+    /// SC-005 / Issue #965: Execute a P2P social payment using the configured
+    /// Naira token. The recipient is identified by their registered username,
+    /// which is resolved to an on-chain address via the configured UserRegistry
+    /// contract before routing the payment. For Public payments a 0.1% platform
+    /// fee is routed to the treasury. For Friends/Private payments the full
+    /// amount goes to the receiver.
     pub fn pay(
-        env: Env,
-        sender: Address,
-        receiver: Address,
-        token: Address,
-        amount: i128,
-        memo: String,
-        visibility: Visibility,
-    ) {
-        sender.require_auth();
-        execute_payment(env, sender, receiver, token, amount, memo, visibility);
-    }
-
-    /// Issue #519: Accept a recipient username, resolve the on-chain address via the
-    /// configured UserRegistry contract, then execute the standard payment flow.
-    pub fn pay_by_username(
         env: Env,
         sender: Address,
         recipient_username: String,
@@ -446,9 +434,33 @@ impl SocialPaymentContract {
             .expect("user registry not configured");
 
         let registry = UserRegistryClient::new(&env, &registry_id);
+        // Username resolution — panics with "username not found" if unregistered.
         let receiver = registry.get_address(&recipient_username);
 
         execute_payment(env, sender, receiver, token, amount, memo, visibility);
+    }
+
+    /// Issue #519: Backward-compatible alias for `pay` that accepts a recipient
+    /// username, resolves the on-chain address via the configured UserRegistry
+    /// contract, then executes the standard payment flow.
+    pub fn pay_by_username(
+        env: Env,
+        sender: Address,
+        recipient_username: String,
+        token: Address,
+        amount: i128,
+        memo: String,
+        visibility: Visibility,
+    ) {
+        Self::pay(
+            env,
+            sender,
+            recipient_username,
+            token,
+            amount,
+            memo,
+            visibility,
+        );
     }
 
     /// SC-037: Execute multiple payments in a single contract call.
@@ -852,14 +864,17 @@ mod tests {
     // ── Public payment: fee deducted, event emitted ──────────────────────────
     #[test]
     fn test_social_payment_public_visibility_deducts_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Public payment"),
@@ -899,14 +914,17 @@ mod tests {
     #[test]
     fn test_public_payment_fee_rounding_preserves_funds_at_boundaries() {
         for amount in [1i128, 1_000, i128::MAX] {
-            let (env, client, admin, treasury, sender, receiver) = setup();
+            let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
             let token = mint_token(&env, &admin, &sender, amount);
             client.set_naira_token(&token);
             let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+            let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+            registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
             client.pay(
                 &sender,
-                &receiver,
+                &String::from_str(&env, "bob"),
                 &token,
                 &amount,
                 &String::from_str(&env, "Rounding boundary"),
@@ -923,14 +941,17 @@ mod tests {
     // ── Private payment: no fee, full amount ─────────────────────────────────
     #[test]
     fn test_social_payment_private_visibility_no_fee() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Private"),
@@ -944,14 +965,17 @@ mod tests {
     // ── Friends-only payment: no fee ─────────────────────────────────────────
     #[test]
     fn test_social_payment_friends_visibility_no_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 5_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "Friends"),
@@ -967,12 +991,14 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pay_rejects_zero_amount() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 1_000);
         client.set_naira_token(&token);
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &0,
             &String::from_str(&env, "bad"),
@@ -1184,15 +1210,18 @@ mod tests {
     #[test]
     #[ignore] // pre-existing: assert!(..) in Soroban v20 causes non-unwinding panic
     fn test_public_payment_rejects_non_naira_token_for_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let naira_token = mint_token(&env, &admin, &sender, 10_000);
         let junk_token = mint_token(&env, &admin, &sender, 10_000);
         let junk_client = soroban_sdk::token::Client::new(&env, &junk_token);
         client.set_naira_token(&naira_token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &junk_token,
             &1000,
             &String::from_str(&env, "Junk public payment"),
@@ -1208,12 +1237,15 @@ mod tests {
     #[test]
     #[ignore] // pre-existing: .expect() in Soroban v20 causes non-unwinding panic
     fn test_pay_rejects_when_naira_token_not_configured() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 1_000);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &100,
             &String::from_str(&env, "Missing config"),
@@ -1226,10 +1258,13 @@ mod tests {
     // ── Adjust fee coefficient: updates value, affects payout calculation ─────
     #[test]
     fn test_adjust_fee_coefficient() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         // Verify default is 10 (0.1%)
         assert_eq!(client.fee_coefficient(), 10);
@@ -1240,7 +1275,7 @@ mod tests {
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Public payment"),
@@ -1627,7 +1662,7 @@ mod tests {
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "hi"),
@@ -1651,14 +1686,18 @@ mod tests {
     // ── SC-042: no registry / unregistered participants never break a payment ─
     #[test]
     fn test_pay_event_username_defaults_to_empty_when_unregistered() {
-        // No registry configured at all — resolve_username must short-circuit.
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        // Registry configured but neither participant registered a username —
+        // resolve_username must fall back to empty strings.
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "hi"),
@@ -1679,7 +1718,7 @@ mod tests {
         assert!(found, "SocialPaymentEvent not emitted");
     }
 
-    // ── SC-042: registry configured but receiver never registered a username ──
+    // ── SC-042: registry configured but sender never registered a username ────
     #[test]
     fn test_pay_event_username_defaults_to_empty_for_unregistered_participant() {
         let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
@@ -1687,12 +1726,12 @@ mod tests {
         client.set_naira_token(&token);
 
         let registry_client = MockUserRegistryClient::new(&env, &registry_id);
-        registry_client.register(&sender, &String::from_str(&env, "alice"));
-        // receiver intentionally left unregistered.
+        // sender intentionally left unregistered.
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "hi"),
@@ -1705,8 +1744,8 @@ mod tests {
         for item in events.iter() {
             if item.1.contains(topic) {
                 let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
-                assert_eq!(ev.sender_username, String::from_str(&env, "alice"));
-                assert_eq!(ev.receiver_username, String::from_str(&env, ""));
+                assert_eq!(ev.sender_username, String::from_str(&env, ""));
+                assert_eq!(ev.receiver_username, String::from_str(&env, "bob"));
                 found = true;
             }
         }
