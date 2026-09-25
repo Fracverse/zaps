@@ -690,3 +690,109 @@ pub struct SdpDisbursementList {
     #[serde(default)]
     pub total: Option<u64>,
 }
+
+// ─── #939: SDP Signature Generation & Webhook Validation ─────────────────────
+
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// Signs an arbitrary byte payload using HMAC-SHA256 with the given secret key.
+///
+/// Used to authenticate outbound requests sent to SDP endpoints, where the
+/// SDP server expects the `X-Signature` header to contain the hex-encoded
+/// HMAC-SHA256 of the raw request body.
+///
+/// # Arguments
+/// * `secret` – The shared signing secret (e.g. from `SDP_WEBHOOK_SECRET` env var).
+/// * `payload` – The raw request body bytes to sign.
+///
+/// # Returns
+/// A lowercase hex-encoded HMAC-SHA256 digest suitable for use as a header value.
+pub fn sign_sdp_payload(secret: &[u8], payload: &[u8]) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+    mac.update(payload);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Validates an inbound SDP webhook callback by comparing the `X-Signature`
+/// header value against a locally computed HMAC-SHA256 of the raw body.
+///
+/// Comparison is performed in constant time (via `subtle`'s `ConstantTimeEq`
+/// inside the `hmac` crate) to prevent timing-side-channel leaks.
+///
+/// # Arguments
+/// * `secret`             – The shared signing secret configured on the SDP side.
+/// * `raw_body`           – The unmodified raw request body bytes received from SDP.
+/// * `signature_header`   – The value of the `X-Signature` header, as a hex string.
+///
+/// # Returns
+/// `Ok(())` if the signature matches; `Err(String)` with a reason otherwise.
+pub fn verify_sdp_webhook(
+    secret: &[u8],
+    raw_body: &[u8],
+    signature_header: &str,
+) -> Result<(), String> {
+    let expected_bytes = hex::decode(signature_header.trim())
+        .map_err(|e| format!("Invalid signature header encoding: {e}"))?;
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret).expect("HMAC accepts keys of any length");
+    mac.update(raw_body);
+
+    mac.verify_slice(&expected_bytes)
+        .map_err(|_| "Webhook signature mismatch".to_string())
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    const SECRET: &[u8] = b"test-sdp-webhook-secret";
+
+    #[test]
+    fn sign_and_verify_round_trip() {
+        let payload = br#"{"event":"payment","id":"abc123"}"#;
+        let sig = sign_sdp_payload(SECRET, payload);
+        assert!(verify_sdp_webhook(SECRET, payload, &sig).is_ok());
+    }
+
+    #[test]
+    fn verify_rejects_tampered_body() {
+        let payload = br#"{"event":"payment","id":"abc123"}"#;
+        let sig = sign_sdp_payload(SECRET, payload);
+        let tampered = br#"{"event":"payment","id":"evil"}"#;
+        assert!(verify_sdp_webhook(SECRET, tampered, &sig).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_wrong_secret() {
+        let payload = b"some-body";
+        let sig = sign_sdp_payload(SECRET, payload);
+        assert!(verify_sdp_webhook(b"wrong-secret", payload, &sig).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_malformed_hex() {
+        assert!(verify_sdp_webhook(SECRET, b"body", "not-hex!!").is_err());
+    }
+
+    #[test]
+    fn verify_tolerates_header_whitespace() {
+        let payload = b"hello";
+        let sig = sign_sdp_payload(SECRET, payload);
+        let sig_with_spaces = format!("  {sig}  ");
+        assert!(verify_sdp_webhook(SECRET, payload, &sig_with_spaces).is_ok());
+    }
+
+    #[test]
+    fn sign_is_deterministic() {
+        let payload = b"stable-payload";
+        assert_eq!(
+            sign_sdp_payload(SECRET, payload),
+            sign_sdp_payload(SECRET, payload)
+        );
+    }
+}
