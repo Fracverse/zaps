@@ -372,6 +372,43 @@ impl UserRegistryContract {
         );
     }
 
+    /// Validate DID format per Privy standard.
+    /// DIDs must start with "did:privy:" prefix and contain valid characters.
+    fn validate_did_format(did: &String) {
+        let prefix = "did:privy:";
+        let did_len = did.len();
+
+        // Minimum valid DID: "did:privy:x" (11 chars)
+        if did_len < prefix.len() + 1 {
+            panic!("DID too short");
+        }
+
+        // Extract and check prefix
+        let mut bytes = [0u8; 256];
+        did.copy_into_slice(&mut bytes[..did_len as usize]);
+
+        // Check if starts with "did:privy:"
+        let prefix_bytes = prefix.as_bytes();
+        for i in 0..prefix_bytes.len() {
+            if bytes[i] != prefix_bytes[i] {
+                panic!("DID must have did:privy: prefix");
+            }
+        }
+
+        // Validate characters after prefix (alphanumeric, hyphen, underscore only)
+        for i in prefix.len()..did_len as usize {
+            let b = bytes[i];
+            let is_lowercase = (b'a'..=b'z').contains(&b);
+            let is_numeric = (b'0'..=b'9').contains(&b);
+            let is_hyphen = b == b'-';
+            let is_underscore = b == b'_';
+
+            if !is_lowercase && !is_numeric && !is_hyphen && !is_underscore {
+                panic!("DID contains invalid characters");
+            }
+        }
+    }
+
     /// Register a Privy DID -> wallet address mapping.
     ///
     /// Two authorization checks are enforced before any mapping is written:
@@ -389,6 +426,9 @@ impl UserRegistryContract {
     /// NOTE: doc comments land in the contract spec as `StringM<1024>`; keep
     /// this block under 1,024 bytes or `#[contractimpl]` fails to compile.
     pub fn register_privy_did(env: Env, did: String, wallet: Address, signature: BytesN<64>) {
+        // ── 0. Validate DID format per Privy standard ──────────────────────
+        Self::validate_did_format(&did);
+
         // ── 1. Wallet owner must authorize this transaction ──────────────────
         wallet.require_auth();
 
