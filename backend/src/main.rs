@@ -263,6 +263,23 @@ async fn main() {
         None => None,
     };
 
+    // #952: Redis-backed distributed lock for payout batches.
+    let batch_lock = match config.redis_url.as_deref() {
+        Some(url) => match services::redis_cache::BatchLock::connect(url) {
+            Ok(lock) => {
+                tracing::info!("BatchLock enabled against Redis");
+                Some(lock)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to initialize BatchLock, continuing without it: {e}"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     // Bridge state: shares the DB pool and the Allbridge API client.
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
@@ -292,6 +309,7 @@ async fn main() {
                         config.privy_jwks_url.clone(),
                     )),
                     privy_app_id: config.privy_app_id.clone(),
+                    cache: Some(auth_cache.clone()),
                 },
                 // #949: Redis sliding window shared across API instances.
                 api::auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
