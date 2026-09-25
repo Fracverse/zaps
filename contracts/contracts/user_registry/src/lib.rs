@@ -443,7 +443,23 @@ impl UserRegistryContract {
     }
 
     /// Update the wallet address for an existing Privy DID mapping.
-    /// Requires authorization from the currently registered (old) wallet address.
+    ///
+    /// Issue #982: lets a user rotate the wallet linked to their Privy DID
+    /// (e.g. after a key rotation inside Privy) without going through admin
+    /// recovery. Authorization is enforced by requiring the *currently
+    /// registered* old wallet to sign the call (`old_wallet.require_auth()`)
+    /// and confirming it actually matches the stored forward mapping — a
+    /// caller cannot move someone else's DID by simply naming their own
+    /// address as `old_wallet`.
+    ///
+    /// Also rejects the move if `new_wallet` already has a *different* DID
+    /// linked (via the `WalletDid` reverse index). Without this check, the
+    /// call would silently overwrite that other DID's reverse mapping —
+    /// leaving its forward mapping (`PrivyDid(other_did) -> new_wallet`)
+    /// pointing at a wallet whose reverse index no longer agrees, an
+    /// inconsistency `register_privy_did` already guards against on first
+    /// link (see its own duplicate-wallet check) but this rotation path
+    /// previously did not.
     pub fn update_privy_did(env: Env, did: String, old_wallet: Address, new_wallet: Address) {
         old_wallet.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
@@ -455,47 +471,65 @@ impl UserRegistryContract {
         if stored_wallet != old_wallet {
             panic!("unauthorized: old wallet does not match registered wallet");
         }
-        // One wallet -> one DID: the new wallet must not already be linked.
-        if env
+
+        let new_wallet_did_key = DataKey::WalletDid(new_wallet.clone());
+        if let Some(existing_did) = env
             .storage()
             .persistent()
-            .has(&DataKey::WalletDid(new_wallet.clone()))
+            .get::<DataKey, String>(&new_wallet_did_key)
         {
-            panic!("wallet already has a DID linked");
+            if existing_did != did {
+                panic!("new wallet already has a different DID linked");
+            }
         }
+
         // Remove old reverse mapping
         env.storage()
             .persistent()
             .remove(&DataKey::WalletDid(old_wallet.clone()));
         // Update forward and reverse mappings
         env.storage().persistent().set(&did_key, &new_wallet);
-        env.storage()
-            .persistent()
-            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage().persistent().set(&new_wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(new_wallet),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&new_wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        // #982: publish so the off-chain indexer / Privy sync sees the
+        // rotation, mirroring the audit trail `register_privy_did` (#542)
+        // and every other state-changing entry point already provide.
+        env.events()
+            .publish((symbol_short!("did_upd"),), (old_wallet, new_wallet, did));
     }
 
     /// Admin recovery: reassign a DID mapping to a new wallet.
-    /// Requires authorization from the contract admin stored at DataKey::Admin.
+    ///
+    /// Issue #982: fallback for when the old wallet can no longer sign
+    /// (lost key, compromised device) and `update_privy_did`'s owner-auth
+    /// path is unavailable. Requires authorization from the contract admin
+    /// stored at `DataKey::Admin` instead of the old wallet.
+    ///
+    /// Same duplicate-wallet guard as `update_privy_did`: admin recovery
+    /// must not silently overwrite another wallet's existing DID link
+    /// either, so this is rejected exactly the same way here.
     pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
         let admin = Self::require_admin(&env);
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
-        // One wallet -> one DID: the new wallet must not already be linked.
-        if env
+
+        let new_wallet_did_key = DataKey::WalletDid(new_wallet.clone());
+        if let Some(existing_did) = env
             .storage()
             .persistent()
-            .has(&DataKey::WalletDid(new_wallet.clone()))
+            .get::<DataKey, String>(&new_wallet_did_key)
         {
-            panic!("wallet already has a DID linked");
+            if existing_did != did {
+                panic!("new wallet already has a different DID linked");
+            }
         }
+
         // Remove old reverse mapping if present
         if let Some(old_wallet) = env.storage().persistent().get::<DataKey, Address>(&did_key) {
             env.storage()
@@ -503,17 +537,18 @@ impl UserRegistryContract {
                 .remove(&DataKey::WalletDid(old_wallet));
         }
         env.storage().persistent().set(&did_key, &new_wallet);
-        env.storage()
-            .persistent()
-            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage().persistent().set(&new_wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(new_wallet),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&new_wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        // #982: publish so admin-recovery events are auditable off-chain,
+        // same as the owner-initiated `update_privy_did` rotation above.
+        env.events()
+            .publish((symbol_short!("did_rec"),), (admin, new_wallet, did));
     }
 
     /// Get the wallet address registered for a Privy DID.
