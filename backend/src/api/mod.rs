@@ -14,6 +14,7 @@ pub mod payouts;
 pub mod privy_jwks;
 pub mod social;
 pub mod user;
+pub use user as users;
 pub mod r#yield;
 
 // Re-export the middleware types used in main.rs so callers can import them
@@ -33,12 +34,13 @@ pub fn auth_routes_with_state(state: auth::AuthState) -> Router {
 }
 
 /// #949: Auth router rate-limited by `limiter` (e.g. the Redis sliding
-/// window from `AuthRateLimiter::from_redis_url`).
+/// window from `AuthRateLimiter::from_redis_url`), with session refresh (#943).
 pub fn auth_routes_with_limiter(state: auth::AuthState, limiter: auth::AuthRateLimiter) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
+        .route("/refresh", post(auth::refresh_session))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             limiter,
@@ -56,6 +58,7 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
             pool,
             privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
             privy_app_id: config.privy_app_id,
+            cache: None,
         },
         auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
     )

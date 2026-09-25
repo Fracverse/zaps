@@ -113,13 +113,18 @@ impl BatchLock {
         })
     }
 
+    /// Generates the Redis lock key for a batch ID.
+    pub fn lock_key(batch_id: &str) -> String {
+        format!("lock:batch:{batch_id}")
+    }
+
     /// Attempt to acquire a distributed lock for `batch_id`.
     ///
     /// Returns `Ok(true)` if the lock was acquired, `Ok(false)` if another
     /// worker already holds it. The lock auto-expires after `ttl_ms`
     /// milliseconds to prevent deadlocks if the holder crashes.
     pub async fn acquire(&self, batch_id: &str, ttl_ms: Option<u64>) -> Result<bool, RedisError> {
-        let key = format!("lock:batch:{batch_id}");
+        let key = Self::lock_key(batch_id);
         let ttl = ttl_ms.unwrap_or(BATCH_LOCK_TTL_MS);
         let value = std::process::id().to_string();
 
@@ -138,7 +143,7 @@ impl BatchLock {
     /// Release a previously acquired lock. Only succeeds if the caller
     /// still owns it (value matches our PID).
     pub async fn release(&self, batch_id: &str) -> Result<(), RedisError> {
-        let key = format!("lock:batch:{batch_id}");
+        let key = Self::lock_key(batch_id);
         let value = std::process::id().to_string();
 
         // Lua script: compare-and-delete to avoid releasing someone else's lock.
@@ -175,5 +180,19 @@ mod tests {
     #[test]
     fn connect_rejects_a_non_redis_url() {
         assert!(UsernameAddressCache::connect("postgres://localhost/zaps").is_err());
+    }
+
+    #[test]
+    fn batch_lock_key_formats_correctly() {
+        assert_eq!(BatchLock::lock_key("123"), "lock:batch:123");
+        assert_eq!(
+            BatchLock::lock_key("d290f1ee-6c54-4b01-90e6-d701748f0851"),
+            "lock:batch:d290f1ee-6c54-4b01-90e6-d701748f0851"
+        );
+    }
+
+    #[test]
+    fn batch_lock_connect_rejects_invalid_url() {
+        assert!(BatchLock::connect("invalid-url").is_err());
     }
 }
