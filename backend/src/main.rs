@@ -411,8 +411,7 @@ async fn main() {
         )
         .layer(cors_layer(&config.cors_allowed_origins));
 
-    // #726 — Track background worker tasks so they can be allowed to finish
-    // their current batch item before the process exits on shutdown.
+    // #726 — Keep background worker tasks alive for the lifetime of the server.
     let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     worker_handles.push(event_streamer_handle);
 
@@ -462,13 +461,12 @@ async fn main() {
 
     // BE-554 / Issue #936: Background queue worker processing bulk disbursement requests asynchronously
     let disbursement_pool = pool.clone();
-    let mut disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
-    if disbursement_config.batch_lock.is_none() {
-        disbursement_config.batch_lock = batch_lock.clone();
-    }
-    worker_handles.push(tokio::spawn(async move {
-        services::disbursement_worker::run(disbursement_pool, disbursement_config).await;
-    }));
+    let disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let disbursement_handle = tokio::spawn(async move {
+        services::disbursement_worker::run(disbursement_pool, disbursement_config, shutdown_rx)
+            .await;
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("Listening on {}", addr);
@@ -478,12 +476,29 @@ async fn main() {
     // on every request so IP-based rate limiting (auth::auth_rate_limit,
     // rate_limiter_middleware) has a real peer address to fall back on when
     // there's no `X-Forwarded-For` header (i.e. no reverse proxy in front).
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+    );
+
+    tokio::select! {
+        result = server => {
+            if let Err(error) = result {
+                tracing::error!("HTTP server stopped: {error}");
+            }
+        }
+        result = tokio::signal::ctrl_c() => {
+            match result {
+                Ok(()) => tracing::info!("Shutdown signal received"),
+                Err(error) => tracing::error!("Failed to listen for shutdown signal: {error}"),
+            }
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+    if let Err(error) = disbursement_handle.await {
+        tracing::error!("Disbursement worker task failed during shutdown: {error}");
+    }
 }
 
 // ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────
