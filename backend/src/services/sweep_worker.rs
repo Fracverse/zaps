@@ -461,3 +461,19 @@ mod tests {
         assert!(env.contains("USER456"));
     }
 }
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn default_checkpoint_interval_is_hourly() {
+        assert_eq!(DEFAULT_CHECKPOINT_INTERVAL_SECS, 3600);
+    }
+
+    #[test]
+    fn checkpoint_config_defaults() {
+        let config = YieldCheckpointConfig::default();
+        assert_eq!(config.interval.as_secs(), 3600);
+    }
+}

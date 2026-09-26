@@ -691,6 +691,58 @@ pub struct SdpDisbursementList {
     pub total: Option<u64>,
 }
 
+/// #934: SdpClient construction and dry-run behavior.
+#[cfg(test)]
+mod sdp_client_tests {
+    use super::*;
+
+    #[test]
+    fn from_env_defaults_to_stellar_sdp_when_unset() {
+        std::env::remove_var("SDP_BASE_URL");
+        std::env::remove_var("SDP_API_TOKEN");
+        let client = SdpClient::from_env();
+        assert_eq!(client.base_url, "https://sdp.stellar.org");
+        assert!(client.api_token.is_none());
+    }
+
+    #[test]
+    fn new_trims_trailing_slash_from_base_url() {
+        let client = SdpClient::new("https://sdp.example.org/".into(), None);
+        assert_eq!(client.base_url, "https://sdp.example.org");
+    }
+
+    #[tokio::test]
+    async fn submit_disbursement_without_token_is_a_dry_run() {
+        // No API token configured: the client must not attempt a network call
+        // and instead returns a synthetic success keyed on the idempotency key.
+        let client = SdpClient::new("https://sdp.example.org".into(), None);
+        let request = SdpDisbursementRequest {
+            idempotency_key: "test-key-123".into(),
+            destination: "GABCDEXAMPLE",
+            amount: 1_000_000,
+            currency: "USDC",
+        };
+
+        match client.submit_disbursement(&request).await {
+            SdpOutcome::Submitted {
+                payment_id,
+                tx_hash,
+            } => {
+                assert_eq!(payment_id.as_deref(), Some("dry-run-test-key-123"));
+                assert!(tx_hash.is_none());
+            }
+            other => panic!("expected a dry-run Submitted outcome, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_disbursement_status_without_token_errors() {
+        let client = SdpClient::new("https://sdp.example.org".into(), None);
+        let result = client.get_disbursement_status("pmt-1").await;
+        assert!(result.is_err());
+    }
+}
+
 // ─── #939: SDP Signature Generation & Webhook Validation ─────────────────────
 
 use hmac::{Hmac, Mac};
