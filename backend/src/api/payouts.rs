@@ -317,10 +317,10 @@ fn csv_field(value: &str) -> String {
     }
 }
 
-/// POST /api/payouts/batch and /api/payouts/batch/csv (#935) — accepting the
-/// actual JSON/CSV payout records and validating them — live in
-/// `api::bridge` (`batch_upload` / `batch_upload_csv`), alongside the shared
-/// `persist_batch` helper. They're wired in `api::payout_routes`.
+// POST /api/payouts/batch and /api/payouts/batch/csv (#935) — accepting the
+// actual JSON/CSV payout records and validating them — live in
+// `api::bridge` (`batch_upload` / `batch_upload_csv`), alongside the shared
+// `persist_batch` helper. They're wired in `api::payout_routes`.
 
 /// POST /api/payouts/sdp/webhook
 ///
