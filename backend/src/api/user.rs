@@ -1190,3 +1190,90 @@ mod tests {
         assert_eq!(escaped_pattern, r"test\%\_user%");
     }
 }
+
+#[cfg(test)]
+mod username_validation_tests {
+    use super::*;
+
+    #[test]
+    fn valid_usernames_accepted() {
+        assert!(validate_username("alice").is_ok());
+        assert!(validate_username("bob123").is_ok());
+        assert!(validate_username("charlie_dev").is_ok());
+        assert!(validate_username("a1b2c3").is_ok());
+    }
+
+    #[test]
+    fn too_short_rejected() {
+        assert_eq!(validate_username("ab"), Err(UsernameError::TooShort));
+        assert_eq!(validate_username("a"), Err(UsernameError::TooShort));
+    }
+
+    #[test]
+    fn too_long_rejected() {
+        assert_eq!(
+            validate_username("thisusernameistoolong"),
+            Err(UsernameError::TooLong)
+        );
+    }
+
+    #[test]
+    fn invalid_characters_rejected() {
+        assert_eq!(
+            validate_username("Alice"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("bob@123"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("user name"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("user-name"),
+            Err(UsernameError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn dots_handling() {
+        assert_eq!(
+            validate_username(".alice"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("alice."),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("ali..ce"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert!(validate_username("ali.ce").is_ok());
+    }
+
+    #[test]
+    fn prefix_validation() {
+        assert!(validate_username_prefix("a").is_ok());
+        assert!(validate_username_prefix("ali").is_ok());
+        assert_eq!(validate_username_prefix(""), Err(UsernameError::Empty));
+        assert_eq!(
+            validate_username_prefix("ALICE"),
+            Err(UsernameError::InvalidCharacters)
+        );
+    }
+
+    #[test]
+    fn error_messages_are_descriptive() {
+        let err = validate_username("ab").unwrap_err();
+        assert!(err.message().contains("3"));
+
+        let err = validate_username("a").unwrap_err();
+        assert!(err.message().contains("at least"));
+
+        let err = validate_username("ALICE").unwrap_err();
+        assert!(err.message().contains("lowercase"));
+    }
+}
