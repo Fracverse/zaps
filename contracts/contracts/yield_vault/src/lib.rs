@@ -20,7 +20,14 @@ const PROTO_REW_KEY: Symbol = symbol_short!("p_rew");
 const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
 const PAUSED_KEY: Symbol = symbol_short!("paused");
 const USER_CAP_KEY: Symbol = symbol_short!("user_cap");
-const MAX_APY_BPS: u32 = 2_000;
+const MAX_APY_KEY: Symbol = symbol_short!("max_apy");
+/// Absolute safe bounds for target APY (0% to 25% expressed in basis points).
+/// `MAX_APY_CAP_BPS` is the hard ceiling that an admin-configurable cap
+/// (`MAX_APY_KEY`) can never exceed.
+const MIN_APY_BPS: u32 = 0;
+const MAX_APY_CAP_BPS: u32 = 2_500; // 25%
+/// Back-compat alias: previous hard-coded ceiling was 2_000 bps (20%).
+const MAX_APY_BPS: u32 = MAX_APY_CAP_BPS;
 
 /// SC-053: Minimum delay (in seconds) between queuing an APY change and applying it.
 const APY_TIMELOCK_SECS: u64 = 86_400; // 24 hours
@@ -198,14 +205,23 @@ impl YieldVaultContract {
 
     /// SC-016: One-time initializer. Sets owner, token address, and initial APY.
     /// `apy_bps` is the annual percentage yield in basis points (e.g. 500 = 5%).
+    /// Validated to be within the safe bounds of 0% to 25% (0..=2_500 bps).
     pub fn initialize(env: Env, owner: Address, token: Address, apy_bps: u32) {
         if env.storage().instance().has(&OWNER_KEY) {
             panic!("already initialized");
         }
         env.storage().instance().set(&OWNER_KEY, &owner);
         env.storage().instance().set(&TOKEN_KEY, &token);
-        assert!(apy_bps <= MAX_APY_BPS, "apy out of bounds");
+        assert!(
+            apy_bps >= MIN_APY_BPS && apy_bps <= MAX_APY_CAP_BPS,
+            "apy out of bounds"
+        );
         env.storage().instance().set(&APY_KEY, &apy_bps);
+        // SC-972: admin-adjustable maximum APY cap. Defaults to the 25%
+        // absolute ceiling; the admin may only lower it via `set_max_apy`.
+        env.storage()
+            .instance()
+            .set(&MAX_APY_KEY, &MAX_APY_CAP_BPS);
         env.storage().instance().set(&PAUSED_KEY, &false);
         // Yield index starts at 1.0 (represented as PRECISION)
         env.storage().instance().set(&IDX_KEY, &PRECISION);
@@ -344,13 +360,26 @@ impl YieldVaultContract {
     }
 
     /// Queue a vault target APY change in basis points.
-    /// Only the owner may call this entrypoint. The change is not applied
-    /// immediately; it becomes active only after the 24-hour time-lock delay
-    /// has elapsed, at which point `apply_apy` must be called.
+    /// Only the owner (administrator) may call this entrypoint. Requires the
+    /// administrator's signature via `require_auth` before any value is
+    /// written. The new APY must be within the safe bounds of 0% to 25%
+    /// (0..=2_500 bps) and must not exceed the admin-configured maximum cap.
+    /// The change is not applied immediately; it becomes active only after
+    /// the 24-hour time-lock delay has elapsed, at which point `apply_apy`
+    /// must be called.
     pub fn update_apy(env: Env, caller: Address, new_apy_bps: u32) {
         caller.require_auth();
         Self::require_owner(&env, &caller);
-        assert!(new_apy_bps <= MAX_APY_BPS, "apy out of bounds");
+        assert!(
+            new_apy_bps >= MIN_APY_BPS && new_apy_bps <= MAX_APY_CAP_BPS,
+            "apy out of bounds"
+        );
+        let max_apy: u32 = env
+            .storage()
+            .instance()
+            .get(&MAX_APY_KEY)
+            .unwrap_or(MAX_APY_CAP_BPS);
+        assert!(new_apy_bps <= max_apy, "apy exceeds max cap");
 
         let activation = env
             .ledger()
@@ -389,6 +418,18 @@ impl YieldVaultContract {
         assert!(
             now >= activation,
             "apy change not yet active; time-lock still in effect"
+        );
+        // SC-972: re-validate against the current admin cap in case it was
+        // tightened after the change was queued.
+        let max_apy: u32 = env
+            .storage()
+            .instance()
+            .get(&MAX_APY_KEY)
+            .unwrap_or(MAX_APY_CAP_BPS);
+        assert!(proposed <= max_apy, "apy exceeds max cap");
+        assert!(
+            proposed >= MIN_APY_BPS && proposed <= MAX_APY_CAP_BPS,
+            "apy out of bounds"
         );
 
         Self::checkpoint_index(&env);
@@ -443,6 +484,29 @@ impl YieldVaultContract {
     /// Set the maximum cumulative deposit allowed per individual user (alias for `set_max_user_cap`).
     pub fn set_user_cap(env: Env, caller: Address, cap: i128) {
         Self::set_max_user_cap(env, caller, cap);
+    }
+
+    /// Set the administrator-configured maximum APY cap in basis points.
+    /// Only the owner (administrator) may call this entrypoint; requires the
+    /// administrator's signature via `require_auth` before writing.
+    /// The cap must stay within the absolute safe bounds of 0% to 25%
+    /// (0..=2_500 bps) and can only tighten (never exceed) the hard ceiling.
+    /// Queued/active APYs above the new cap cannot be proposed afterwards;
+    /// an already-queued proposal above the new cap is rejected at apply time.
+    pub fn set_max_apy(env: Env, caller: Address, new_max_apy_bps: u32) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(
+            new_max_apy_bps >= MIN_APY_BPS && new_max_apy_bps <= MAX_APY_CAP_BPS,
+            "max apy out of bounds"
+        );
+        env.storage()
+            .instance()
+            .set(&MAX_APY_KEY, &new_max_apy_bps);
+        env.events().publish(
+            (Symbol::new(&env, "MaxApyUpdated"),),
+            (new_max_apy_bps,),
+        );
     }
 
     /// Emergency exit for users to rescue assets directly by redeeming all their shares.
@@ -690,6 +754,36 @@ impl YieldVaultContract {
     /// Returns the currently active APY in basis points.
     pub fn apy(env: Env) -> u32 {
         env.storage().instance().get(&APY_KEY).unwrap_or(0)
+    }
+
+    /// Returns the administrator-configured maximum APY cap in basis points.
+    /// Defaults to 2_500 (25%) when never explicitly set (e.g. vaults
+    /// initialized before SC-972).
+    pub fn max_apy(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&MAX_APY_KEY)
+            .unwrap_or(MAX_APY_CAP_BPS)
+    }
+
+    /// Alias for `max_apy`.
+    pub fn max_apy_bps(env: Env) -> u32 {
+        Self::max_apy(env)
+    }
+
+    /// Returns the absolute APY ceiling (2_500 bps = 25%).
+    pub fn absolute_max_apy_bps(_env: Env) -> u32 {
+        MAX_APY_CAP_BPS
+    }
+
+    /// Returns the queued (proposed) APY, if any.
+    pub fn pending_apy(env: Env) -> Option<u32> {
+        env.storage().instance().get(&PROPOSED_APY_KEY)
+    }
+
+    /// Returns the timestamp at which the queued APY becomes applicable, if any.
+    pub fn pending_apy_activation(env: Env) -> Option<u64> {
+        env.storage().instance().get(&APY_ACTIVATION_KEY)
     }
 
     /// Returns the configured maximum deposit cap per user (0 if uncapped).
