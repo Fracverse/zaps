@@ -397,6 +397,25 @@ impl YieldVaultContract {
         );
     }
 
+    /// Cancel a previously queued APY change before it is applied.
+    /// Only the owner may call this entrypoint. Clears both the proposed APY
+    /// and activation timestamp from storage and emits an `ApyCancelled` event.
+    pub fn cancel_apy(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
+        let proposed: u32 = env
+            .storage()
+            .instance()
+            .get(&PROPOSED_APY_KEY)
+            .expect("no pending apy change");
+
+        env.storage().instance().remove(&PROPOSED_APY_KEY);
+        env.storage().instance().remove(&APY_ACTIVATION_KEY);
+        env.events()
+            .publish((Symbol::new(&env, "ApyCancelled"),), (proposed,));
+    }
+
     /// Apply a previously queued APY change once the 24-hour time-lock delay
     /// has elapsed. Only the owner may call this entrypoint.
     pub fn apply_apy(env: Env, caller: Address) {

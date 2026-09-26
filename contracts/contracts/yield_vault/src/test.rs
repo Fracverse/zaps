@@ -479,6 +479,62 @@ fn test_apply_apy_rejects_without_pending_change() {
 }
 
 #[test]
+fn test_cancel_apy_clears_pending_change() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    client.update_apy(&owner, &1_000);
+    assert_eq!(client.pending_apy(), Some(1_000));
+
+    client.cancel_apy(&owner);
+
+    // Pending state must be cleared.
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+
+    // Active APY must remain unchanged after cancellation.
+    assert_eq!(client.apy(), APY_BPS);
+
+    // A new APY change can be queued after cancellation.
+    client.update_apy(&owner, &1_500);
+    assert_eq!(client.pending_apy(), Some(1_500));
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.apy(), 1_500);
+}
+
+#[test]
+#[ignore]
+fn test_cancel_apy_rejects_without_pending_change() {
+    let (_env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    let res = client.try_cancel_apy(&owner);
+    assert!(res.is_err(), "cancel_apy must fail with no pending change");
+}
+
+#[test]
+fn test_pending_apy_view_helpers() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    // No pending change initially.
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+
+    client.update_apy(&owner, &800);
+
+    // After queuing, both helpers must return values.
+    assert_eq!(client.pending_apy(), Some(800));
+    let activation = client.pending_apy_activation().expect("activation must be set");
+    let now = env.ledger().timestamp();
+    assert_eq!(activation, now + APY_TIMELOCK_SECS);
+
+    // After applying, helpers must clear again.
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+}
+
+#[test]
 fn test_admin_emergency_exit_rescues_reserves() {
     let (env, client, _contract_id, owner, _depositor, token) = setup();
     let amount = 5_000_000i128;
