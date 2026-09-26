@@ -757,6 +757,72 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
 }
 
 #[cfg(test)]
+mod health_tests {
+    use super::liveness_probe;
+    use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
+    use tower::ServiceExt;
+
+    fn liveness_router() -> Router {
+        Router::new().route("/healthz", get(liveness_probe))
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_returns_200() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_body_contains_status_ok() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_response_is_json() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+
+        assert!(content_type.contains("application/json"), "expected JSON content-type, got {content_type}");
+    }
+}
+
+#[cfg(test)]
 mod cors_tests {
     use super::cors_layer;
     use axum::{
