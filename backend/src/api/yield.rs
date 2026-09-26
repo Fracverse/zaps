@@ -1165,6 +1165,12 @@ pub async fn build_unsigned_deposit(
             .into_response();
     }
 
+    if let Err(denied) =
+        ensure_request_account_matches_caller(&payload.user_account, &auth.address)
+    {
+        return denied.into_response();
+    }
+
     match build_vault_xdr(
         &payload.user_account,
         &payload.vault_contract_address,
@@ -1217,6 +1223,12 @@ pub async fn build_unsigned_withdraw(
             Json(serde_json::json!({ "error": "invalid vault_contract_address: expected a 56-char C… Soroban address" })),
         )
             .into_response();
+    }
+
+    if let Err(denied) =
+        ensure_request_account_matches_caller(&payload.user_account, &auth.address)
+    {
+        return denied.into_response();
     }
 
     match build_vault_xdr(
@@ -1277,7 +1289,7 @@ async fn build_vault_xdr(
         vault_contract,
         fn_name,
         amount,
-        MIN_BASE_FEE.to_i64() as u32, // placeholder fee; will be replaced after simulation
+        fee_to_u32(MIN_BASE_FEE.to_i64() as u64), // placeholder; replaced after simulation
     )?;
 
     // Simulate against the Soroban RPC to estimate the real fee.
@@ -1298,7 +1310,7 @@ async fn build_vault_xdr(
         vault_contract,
         fn_name,
         amount,
-        estimated_fee as u32,
+        fee_to_u32(estimated_fee),
     )?;
 
     Ok(UnsignedXdrResponse {
@@ -1308,12 +1320,44 @@ async fn build_vault_xdr(
     })
 }
 
+/// Longest `ManageData` `data_name` the XDR type will hold.
+const MAX_DATA_NAME_BYTES: usize = 64;
+
+/// Assemble the `data_name` that identifies a vault call, e.g.
+/// `"zaps-vault:deposit:CA7QYNF7SOWQ3GLR2BGMZEH"`, trimming the contract id to
+/// whatever remains of the 64-byte budget.
+///
+/// The trim walks `char`s and measures UTF-8 width. A byte-offset slice — what
+/// this used to do — is only safe because every Stellar address happens to be
+/// ASCII: the same expression panics outright on a non-ASCII contract id, and
+/// a char count alone would silently overrun the XDR limit and turn a
+/// truncation into a build error.
+fn data_name_for_vault_call(fn_name: &str, vault_contract: &str) -> String {
+    let prefix = format!("zaps-vault:{fn_name}:");
+    let budget = MAX_DATA_NAME_BYTES.saturating_sub(prefix.len());
+
+    let tag: String = vault_contract
+        .chars()
+        .scan(0usize, |used, c| {
+            let next = *used + c.len_utf8();
+            if next > budget {
+                None
+            } else {
+                *used = next;
+                Some(c)
+            }
+        })
+        .collect();
+
+    format!("{prefix}{tag}")
+}
+
 /// Build a base64-encoded unsigned Stellar XDR `TransactionEnvelope` that
 /// encodes a vault operation via a `ManageData` operation.
 ///
-/// The `data_name` encodes both the function name and the vault contract address
-/// (truncated to 32 chars to stay within the 64-byte XDR limit):
-/// `"zaps-vault:{fn_name}:{vault_contract[..32]}"`
+/// The `data_name` encodes both the function name and the vault contract
+/// address, trimmed to stay within the 64-byte XDR limit — see
+/// `data_name_for_vault_call`.
 fn build_soroban_manage_data_xdr(
     user_account: &str,
     vault_contract: &str,
@@ -1324,9 +1368,8 @@ fn build_soroban_manage_data_xdr(
     let source_pk = PublicKey::from_account_id(user_account)
         .map_err(|e| format!("invalid user_account: {e}"))?;
 
-    // Encode contract address in the data key (truncated for XDR 64-byte limit).
-    let contract_tag = &vault_contract[..std::cmp::min(vault_contract.len(), 24)];
-    let data_name = format!("zaps-vault:{fn_name}:{contract_tag}");
+    // Encode contract address in the data key.
+    let data_name = data_name_for_vault_call(fn_name, vault_contract);
 
     // Amount as 8-byte big-endian in the data value.
     let amount_bytes = amount.to_be_bytes();
@@ -1453,6 +1496,49 @@ fn is_valid_contract_address(address: &str) -> bool {
     address.len() == 56 && address.starts_with('C')
 }
 
+/// Confirm the account a build request names is the account that is calling.
+///
+/// `/yield/deposit` and `/yield/withdraw` never read an account address from
+/// the request body — they build the envelope from `auth.address`. The
+/// `/yield/build/*` endpoints were the exception: they accepted any
+/// well-formed `user_account` and authenticated the request without ever
+/// comparing the two. The envelope is unsigned, so a mismatch cannot move
+/// funds on its own, but it still lets any authenticated caller mint envelopes
+/// in someone else's name and turns the endpoint into a network oracle for
+/// whether an address is funded. Closing it also removes the only two handlers
+/// in this file that bound `auth` without reading it.
+///
+/// Base32 Stellar addresses are upper-case, so the comparison is
+/// case-insensitive rather than exact: a wallet that hands back a lower-cased
+/// address is still the same account, and rejecting it would be a needless
+/// support burden.
+fn ensure_request_account_matches_caller(
+    requested: &str,
+    authenticated: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if requested.eq_ignore_ascii_case(authenticated) {
+        return Ok(());
+    }
+
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "user_account must match the authenticated account"
+        })),
+    ))
+}
+
+/// Narrow a simulated fee to the `u32` the XDR fee field holds.
+///
+/// `simulateTransaction` reports its recommendation as a JSON number read here
+/// as `u64`. A bare `as u32` on a value above `u32::MAX` wraps silently and
+/// produces an envelope carrying a tiny fee that the network will reject, with
+/// nothing in the response to explain why. Saturating keeps the envelope
+/// honestly priced instead of quietly wrong.
+fn fee_to_u32(fee: u64) -> u32 {
+    fee.min(u32::MAX as u64) as u32
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1536,5 +1622,94 @@ mod tests {
             100,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn data_name_keeps_the_contract_id_within_the_xdr_budget() {
+        let name = data_name_for_vault_call(
+            "deposit",
+            "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUAIBGDT7TZVM",
+        );
+        assert!(name.len() <= MAX_DATA_NAME_BYTES, "data_name was {} bytes", name.len());
+        assert!(name.starts_with("zaps-vault:deposit:CA7QYNF7SOWQ3GLR2BGMZEH"));
+    }
+
+    #[test]
+    fn data_name_never_splits_a_codepoint() {
+        // Trimming to a fixed *character* count would overrun the XDR byte
+        // limit here; trimming at a byte offset would panic. Neither is
+        // acceptable, so the trim has to respect both.
+        // `€` is U+20AC: three bytes in UTF-8, two bytes of chars.
+        let wide = "\u{20AC}".repeat(23);
+        let name = data_name_for_vault_call("withdraw", &format!("C{wide}"));
+        assert!(name.len() <= MAX_DATA_NAME_BYTES, "data_name was {} bytes", name.len());
+        assert!(name.starts_with("zaps-vault:withdraw:"));
+    }
+
+    #[test]
+    fn data_name_survives_a_contract_id_longer_than_the_budget() {
+        let name = data_name_for_vault_call("deposit", &"C".repeat(200));
+        assert_eq!(name.len(), MAX_DATA_NAME_BYTES);
+    }
+
+    #[test]
+    fn build_soroban_manage_data_xdr_tolerates_a_multi_byte_contract_id() {
+        // The data key used to be truncated with a byte-offset slice, which
+        // panics on a non-char-boundary; a multi-byte id must not take the
+        // process down inside a request handler.
+        let user = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let vault = format!("C{}", "\u{20AC}".repeat(39));
+        let result = build_soroban_manage_data_xdr(user, &vault, "deposit", 100, 100);
+        assert!(result.is_ok(), "unexpected error: {:?}", result.err());
+    }
+
+    // ── #931: the build endpoints must only mint for the caller ─────────────
+
+    #[test]
+    fn build_request_for_the_callers_own_account_is_allowed() {
+        let addr = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        assert!(ensure_request_account_matches_caller(addr, addr).is_ok());
+    }
+
+    #[test]
+    fn build_request_for_another_account_is_forbidden() {
+        let caller = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let other = "GBPK7THXDEPNBQB5K3EMQL5FZAQLHJ4XPBWJFNV3EPJN7CVPQGJZ6PBN";
+        let denied = ensure_request_account_matches_caller(other, caller).unwrap_err();
+        assert_eq!(denied.0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn build_request_account_comparison_ignores_case() {
+        let caller = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let lowercased = caller.to_lowercase();
+        assert_ne!(lowercased, caller);
+        assert!(ensure_request_account_matches_caller(&lowercased, caller).is_ok());
+    }
+
+    #[test]
+    fn a_truncated_address_is_not_a_match() {
+        // Guards the check against a prefix-only comparison.
+        let caller = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+        let prefix = &caller[..caller.len() - 1];
+        assert!(ensure_request_account_matches_caller(prefix, caller).is_err());
+    }
+
+    // ── #931: the simulated fee must survive the narrowing to u32 ──────────
+
+    #[test]
+    fn ordinary_fees_pass_through_unchanged() {
+        assert_eq!(fee_to_u32(100), 100);
+        assert_eq!(fee_to_u32(0), 0);
+        assert_eq!(fee_to_u32(u32::MAX as u64), u32::MAX);
+    }
+
+    #[test]
+    fn oversized_fees_saturate_instead_of_wrapping() {
+        // A bare `as u32` would turn u32::MAX + 1 into 0, i.e. a free-fee
+        // envelope the network rejects with no local explanation.
+        assert_eq!(fee_to_u32(u32::MAX as u64 + 1), u32::MAX);
+        assert_eq!(fee_to_u32(u64::MAX), u32::MAX);
+        assert_ne!(fee_to_u32(u32::MAX as u64 + 1), 0);
     }
 }
