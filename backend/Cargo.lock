@@ -447,7 +447,7 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "h2 0.3.27",
+ "h2 0.3.28",
  "h2 0.4.19",
  "http 0.2.12",
  "http 1.5.0",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.27"
+version = "0.3.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0beca50380b1fc32983fc1cb4587bfa4bb9e78fc259aad4a0032d2080309222d"
 dependencies = [
@@ -1876,7 +1876,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.3.27",
+ "h2 0.3.28",
  "http 0.2.12",
  "http-body 0.4.6",
  "httparse",
