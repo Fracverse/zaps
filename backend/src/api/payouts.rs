@@ -317,77 +317,10 @@ fn csv_field(value: &str) -> String {
     }
 }
 
-/// POST /api/payouts/batch
-/// Create a new batch payout.
-#[derive(Deserialize)]
-pub struct CreateBatchRequest {
-    pub idempotency_key: String,
-    pub currency: String,
-    pub total_recipients: i32,
-    pub total_amount: i64,
-    pub created_by: String, // UUID as string
-}
-
-#[derive(Serialize)]
-pub struct CreateBatchResponse {
-    pub batch_id: String,
-    pub status: String,
-}
-
-pub async fn create_batch(
-    State(pool): State<PgPool>,
-    Json(payload): Json<CreateBatchRequest>,
-) -> impl IntoResponse {
-    let created_by: Uuid = match payload.created_by.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "Invalid user ID format"
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let batch_id = match sqlx::query(
-        r#"
-        INSERT INTO payout_batches (idempotency_key, created_by, currency, total_recipients, total_amount, status)
-        VALUES ($1, $2, $3, $4, $5, 'PENDING')
-        RETURNING id, status
-        "#,
-    )
-    .bind(&payload.idempotency_key)
-    .bind(created_by)
-    .bind(&payload.currency)
-    .bind(payload.total_recipients)
-    .bind(payload.total_amount)
-    .fetch_one(&pool)
-    .await
-    {
-        Ok(row) => row,
-        Err(e) => {
-            tracing::error!("Failed to create payout batch: {:?}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "Failed to create payout batch"
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    let id: Uuid = batch_id.get("id");
-    let status: String = batch_id.get("status");
-
-    Json(CreateBatchResponse {
-        batch_id: id.to_string(),
-        status,
-    })
-    .into_response()
-}
+/// POST /api/payouts/batch and /api/payouts/batch/csv (#935) — accepting the
+/// actual JSON/CSV payout records and validating them — live in
+/// `api::bridge` (`batch_upload` / `batch_upload_csv`), alongside the shared
+/// `persist_batch` helper. They're wired in `api::payout_routes`.
 
 /// POST /api/payouts/sdp/webhook
 ///
