@@ -196,3 +196,19 @@ mod tests {
         assert!(BatchLock::connect("invalid-url").is_err());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_key_format() {
+        assert_eq!(cache_key("alice"), "zaps:user:address:alice");
+        assert_eq!(cache_key("bob123"), "zaps:user:address:bob123");
+    }
+
+    #[test]
+    fn ttl_is_30_minutes() {
+        assert_eq!(USERNAME_ADDRESS_TTL_SECS, 1800);
+    }
+}
