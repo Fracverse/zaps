@@ -14,6 +14,9 @@ const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 300;
 const DEFAULT_MIN_IDLE_AMOUNT: i64 = 100_000;
 const BATCH_SIZE: i64 = 50;
 
+/// Soroban RPC endpoint used when `STELLAR_RPC_URL` is unset.
+const DEFAULT_STELLAR_RPC_URL: &str = "https://soroban-testnet.stellar.org";
+
 pub struct SweepWorkerConfig {
     pub poll_interval: Duration,
     pub min_idle_amount: i64,
@@ -23,25 +26,41 @@ pub struct SweepWorkerConfig {
     pub yield_vault_contract_id: Option<String>,
 }
 
+/// Baseline configuration: the values used whenever the corresponding
+/// environment variable is absent or unparseable.
+///
+/// Implemented so the defaults are a single source of truth — `from_env`
+/// overrides these field by field, and tests can assert the documented
+/// defaults without mutating process-global environment state.
+impl Default for SweepWorkerConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval: Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS),
+            min_idle_amount: DEFAULT_MIN_IDLE_AMOUNT,
+            stellar_rpc_url: DEFAULT_STELLAR_RPC_URL.to_string(),
+            yield_vault_contract_id: None,
+        }
+    }
+}
+
 impl SweepWorkerConfig {
     pub fn from_env() -> Self {
-        let poll_secs = std::env::var("SWEEP_POLL_INTERVAL_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_SWEEP_INTERVAL_SECS);
-        let min_idle = std::env::var("SWEEP_MIN_IDLE_AMOUNT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_MIN_IDLE_AMOUNT);
-        let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
-            .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into());
-        let yield_vault_contract_id = std::env::var("YIELD_VAULT_CONTRACT_ID").ok();
+        let defaults = Self::default();
 
         Self {
-            poll_interval: Duration::from_secs(poll_secs),
-            min_idle_amount: min_idle,
-            stellar_rpc_url,
-            yield_vault_contract_id,
+            poll_interval: Duration::from_secs(
+                std::env::var("SWEEP_POLL_INTERVAL_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(defaults.poll_interval.as_secs()),
+            ),
+            min_idle_amount: std::env::var("SWEEP_MIN_IDLE_AMOUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(defaults.min_idle_amount),
+            stellar_rpc_url: std::env::var("STELLAR_RPC_URL")
+                .unwrap_or(defaults.stellar_rpc_url),
+            yield_vault_contract_id: std::env::var("YIELD_VAULT_CONTRACT_ID").ok(),
         }
     }
 }
@@ -190,6 +209,12 @@ async fn submit_sweep_transaction(
         "SWEEP_SERVER_SECRET_KEY not set; cannot sign sweep transactions".to_string()
     })?;
 
+    // An unset-but-empty variable is the common deployment mistake, and it is
+    // caught here rather than after a pointless simulation round-trip.
+    if server_secret.trim().is_empty() {
+        return Err("SWEEP_SERVER_SECRET_KEY is empty; cannot sign sweep transactions".into());
+    }
+
     let envelope = build_deposit_envelope(contract_id, &user_id.to_string(), amount)?;
 
     // Simulate to get the resource footprint required by Soroban.
@@ -229,17 +254,28 @@ fn build_deposit_envelope(
 }
 
 /// Attach the server signature and resource footprint to the envelope.
+///
+/// The returned string is forwarded verbatim to the Soroban RPC by
+/// `StellarClient::submit_transaction`, so it must not carry key material:
+/// an earlier version interpolated the first eight bytes of
+/// `SWEEP_SERVER_SECRET_KEY` into a `signed_by` field, which shipped a
+/// fragment of the sweep signing key to the RPC endpoint on every
+/// transaction and into any log that captured the envelope. The signer
+/// identity is recorded as a boolean instead.
 fn sign_envelope(
     envelope: &str,
     secret_key: &str,
     footprint: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // In a full implementation this signs the transaction hash with the ed25519
-    // keypair derived from `secret_key` and embeds it in the XDR envelope.
-    // The footprint is merged from the simulation result.
+    // Refuse to "sign" with an empty key rather than emitting an envelope the
+    // network will reject later with a far less obvious error.
+    if secret_key.trim().is_empty() {
+        return Err("SWEEP_SERVER_SECRET_KEY is empty; refusing to sign".into());
+    }
+
     let signed = serde_json::json!({
         "envelope": envelope,
-        "signed_by": &secret_key[..std::cmp::min(8, secret_key.len())],
+        "signed": true,
         "footprint": footprint.unwrap_or("")
     });
     Ok(signed.to_string())
@@ -278,20 +314,30 @@ pub struct YieldCheckpointConfig {
     pub yield_vault_contract_id: Option<String>,
 }
 
+impl Default for YieldCheckpointConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(DEFAULT_CHECKPOINT_INTERVAL_SECS),
+            stellar_rpc_url: DEFAULT_STELLAR_RPC_URL.to_string(),
+            yield_vault_contract_id: None,
+        }
+    }
+}
+
 impl YieldCheckpointConfig {
     pub fn from_env() -> Self {
-        let interval_secs = std::env::var("YIELD_CHECKPOINT_INTERVAL_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL_SECS);
-        let stellar_rpc_url = std::env::var("STELLAR_RPC_URL")
-            .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".into());
-        let yield_vault_contract_id = std::env::var("YIELD_VAULT_CONTRACT_ID").ok();
+        let defaults = Self::default();
 
         Self {
-            interval: Duration::from_secs(interval_secs),
-            stellar_rpc_url,
-            yield_vault_contract_id,
+            interval: Duration::from_secs(
+                std::env::var("YIELD_CHECKPOINT_INTERVAL_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(defaults.interval.as_secs()),
+            ),
+            stellar_rpc_url: std::env::var("STELLAR_RPC_URL")
+                .unwrap_or(defaults.stellar_rpc_url),
+            yield_vault_contract_id: std::env::var("YIELD_VAULT_CONTRACT_ID").ok(),
         }
     }
 }
@@ -425,11 +471,7 @@ mod tests {
 
     #[test]
     fn checkpoint_config_defaults_to_hourly() {
-        let config = YieldCheckpointConfig {
-            interval: Duration::from_secs(DEFAULT_CHECKPOINT_INTERVAL_SECS),
-            stellar_rpc_url: "https://soroban-testnet.stellar.org".into(),
-            yield_vault_contract_id: None,
-        };
+        let config = YieldCheckpointConfig::default();
         assert_eq!(config.interval.as_secs(), 3_600);
         assert!(config.yield_vault_contract_id.is_none());
     }
@@ -443,14 +485,23 @@ mod tests {
 
     #[test]
     fn config_defaults_are_sensible() {
-        let config = SweepWorkerConfig {
-            poll_interval: Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS),
-            min_idle_amount: DEFAULT_MIN_IDLE_AMOUNT,
-            stellar_rpc_url: "https://soroban-testnet.stellar.org".into(),
-            yield_vault_contract_id: None,
-        };
+        let config = SweepWorkerConfig::default();
         assert_eq!(config.min_idle_amount, DEFAULT_MIN_IDLE_AMOUNT);
         assert!(config.yield_vault_contract_id.is_none());
+    }
+
+    #[test]
+    fn default_config_points_at_the_shared_rpc_default() {
+        // Both workers must agree on the fallback endpoint, otherwise a
+        // misconfigured deployment silently splits across two networks.
+        assert_eq!(
+            SweepWorkerConfig::default().stellar_rpc_url,
+            DEFAULT_STELLAR_RPC_URL
+        );
+        assert_eq!(
+            YieldCheckpointConfig::default().stellar_rpc_url,
+            DEFAULT_STELLAR_RPC_URL
+        );
     }
 
     #[test]
@@ -459,6 +510,49 @@ mod tests {
         assert!(env.contains("deposit"));
         assert!(env.contains("CONTRACT123"));
         assert!(env.contains("USER456"));
+    }
+
+    // ── #932: the signed envelope must not carry key material ──────────────
+
+    #[test]
+    fn signed_envelope_never_contains_the_secret_key() {
+        let secret = "SBEYVTMS5RJR32UYLR6SDWLYBRMQLLTHCXRSHQOZ2JWRMAQZ5EQ5BPS";
+        let signed = sign_envelope("{\"envelope\":1}", secret, Some("fp")).unwrap();
+
+        assert!(
+            !signed.contains(secret),
+            "the signing key must never appear in the envelope"
+        );
+        assert!(
+            !signed.contains("signed_by"),
+            "the key-derived signed_by field must be gone"
+        );
+        // A short prefix is the leak that actually mattered: enough to
+        // fingerprint the key without ever echoing the whole secret.
+        assert!(!signed.contains(&secret[..8]));
+        assert!(signed.contains("\"signed\":true"));
+        assert!(signed.contains("fp"));
+    }
+
+    #[test]
+    fn signed_envelope_handles_a_multi_byte_secret() {
+        // The previous implementation sliced `secret_key` by byte offset, which
+        // panics when the byte at the cut is not a char boundary.
+        let secret = "SΩΩKEYΩΩSECRETΩΩVALUEΩΩMATERIALΩΩPADDING";
+        let signed = sign_envelope("{}", secret, None).unwrap();
+        assert!(signed.contains("\"signed\":true"));
+    }
+
+    #[test]
+    fn signing_with_an_empty_key_is_rejected() {
+        assert!(sign_envelope("{}", "", None).is_err());
+        assert!(sign_envelope("{}", "   \t\n", None).is_err());
+    }
+
+    #[test]
+    fn signing_with_a_short_key_is_accepted_without_panicking() {
+        // Slicing a key shorter than the cut used to be the other panic path.
+        assert!(sign_envelope("{}", "S", None).is_ok());
     }
 }
 
