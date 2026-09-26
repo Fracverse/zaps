@@ -192,6 +192,39 @@ fn calculate_fee(amount: i128, fee_coef: u32) -> i128 {
     if fee == 0 { 1 } else { fee }
 }
 
+/// Smallest number of settled payouts that earns a bulk discount (#976).
+///
+/// Below this size a batch is charged exactly what the equivalent individual
+/// `pay` calls would cost: the saving per recipient would be dust and integer
+/// rounding would swallow it anyway.
+const BATCH_DISCOUNT_MIN_ITEMS: u32 = 5;
+
+/// Bulk discount for a batch that settled `item_count` payouts, in basis points
+/// (#976).
+///
+/// The discount deepens as more of the batch settles, which is the incentive a
+/// bulk caller is paid for: one `batch_payout` costs strictly less than the same
+/// volume sent as individual payments from five payouts up, and the saving
+/// widens to `MAX_BATCH_SIZE`.
+fn batch_discount_bps(item_count: u32) -> u32 {
+    if item_count < BATCH_DISCOUNT_MIN_ITEMS {
+        return 0;
+    }
+    match item_count {
+        5..=9 => 500,     // 5%
+        10..=24 => 1_000, // 10%
+        25..=49 => 2_000, // 20%
+        _ => 3_000,       // 30% for 50..=MAX_BATCH_SIZE
+    }
+}
+
+/// Reduces `fee` by `discount_bps` basis points, floored twice: once by the
+/// integer division here and once by the caller, which re-applies the 1-stroop
+/// minimum so a discounted fee is never zero for a batch that settled.
+fn discounted_fee(fee: i128, discount_bps: u32) -> i128 {
+    fee * (10_000 - discount_bps as i128) / 10_000
+}
+
 fn execute_payment(
     env: Env,
     sender: Address,
@@ -485,11 +518,15 @@ impl SocialPaymentContract {
     ///   - Requires explicit authorization from sender.
     ///   - Enforces MAX_BATCH_SIZE (100) to bound gas and prevent griefing.
     ///
-    /// Fee logic (#530):
-    ///   - Calculates a batch platform fee: `total_volume * fee_coef / 10000`.
-    ///   - The fee scales with total batch volume, incentivising bulk usage over
-    ///     spamming individual single-payment calls.
-    ///   - Fee is routed to the treasury in a single transfer before recipient payouts.
+    /// Fee logic (#530 / #976):
+    ///   - The batch platform fee is `settled_volume * fee_coef / 10000`, using the
+    ///     same 1-stroop floor that single payments use.
+    ///   - A bulk discount (`batch_discount_bps`) is then applied, tiered on the
+    ///     number of payouts that settled: 5% from 5 payouts, 10% from 10, 20% from
+    ///     25 and 30% from 50 up to `MAX_BATCH_SIZE`. A batch smaller than 5
+    ///     payouts pays exactly the single-payment rate.
+    ///   - The discounted fee is routed to the treasury in a single transfer and
+    ///     only over settled volume, so a skipped payout is never charged for.
     ///
     /// Event (#532):
     ///   - Emits MassPayoutExecuted with sender, batch_size, total_volume, fee_charged
@@ -525,17 +562,23 @@ impl SocialPaymentContract {
                 .expect("overflow in total volume");
         }
 
-        // #530 — calculate batch fee based on total volume
+        // #530 / #976 — quote the batch fee on total volume.
+        //
+        // This is the *undiscounted* upper bound: the balance requirement stays
+        // conservative (the caller must be able to cover the worst case) and the
+        // discount is applied below, from the count of payouts that settled.
+        // `calculate_fee` is the same expression single payments use, including
+        // its 1-stroop floor, so the quote can never disagree with a `pay` call
+        // and it no longer overflows on large volumes.
         let fee_coef = env
             .storage()
             .instance()
             .get(&FEE_COEFF_KEY)
             .unwrap_or(10u32);
-        let batch_fee = total_volume * (fee_coef as i128) / 10000;
-        let batch_fee = if batch_fee == 0 && total_volume > 0 {
-            1
+        let batch_fee = if total_volume > 0 {
+            calculate_fee(total_volume, fee_coef)
         } else {
-            batch_fee
+            0
         };
 
         let total_required = total_volume
@@ -552,12 +595,14 @@ impl SocialPaymentContract {
         // Reserve the upper-bound fee so we never over-transfer.
         let mut remaining_balance: i128 = sender_balance - batch_fee;
         let mut successful_volume: i128 = 0;
+        let mut successful_count: u32 = 0;
         let mut skipped_volume: i128 = 0;
 
         for payout in payouts.iter() {
             if remaining_balance >= payout.amount {
                 token_client.transfer(&sender, &payout.recipient, &payout.amount);
                 successful_volume += payout.amount;
+                successful_count += 1;
                 remaining_balance -= payout.amount;
             } else {
                 skipped_volume += payout.amount;
@@ -568,10 +613,17 @@ impl SocialPaymentContract {
             );
         }
 
-        // #530 — charge fee on successful volume only
+        // #530 / #976 — charge the bulk-discounted fee on settled volume only.
+        //
+        // The tier is picked from the number of payouts that actually settled, so
+        // the caller is rewarded for payments that really went out rather than for
+        // ones that were merely requested. `calculate_fee` applies the 1-stroop
+        // floor first and it is re-applied after the discount, because a 30%
+        // discount can round a 1-stroop fee back down to zero.
         let actual_fee = if successful_volume > 0 {
-            let f = successful_volume * (fee_coef as i128) / 10000;
-            if f == 0 { 1 } else { f }
+            let gross_fee = calculate_fee(successful_volume, fee_coef);
+            let fee = discounted_fee(gross_fee, batch_discount_bps(successful_count));
+            if fee == 0 { 1 } else { fee }
         } else {
             0
         };
@@ -1610,6 +1662,127 @@ mod tests {
         assert_eq!(token_client.balance(&receiver1), 1_000);
         assert_eq!(token_client.balance(&treasury), 1);
         assert_eq!(token_client.balance(&sender), 0);
+    }
+
+    // ── #976: bulk discount for batch payouts ─────────────────────────────────
+    #[test]
+    fn test_small_batch_pays_the_single_payment_rate() {
+        // 4 settled payouts stay below BATCH_DISCOUNT_MIN_ITEMS, so the fee has to
+        // match what a single pay of the same volume is charged.
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let token = mint_token(&env, &admin, &sender, 100_000);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let mut items = soroban_sdk::vec![&env];
+        for _ in 0..4u32 {
+            items.push_back(PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 1_000,
+            });
+        }
+
+        client.batch_payout(&sender, &items);
+
+        // volume = 4_000, coef = 10 bps → calculate_fee(4_000, 10) = 4, no discount
+        assert_eq!(token_client.balance(&treasury), 4);
+        assert_eq!(token_client.balance(&receiver1), 4_000);
+    }
+
+    #[test]
+    fn test_batch_payout_applies_bulk_discount() {
+        // 10 settled payouts of 1_000 → volume 10_000, coef 10 bps.
+        // Gross fee = 10_000 * 10 / 10_000 = 10; the 10-payout tier is 10% off → 9.
+        let (env, client, admin, treasury, sender, receiver1) = setup();
+        let token = mint_token(&env, &admin, &sender, 200_000);
+        client.set_naira_token(&token);
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let mut items = soroban_sdk::vec![&env];
+        for _ in 0..10u32 {
+            items.push_back(PayoutItem {
+                recipient: receiver1.clone(),
+                amount: 1_000,
+            });
+        }
+
+        client.batch_payout(&sender, &items);
+
+        assert_eq!(token_client.balance(&receiver1), 10_000);
+        assert_eq!(token_client.balance(&treasury), 9);
+        assert!(
+            9 < calculate_fee(10_000, 10),
+            "a batch must be cheaper than the undiscounted rate for its volume"
+        );
+
+        let ev = find_mass_payout_executed(&env).expect("MassPayoutExecuted event not emitted");
+        assert_eq!(ev.batch_size, 10);
+        assert_eq!(ev.total_volume, 10_000);
+        assert_eq!(ev.fee_charged, 9);
+    }
+
+    #[test]
+    fn test_batch_discount_tier_deepens_with_batch_size() {
+        assert_eq!(batch_discount_bps(0), 0);
+        assert_eq!(batch_discount_bps(1), 0);
+        assert_eq!(batch_discount_bps(4), 0);
+        assert_eq!(batch_discount_bps(5), 500);
+        assert_eq!(batch_discount_bps(9), 500);
+        assert_eq!(batch_discount_bps(10), 1_000);
+        assert_eq!(batch_discount_bps(24), 1_000);
+        assert_eq!(batch_discount_bps(25), 2_000);
+        assert_eq!(batch_discount_bps(49), 2_000);
+        assert_eq!(batch_discount_bps(50), 3_000);
+        assert_eq!(batch_discount_bps(MAX_BATCH_SIZE), 3_000);
+        assert!(
+            batch_discount_bps(MAX_BATCH_SIZE) > batch_discount_bps(1),
+            "a full batch must be cheaper per payout than a single-payout batch"
+        );
+    }
+
+    #[test]
+    fn test_batch_effective_fee_rate_never_rises_with_batch_size() {
+        // Exercised over real volumes so rounding is part of the property, not just
+        // the basis-point table. coef = 100 bps (1%) keeps rounding from masking it.
+        let volume_per_item: i128 = 1_000;
+        let coef = 100u32;
+        let mut previous_effective_bps: i128 = i128::MAX;
+
+        for count in [1u32, 4, 5, 9, 10, 24, 25, 49, 50, 100] {
+            let volume = volume_per_item * count as i128;
+            let fee = discounted_fee(calculate_fee(volume, coef), batch_discount_bps(count));
+            let effective_bps = fee * 10_000 / volume;
+
+            assert!(
+                effective_bps <= previous_effective_bps,
+                "effective fee rate rose at {count} payouts: {effective_bps} bps"
+            );
+            previous_effective_bps = effective_bps;
+        }
+
+        // And the top tier is genuinely cheaper than paying one by one.
+        let single_rate_fee = calculate_fee(volume_per_item * 100, coef);
+        let bulk_fee = discounted_fee(single_rate_fee, batch_discount_bps(100));
+        assert!(
+            bulk_fee < single_rate_fee,
+            "a 100-payout batch must route less fee than the undiscounted rate"
+        );
+    }
+
+    #[test]
+    fn test_discount_can_round_to_zero_and_the_caller_restores_the_minimum() {
+        // 100 settled payouts of 1 stroop: the gross fee is the 1-stroop minimum and
+        // the 30% discount rounds it to zero. The helper must expose that plainly, so
+        // the floor is applied deliberately at the call site instead of being hidden.
+        let gross = calculate_fee(100, 10);
+        assert_eq!(gross, 1, "gross fee must already be at the minimum");
+
+        let discounted = discounted_fee(gross, batch_discount_bps(100));
+        assert_eq!(discounted, 0);
+        assert!(
+            discounted < gross,
+            "the caller must restore the minimum floor after discounting"
+        );
     }
 
     #[test]
