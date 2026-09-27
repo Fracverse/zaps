@@ -69,6 +69,13 @@ export default function OverviewPage() {
   const comments = feedData?.reduce((total, feed) => total + feed.comments_count, 0) ?? 0;
   const activeFeeds = feedData?.length ?? 0;
 
+  const registryWeeklyGrowthPct = (() => {
+    if (!registryData) return undefined;
+    const priorTotal = registryData.total_usernames - registryData.weekly_growth;
+    if (priorTotal <= 0) return undefined;
+    return (registryData.weekly_growth / priorTotal) * 100;
+  })();
+
   const tvl = yieldData?.total_value_locked ?? 0;
   const yieldDistributed = yieldData?.total_yield_distributed ?? 0;
   const apy = yieldData?.apy ?? 0;
@@ -189,12 +196,29 @@ export default function OverviewPage() {
             value={registryData?.total_usernames ?? 0}
             sub="Unique usernames on-chain"
             color="text-indigo-600"
+            trend={
+              registryData
+                ? {
+                    value: registryData.weekly_growth,
+                    percent: registryWeeklyGrowthPct,
+                  }
+                : undefined
+            }
           />
           <StatCard
             label="Weekly Growth"
-            value={registryData?.weekly_growth ?? 0}
+            value={registryData ? `+${registryData.weekly_growth.toLocaleString()}` : 0}
             sub="New registrations this week"
             color="text-emerald-600"
+            trend={
+              registryData
+                ? {
+                    value: registryData.weekly_growth,
+                    percent: registryWeeklyGrowthPct,
+                    positive: registryData.weekly_growth >= 0,
+                  }
+                : undefined
+            }
           />
           <StatCard
             label="Active Registrations"
