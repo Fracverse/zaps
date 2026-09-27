@@ -285,7 +285,11 @@ impl YieldVaultContract {
     /// Deposit `amount` tokens from `depositor` into the vault.
     /// Mints vault shares proportional to the current yield index.
     /// shares_minted = amount * PRECISION / current_index
-    pub fn deposit(env: Env, depositor: Address, amount: i128) {
+    ///
+    /// `min_shares_out` is a slippage-protection parameter: the deposit
+    /// reverts with `SlippageExceeded` if the number of shares actually
+    /// minted would be less than this minimum.
+    pub fn deposit(env: Env, depositor: Address, amount: i128, min_shares_out: i128) {
         depositor.require_auth();
         assert!(amount > 0, "amount must be positive");
 
@@ -332,6 +336,10 @@ impl YieldVaultContract {
             .expect("divide by zero");
         let _ = index; // index still used by withdraw path; not needed here with virtual formula
         assert!(shares > 0, "deposit too small");
+
+        // Slippage protection: reject the deposit if the shares actually
+        // minted fall below the caller-supplied minimum.
+        assert!(shares >= min_shares_out, "SlippageExceeded");
 
         // Update user shares
         let user_key = DataKey::UserShares(depositor.clone());
