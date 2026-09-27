@@ -479,7 +479,35 @@ impl UserRegistryContract {
             .extend_ttl(&wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events()
-            .publish((symbol_short!("did_reg"),), (wallet, did));
+            .publish((Symbol::new(&env, "PrivyLinkCreated"),), (did, wallet));
+    }
+
+    /// Unlink a Privy DID from its associated wallet address.
+    ///
+    /// Issue #984: removes the bidirectional DID <-> wallet mapping and emits a
+    /// `PrivyLinkRemoved` event so the off-chain indexer can mark the identity
+    /// link as inactive.  The wallet that owns the DID must authorize the call.
+    pub fn unlink_privy_did(env: Env, did: String, wallet: Address) {
+        wallet.require_auth();
+
+        let did_key = DataKey::PrivyDid(did.clone());
+        let stored_wallet: Address = env
+            .storage()
+            .persistent()
+            .get(&did_key)
+            .unwrap_or_else(|| panic!("DID not registered"));
+
+        if stored_wallet != wallet {
+            panic!("unauthorized: wallet does not match registered wallet");
+        }
+
+        env.storage().persistent().remove(&did_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WalletDid(wallet.clone()));
+
+        env.events()
+            .publish((Symbol::new(&env, "PrivyLinkRemoved"),), (did, wallet));
     }
 
     /// Update the wallet address for an existing Privy DID mapping.
@@ -1553,5 +1581,99 @@ mod tests {
         });
 
         assert_eq!(token_client.balance(&target), initial_balance);
+    }
+
+    // ── Issue #984: PrivyLinkCreated / PrivyLinkRemoved events ───────────────
+
+    fn setup_privy_client() -> (Env, UserRegistryContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        // Stub verifier key — mock_all_auths bypasses the Ed25519 check so the
+        // actual bytes don't matter in the unit-test environment.
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        client.set_privy_verifier(&admin, &pubkey);
+        let wallet = Address::generate(&env);
+        (env, client, wallet)
+    }
+
+    #[test]
+    fn register_privy_did_emits_privy_link_created_event() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:test123");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+
+        let events = env.events().all();
+        let has_created = events.iter().any(|e| {
+            e.topics
+                .iter()
+                .any(|t| t == soroban_sdk::Val::from(Symbol::new(&env, "PrivyLinkCreated")))
+        });
+        assert!(has_created, "PrivyLinkCreated event must be emitted on DID registration");
+    }
+
+    #[test]
+    fn unlink_privy_did_removes_bidirectional_mapping() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:unlink01");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        assert_eq!(client.get_wallet_for_did(&did), wallet);
+        assert_eq!(client.get_did_for_wallet(&wallet), did);
+
+        client.unlink_privy_did(&did, &wallet);
+
+        env.as_contract(&client.address, || {
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::PrivyDid(did.clone())),
+                "PrivyDid forward key must be removed after unlink"
+            );
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::WalletDid(wallet.clone())),
+                "WalletDid reverse key must be removed after unlink"
+            );
+        });
+    }
+
+    #[test]
+    fn unlink_privy_did_emits_privy_link_removed_event() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:rmtest1");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        client.unlink_privy_did(&did, &wallet);
+
+        let events = env.events().all();
+        let has_removed = events.iter().any(|e| {
+            e.topics
+                .iter()
+                .any(|t| t == soroban_sdk::Val::from(Symbol::new(&env, "PrivyLinkRemoved")))
+        });
+        assert!(has_removed, "PrivyLinkRemoved event must be emitted on DID unlink");
+    }
+
+    #[test]
+    fn unlink_privy_did_allows_wallet_to_relink_after_removal() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:relink1");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        client.unlink_privy_did(&did, &wallet);
+
+        // Re-registration must succeed after the link has been removed.
+        client.register_privy_did(&did, &wallet, &sig);
+        assert_eq!(client.get_wallet_for_did(&did), wallet);
     }
 }
