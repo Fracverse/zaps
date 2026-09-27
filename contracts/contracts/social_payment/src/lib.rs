@@ -571,7 +571,10 @@ impl SocialPaymentContract {
             return Err(Error::Unauthorized);
         }
 
-        // #752 / #531 — enforce max batch size; return typed error on violation
+        // #991 / #752 / #531 — enforce max recipient count before the payout loop.
+        // Limits the `payouts` vector to MAX_BATCH_SIZE (100) elements per call,
+        // preventing CPU / gas exhaustion from unbounded iteration in Soroban.
+        // Returns the typed Error::BatchTooLarge so callers can inspect the failure.
         let batch_size = payouts.len();
         if batch_size > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
