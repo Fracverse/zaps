@@ -2,7 +2,11 @@
 
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
-use soroban_sdk::{testutils::Address as _, xdr::ToXdr, BytesN, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Events as _},
+    xdr::ToXdr,
+    BytesN, Env, String,
+};
 
 /// Deterministic test-only signing key standing in for Privy's verifier key.
 fn verifier_key() -> SigningKey {
@@ -393,7 +397,7 @@ fn test_get_did_for_wallet_unlinked_fails() {
     );
 }
 
-// ── Issue #776: 2-step admin ownership transfer ─────────────────────────────
+// ── Issue #989: 2-step admin ownership transfer ─────────────────────────────
 
 /// Build a freshly initialized contract along with the old (current) admin and
 /// a distinct proposed successor admin.
@@ -428,7 +432,7 @@ fn stored_admin(env: &Env, client: &UserRegistryContractClient<'static>) -> Addr
 fn test_2step_transfer_old_admin_keeps_ownership_until_claim() {
     let (env, client, old_admin, new_admin) = admin_setup();
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
 
     // Ownership has not moved yet.
     assert_eq!(stored_admin(&env, &client), old_admin);
@@ -443,7 +447,7 @@ fn test_2step_transfer_old_admin_keeps_ownership_until_claim() {
 fn test_2step_transfer_claim_admin_moves_ownership() {
     let (env, client, old_admin, new_admin) = admin_setup();
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
     let claimed = client.try_claim_admin(&new_admin);
     assert!(claimed.is_ok(), "proposed admin must be able to claim: {claimed:?}");
 
@@ -467,7 +471,7 @@ fn test_claim_admin_rejects_unauthorized_caller() {
     let (env, client, old_admin, new_admin) = admin_setup();
     let evil = Address::generate(&env);
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
     // Neither an unrelated address nor the old admin can claim.
     client.claim_admin(&evil);
 }
@@ -481,7 +485,7 @@ fn test_propose_admin_rejects_non_admin() {
     let imposter = Address::generate(&env);
     let target = Address::generate(&env);
 
-    client.propose_admin(&imposter, &target);
+    client.propose_new_admin(&imposter, &target);
 }
 
 /// Claiming with no active proposal panics.
