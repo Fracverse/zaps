@@ -335,7 +335,15 @@ function UsernamesTable() {
           </tbody>
         </table>
       </div>
-      {data && <p className="mt-2 text-xs text-slate-400">{data.length} active registrations</p>}
+      {/* #1002 — active registration count badge */}
+      {data && (
+        <p
+          data-testid="active-registration-count"
+          className="mt-2 text-xs text-slate-400"
+        >
+          {data.length} active registration{data.length !== 1 ? "s" : ""}
+        </p>
+      )}
 
       {/* Blacklist Confirmation Drawer */}
       {showBlacklistDrawer && (

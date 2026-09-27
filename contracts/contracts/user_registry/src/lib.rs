@@ -663,6 +663,11 @@ impl UserRegistryContract {
     /// and the username and address become re-usable. The caller must be the
     /// account owner (enforced via `require_auth`). Use `unregister_user`
     /// instead when the reservation deposit also needs to be refunded.
+    ///
+    /// Satisfies issue #993 (data-deletion entrypoint for account
+    /// unregistering): `DataKey::User` and `DataKey::Username` are removed
+    /// for the authenticated owner below. See also `unregister_user`, which
+    /// performs the same removal plus a deposit refund.
     pub fn delete_profile(env: Env, user: Address) {
         user.require_auth();
 
@@ -737,6 +742,11 @@ impl UserRegistryContract {
     /// Clears both the legacy struct keys and the `DataKey::{User,Username}`
     /// enum variants written by `register_user`, so the username can be
     /// reclaimed cleanly after release.
+    ///
+    /// Also satisfies issue #993: this is the owner-authenticated entrypoint
+    /// that removes `DataKey::User` / `DataKey::Username` for account
+    /// unregistering, with the added reservation refund. See `delete_profile`
+    /// for the equivalent without the refund.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
