@@ -32,6 +32,9 @@ pub enum Error {
     NonceAlreadyUsed = 2,
     /// The signature verification failed for the signed payment authorization.
     InvalidSignature = 3,
+    /// The caller is not the admin and is not on the authorized distributor whitelist.
+    /// Only admin and explicitly whitelisted distributors/relayers may submit mass payouts.
+    Unauthorized = 4,
 }
 
 // ── External contract interface ───────────────────────────────────────────────
@@ -59,6 +62,9 @@ pub enum Visibility {
 pub enum DataKey {
     PaymentRequest(u64),
     Nonce(Address),
+    /// #977: per-address distributor/relayer whitelist entry.
+    /// Stored as `bool` (always `true`); absence means not authorized.
+    Distributor(Address),
 }
 
 /// SC-041: Emitted for every executed payment. Carries both the raw
@@ -336,6 +342,50 @@ impl SocialPaymentContract {
             .expect("user registry not configured")
     }
 
+    // ── Distributor / relayer whitelist (#977) ────────────────────────────────
+
+    /// Add `distributor` to the authorized distributor whitelist.
+    ///
+    /// Only admin may call this. Authorized distributors are the only addresses
+    /// (besides the admin itself) permitted to submit `batch_payout` calls.
+    pub fn add_distributor(env: Env, admin: Address, distributor: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        assert!(admin == stored_admin, "only admin can add distributors");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Distributor(distributor), &true);
+    }
+
+    /// Remove `distributor` from the authorized distributor whitelist.
+    ///
+    /// Only admin may call this. Subsequent `batch_payout` calls from the removed
+    /// address will fail with `Error::Unauthorized`.
+    pub fn remove_distributor(env: Env, admin: Address, distributor: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        assert!(admin == stored_admin, "only admin can remove distributors");
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Distributor(distributor));
+    }
+
+    /// Return `true` if `distributor` is on the authorized whitelist.
+    pub fn is_authorized_distributor(env: Env, distributor: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Distributor(distributor))
+            .unwrap_or(false)
+    }
+
     // ── Payment requests / invoices ───────────────────────────────────────────
 
     /// Create a payment request (invoice) asking `payer_username` to pay
@@ -502,6 +552,24 @@ impl SocialPaymentContract {
     pub fn batch_payout(env: Env, sender: Address, payouts: Vec<PayoutItem>) -> Result<(), Error> {
         // #531 — explicit sender auth
         sender.require_auth();
+
+        // #977 — distributor/relayer authorization:
+        // Only the admin or an explicitly whitelisted distributor may submit
+        // mass payouts. Any other address is rejected immediately.
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        let is_admin = sender == admin;
+        let is_distributor = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Distributor(sender.clone()))
+            .unwrap_or(false);
+        if !is_admin && !is_distributor {
+            return Err(Error::Unauthorized);
+        }
 
         // #752 / #531 — enforce max batch size; return typed error on violation
         let batch_size = payouts.len();
@@ -1297,6 +1365,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender as an authorized distributor
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1329,6 +1399,8 @@ mod tests {
         // Set fee to 50 bps (0.5%)
         client.set_fee_coefficient(&50);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender as an authorized distributor
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1357,6 +1429,8 @@ mod tests {
         let (env, client, admin, _treasury, sender, _receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender — size check must fire even for authorized distributors
+        client.add_distributor(&admin, &sender);
 
         // Build a batch with 101 items (exceeds MAX_BATCH_SIZE = 100)
         let mut items = soroban_sdk::vec![&env];
@@ -1381,6 +1455,8 @@ mod tests {
         // Mint enough to cover 100 × 1 stroop + fee
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let mut items = soroban_sdk::vec![&env];
         for _ in 0..100u32 {
@@ -1395,14 +1471,17 @@ mod tests {
         client.batch_payout(&sender, &items);
     }
 
-    // ── #531: sender auth required ────────────────────────────────────────────
+    // ── #531 / #977: sender auth + distributor whitelist required ────────────
     #[test]
     fn test_batch_payout_requires_sender_auth() {
         let (env, client, admin, _treasury, sender, receiver1) = setup();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender so the distributor check passes
+        client.add_distributor(&admin, &sender);
 
-        // mock_all_auths is active in setup() so this call succeeds
+        // mock_all_auths is active in setup() so the Soroban auth check passes;
+        // the distributor whitelist check also passes because we added sender above.
         let payouts = vec![
             &env,
             PayoutItem {
@@ -1411,7 +1490,7 @@ mod tests {
             },
         ];
         client.batch_payout(&sender, &payouts);
-        // no panic = auth was enforced and satisfied by mock
+        // no panic = both auth and whitelist were enforced and satisfied
     }
 
     // ── #532 / #978: MassPayoutExecuted event for off-chain accounting ───────
@@ -1432,6 +1511,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 20_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1468,6 +1549,8 @@ mod tests {
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
         let treasury_before = token_client.balance(&treasury);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1511,6 +1594,8 @@ mod tests {
         client.set_naira_token(&token);
         client.set_fee_coefficient(&50); // 0.5%
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1541,6 +1626,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_010);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1568,6 +1655,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 5_005);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1596,6 +1685,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 1_001);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1930,6 +2021,161 @@ mod tests {
 
         // After user1 makes a payment, only their nonce should increment
         // user2's nonce should remain at 0
+    }
+
+    // ── #977: Distributor / relayer whitelist ─────────────────────────────────
+
+    /// Unauthorized address (not admin, not whitelisted) must be rejected with
+    /// Error::Unauthorized — regardless of Soroban-level auth being satisfied.
+    #[test]
+    fn test_batch_payout_unauthorized_caller_rejected() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let random_caller = Address::generate(&env);
+        // Give the random caller some tokens
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&random_caller, &10_000);
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient,
+                amount: 100,
+            },
+        ];
+
+        // mock_all_auths means the Soroban auth check passes — but the
+        // distributor whitelist check must still reject a non-admin, non-whitelisted caller.
+        assert_eq!(
+            client.try_batch_payout(&random_caller, &payouts),
+            Err(Ok(Error::Unauthorized)),
+            "non-whitelisted, non-admin caller must be rejected with Unauthorized"
+        );
+    }
+
+    /// Once whitelisted, a distributor must be able to submit batch_payout.
+    #[test]
+    fn test_batch_payout_authorized_distributor_accepted() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+        let token = mint_token(&env, &admin, &distributor, 10_000);
+        client.set_naira_token(&token);
+
+        // Whitelist the distributor
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor));
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: recipient.clone(),
+                amount: 1_000,
+            },
+        ];
+
+        // Should succeed — distributor is whitelisted
+        client.batch_payout(&distributor, &payouts);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&recipient), 1_000);
+    }
+
+    /// Admin can always call batch_payout without being explicitly whitelisted.
+    #[test]
+    fn test_batch_payout_admin_can_submit_directly() {
+        let (env, client, admin, treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: recipient.clone(),
+                amount: 5_000,
+            },
+        ];
+
+        // Admin is not in the distributor whitelist, but must pass the check anyway.
+        client.batch_payout(&admin, &payouts);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&recipient), 5_000);
+        // fee = 5_000 * 10 / 10000 = 5 (minimum 1)
+        assert_eq!(token_client.balance(&treasury), 5);
+    }
+
+    /// Admin can add a distributor; is_authorized_distributor reflects the change.
+    #[test]
+    fn test_admin_can_add_distributor() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+
+        assert!(!client.is_authorized_distributor(&distributor), "not yet whitelisted");
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor), "should be whitelisted after add");
+    }
+
+    /// Admin can remove a distributor; subsequent calls must be rejected.
+    #[test]
+    fn test_admin_can_remove_distributor() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let distributor = Address::generate(&env);
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&distributor, &10_000);
+
+        // Add then remove
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor));
+        client.remove_distributor(&admin, &distributor);
+        assert!(!client.is_authorized_distributor(&distributor), "should no longer be whitelisted");
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem { recipient, amount: 100 },
+        ];
+
+        // After removal, call must fail
+        assert_eq!(
+            client.try_batch_payout(&distributor, &payouts),
+            Err(Ok(Error::Unauthorized)),
+            "removed distributor must be rejected"
+        );
+    }
+
+    /// Batch size limit is still enforced even for an authorized distributor.
+    #[test]
+    fn test_batch_payout_distributor_still_enforces_batch_limit() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+        let token = mint_token(&env, &admin, &admin, 1_000_000);
+        client.set_naira_token(&token);
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&distributor, &1_000_000);
+
+        client.add_distributor(&admin, &distributor);
+
+        let mut items = soroban_sdk::vec![&env];
+        for _ in 0..101u32 {
+            items.push_back(PayoutItem {
+                recipient: Address::generate(&env),
+                amount: 1,
+            });
+        }
+
+        assert_eq!(
+            client.try_batch_payout(&distributor, &items),
+            Err(Ok(Error::BatchTooLarge)),
+            "MAX_BATCH_SIZE must still apply for whitelisted distributors"
+        );
     }
 }
 
