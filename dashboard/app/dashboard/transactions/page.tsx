@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
@@ -110,8 +110,13 @@ export default function TransactionsPage() {
 }
 
 function TransactionsPageInner() {
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const headerQuery = searchParams.get("q") ?? "";
+  // #1005 — auto-open the payment detail dialog when a `?user=` param is present
+  // (set by the global SearchBar autocomplete on username selection).
+  const userParam = searchParams.get("user") ?? "";
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   // #795 — items-per-page state
@@ -126,6 +131,22 @@ function TransactionsPageInner() {
   const handleRowClick = useCallback((username: string) => {
     setSelectedUser(username);
   }, []);
+
+  // #1005 — open the dialog automatically when arriving via ?user= query param
+  useEffect(() => {
+    if (userParam) {
+      setSelectedUser(userParam);
+    }
+  }, [userParam]);
+
+  // #1005 — clear the ?user= param from the URL when the dialog is closed
+  const handleDialogClose = useCallback(() => {
+    setSelectedUser(null);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("user");
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
 
   const activeQuery = search || headerQuery;
 
@@ -372,7 +393,7 @@ function TransactionsPageInner() {
       {selectedUser && (
         <PaymentDetailDialog
           username={selectedUser}
-          onClose={() => setSelectedUser(null)}
+          onClose={handleDialogClose}
         />
       )}
     </div>

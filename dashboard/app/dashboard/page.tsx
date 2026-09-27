@@ -1,11 +1,139 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import StatCard from "@/components/StatCard";
-import { api, type AdminAuditLog } from "@/lib/api";
+import { api, type AdminAuditLog, type UserSearchResult } from "@/lib/api";
 import { usePolling } from "@/lib/use-polling";
 import { useSuperAdmin } from "@/lib/auth-context";
+
+// ── #1003: Username search widget ──────────────────────────────────────────────
+/**
+ * Autocomplete search bar for looking up registered usernames.
+ * Debounces calls to /api/users/search, shows a dropdown of matches,
+ * and redirects to /dashboard/transactions?user=<username> on selection.
+ */
+function UsernameSearchBar() {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<UserSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const debouncedSearch = useCallback((value: string) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (value.trim().length < 2) {
+      setResults([]);
+      setOpen(false);
+      return;
+    }
+    timerRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const data = await api.searchUsers(value.trim());
+        setResults(data);
+        setOpen(data.length > 0);
+      } catch {
+        setResults([]);
+        setOpen(false);
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+  }, []);
+
+  const handleSelect = (username: string) => {
+    setQuery("");
+    setOpen(false);
+    router.push(
+      `/dashboard/transactions?user=${encodeURIComponent(username)}`,
+    );
+  };
+
+  return (
+    <div className="relative w-full max-w-md">
+      <div className="relative">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+        >
+          <circle cx="11" cy="11" r="8" />
+          <path d="m21 21-4.3-4.3" />
+        </svg>
+        <input
+          id="username-lookup"
+          type="text"
+          value={query}
+          onChange={(e) => {
+            const value = e.target.value;
+            setQuery(value);
+            debouncedSearch(value);
+          }}
+          onFocus={() => results.length > 0 && setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 200)}
+          placeholder="Search username…"
+          autoComplete="off"
+          aria-label="Search users by username"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          role="combobox"
+          className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-9 py-2 text-sm
+                     focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+        />
+        {loading && (
+          <span
+            aria-label="Searching…"
+            className="absolute right-3 top-2.5 h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-indigo-600"
+          />
+        )}
+      </div>
+
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Username suggestions"
+          className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg"
+        >
+          {results.map((u) => (
+            <li key={u.username} role="option" aria-selected={false}>
+              <button
+                type="button"
+                onMouseDown={() => handleSelect(u.username)}
+                className="flex w-full flex-col px-4 py-2.5 text-left text-sm hover:bg-indigo-50 transition-colors"
+              >
+                <span className="font-semibold text-slate-900">
+                  @{u.username}
+                </span>
+                <span className="text-xs text-slate-500 font-mono truncate">
+                  {u.public_key}
+                </span>
+                <span className="text-xs text-slate-400">
+                  Registered{" "}
+                  {new Date(u.registered_at).toLocaleDateString(undefined, {
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function fmtUsdc(value: number): string {
   return (
@@ -107,17 +235,21 @@ export default function OverviewPage() {
             Live engagement across recent payment feeds.
           </p>
         </div>
-        <button
-          onClick={handleExportUsers}
-          disabled={!isSuperAdmin}
-          title={!isSuperAdmin ? "Superadmin access required" : undefined}
-          aria-disabled={!isSuperAdmin}
-          data-testid="export-users-btn"
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-          Export Users (CSV)
-        </button>
+        <div className="flex items-center gap-3">
+          {/* #1003 — username lookup with autocomplete */}
+          <UsernameSearchBar />
+          <button
+            onClick={handleExportUsers}
+            disabled={!isSuperAdmin}
+            title={!isSuperAdmin ? "Superadmin access required" : undefined}
+            aria-disabled={!isSuperAdmin}
+            data-testid="export-users-btn"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Export Users (CSV)
+          </button>
+        </div>
       </div>
 
       {/* Social Overview */}
