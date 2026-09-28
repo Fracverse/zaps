@@ -37,13 +37,13 @@
               "function_name": "register_privy_did",
               "args": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "f8edfb9411c70647d2f21c5c53e687839a47fcc2c08839a15d8e3788be5c0be0aa053d1b09f1a44c60e18816557727d03c30bcfc849753c9620c915c8f656809"
+                  "bytes": "1432a538cd4fdfaf7110437a17279a506bd5cbdc825fcdeefe707bddc2ade6ed36de72a53142dd31966bed4bfabf72922f8ee34292dc32dc66986cb29912f703"
                 }
               ]
             }
@@ -52,6 +52,8 @@
         }
       ]
     ],
+    [],
+    [],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
@@ -62,7 +64,7 @@
               "function_name": "update_privy_did",
               "args": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -77,6 +79,7 @@
         }
       ]
     ],
+    [],
     []
   ],
   "ledger": {
@@ -138,7 +141,7 @@
                   "symbol": "PrivyDid"
                 },
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 }
               ]
             },
@@ -158,7 +161,7 @@
                       "symbol": "PrivyDid"
                     },
                     {
-                      "string": "did:privy:user2"
+                      "string": "did:privy:roundtrip"
                     }
                   ]
                 },
@@ -248,7 +251,7 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 }
               }
             },
@@ -534,13 +537,13 @@
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "f8edfb9411c70647d2f21c5c53e687839a47fcc2c08839a15d8e3788be5c0be0aa053d1b09f1a44c60e18816557727d03c30bcfc849753c9620c915c8f656809"
+                  "bytes": "1432a538cd4fdfaf7110437a17279a506bd5cbdc825fcdeefe707bddc2ade6ed36de72a53142dd31966bed4bfabf72922f8ee34292dc32dc66986cb29912f703"
                 }
               ]
             }
@@ -564,7 +567,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -612,13 +615,111 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
+                "symbol": "get_wallet_for_did"
+              }
+            ],
+            "data": {
+              "string": "did:privy:roundtrip"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "get_wallet_for_did"
+              }
+            ],
+            "data": {
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
+                "symbol": "get_did_for_wallet"
+              }
+            ],
+            "data": {
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_return"
+              },
+              {
+                "symbol": "get_did_for_wallet"
+              }
+            ],
+            "data": {
+              "string": "did:privy:roundtrip"
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": null,
+        "type_": "diagnostic",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "fn_call"
+              },
+              {
+                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
+              },
+              {
                 "symbol": "update_privy_did"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -654,7 +755,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:roundtrip"
                 }
               ]
             }
@@ -699,11 +800,11 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "get_wallet_for_did"
+                "symbol": "get_did_for_wallet"
               }
             ],
             "data": {
-              "string": "did:privy:user2"
+              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
             }
           }
         }
@@ -722,11 +823,11 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_wallet_for_did"
+                "symbol": "get_did_for_wallet"
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+              "string": "did:privy:roundtrip"
             }
           }
         }

@@ -37,13 +37,13 @@
               "function_name": "register_privy_did",
               "args": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "f8edfb9411c70647d2f21c5c53e687839a47fcc2c08839a15d8e3788be5c0be0aa053d1b09f1a44c60e18816557727d03c30bcfc849753c9620c915c8f656809"
+                  "bytes": "1adaca1029e7abfca72fa401d9fd2667db2483eb3cd20157b22e83cb1d9ef322a51637fa86eca8ec8f8624b6281a89cf4b85f086dbd34dbd470d90dcba751502"
                 }
               ]
             }
@@ -62,7 +62,7 @@
               "function_name": "update_privy_did",
               "args": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -76,8 +76,7 @@
           "sub_invocations": []
         }
       ]
-    ],
-    []
+    ]
   ],
   "ledger": {
     "protocol_version": 20,
@@ -138,7 +137,7 @@
                   "symbol": "PrivyDid"
                 },
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 }
               ]
             },
@@ -158,7 +157,7 @@
                       "symbol": "PrivyDid"
                     },
                     {
-                      "string": "did:privy:user2"
+                      "string": "did:privy:eventuser"
                     }
                   ]
                 },
@@ -248,7 +247,7 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 }
               }
             },
@@ -534,13 +533,13 @@
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "bytes": "f8edfb9411c70647d2f21c5c53e687839a47fcc2c08839a15d8e3788be5c0be0aa053d1b09f1a44c60e18816557727d03c30bcfc849753c9620c915c8f656809"
+                  "bytes": "1adaca1029e7abfca72fa401d9fd2667db2483eb3cd20157b22e83cb1d9ef322a51637fa86eca8ec8f8624b6281a89cf4b85f086dbd34dbd470d90dcba751502"
                 }
               ]
             }
@@ -564,7 +563,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -618,7 +617,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -654,7 +653,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "string": "did:privy:user2"
+                  "string": "did:privy:eventuser"
                 }
               ]
             }
@@ -679,55 +678,6 @@
               }
             ],
             "data": "void"
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "get_wallet_for_did"
-              }
-            ],
-            "data": {
-              "string": "did:privy:user2"
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "get_wallet_for_did"
-              }
-            ],
-            "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-            }
           }
         }
       },

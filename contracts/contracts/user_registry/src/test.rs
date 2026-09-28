@@ -166,7 +166,7 @@ fn test_update_privy_did_publishes_event() {
 
     let events = env.events().all();
     assert!(
-        events.iter().any(|e| e.topics.first().is_some()),
+        events.iter().any(|e| e.1.first().is_some()),
         "update_privy_did must publish an event so off-chain systems can sync the rotation"
     );
 }
@@ -255,7 +255,7 @@ fn test_recover_privy_did_publishes_event() {
 
     let events = env.events().all();
     assert!(
-        events.iter().any(|e| e.topics.first().is_some()),
+        events.iter().any(|e| e.1.first().is_some()),
         "recover_privy_did must publish an event so off-chain systems can sync the recovery"
     );
 }
