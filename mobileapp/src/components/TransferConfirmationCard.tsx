@@ -19,6 +19,7 @@ interface TransferConfirmationCardProps {
   amount: string;
   tokenSymbol: string;
   description?: string;
+  visibility?: "PUBLIC" | "FRIENDS" | "PRIVATE";
   feeEstimate?: TransferFeeEstimate | null;
 }
 
@@ -28,6 +29,7 @@ export const TransferConfirmationCard = React.memo(
     amount,
     tokenSymbol,
     description,
+    visibility,
     feeEstimate,
   }: TransferConfirmationCardProps) {
     const formatStroops = (value?: string) => {
@@ -74,6 +76,30 @@ export const TransferConfirmationCard = React.memo(
               <Text style={styles.detailValue}>{description || "No note"}</Text>
             </View>
           </View>
+
+          {visibility && (
+            <View style={[styles.detailRow, { marginTop: 16 }]} testID="confirmation-visibility-row">
+              <View style={styles.detailIcon}>
+                <Ionicons
+                  name={
+                    visibility === "PUBLIC"
+                      ? "globe-outline"
+                      : visibility === "FRIENDS"
+                      ? "people-outline"
+                      : "lock-closed-outline"
+                  }
+                  size={18}
+                  color="#777"
+                />
+              </View>
+              <View style={styles.detailCol}>
+                <Text style={styles.detailLabel}>Privacy</Text>
+                <Text style={styles.detailValue} testID="confirmation-visibility-value">
+                  {visibility}
+                </Text>
+              </View>
+            </View>
+          )}
 
           {feeEstimate && (
             <>

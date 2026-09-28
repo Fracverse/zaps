@@ -343,8 +343,10 @@ function TransferScreen() {
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [contactsLoaded, setContactsLoaded] = useState(false);
 
+  // #887 — Search recipients dynamically by Zaps ID
   const searchUsers = useCallback(async (query: string) => {
-    if (!query || query.length < 2) {
+    const cleanQuery = query.trim().replace(/^@/, "");
+    if (!cleanQuery || cleanQuery.length < 2) {
       setSearchResults([]);
       setShowDropdown(false);
       return;
@@ -352,7 +354,7 @@ function TransferScreen() {
     setSearching(true);
     try {
       const res = await fetch(
-        `${API_BASE}/api/users/search?q=${encodeURIComponent(query)}&limit=6`
+        `${API_BASE}/api/users/search?q=${encodeURIComponent(cleanQuery)}&limit=6`
       );
       if (!res.ok) throw new Error("Search failed");
       const data: ZapsUser[] = await res.json();
@@ -873,17 +875,20 @@ function TransferScreen() {
               </Text>
             </View>
           )}
-          {/* Dropdown results */}
+          {/* Dropdown results (#887) */}
           {transferType === "ZAPS" &&
             showDropdown &&
             searchResults.length > 0 && (
-              <View style={styles.dropdownContainer}>
+              <View style={styles.dropdownContainer} testID="search-results-dropdown">
                 {searchResults.map((user) => (
                   <TouchableOpacity
                     key={user.address}
                     style={styles.dropdownItem}
                     onPress={() => handleSelectUser(user)}
                     activeOpacity={0.75}
+                    testID={`search-result-${user.username}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select recipient ${user.username}`}
                   >
                     <View style={styles.dropdownAvatar}>
                       <Text style={styles.dropdownAvatarText}>
@@ -1112,17 +1117,20 @@ function TransferScreen() {
           </View>
         </View>
 
+        {/* #888 — Note / Description input field */}
         <Input
           placeholder="What is this for? (e.g. Lunch 🍕)"
           value={description}
           onChangeText={setDescription}
           maxLength={100}
           style={styles.transferInput}
+          testID="transfer-note-input"
+          accessibilityLabel="Payment note"
         />
       </View>
 
-      {/* Visibility Selector */}
-      <View style={styles.visibilitySection}>
+      {/* #889 — Visibility Selector */}
+      <View style={styles.visibilitySection} testID="visibility-selector-section">
         <Text style={styles.sectionLabel}>Who can see this payment?</Text>
         <View style={styles.visibilityOptions}>
           <TouchableOpacity
@@ -1131,6 +1139,9 @@ function TransferScreen() {
               visibility === "PUBLIC" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("PUBLIC")}
+            testID="visibility-public-button"
+            accessibilityRole="button"
+            accessibilityLabel="Public visibility"
           >
             <Ionicons
               name="globe-outline"
@@ -1153,6 +1164,9 @@ function TransferScreen() {
               visibility === "FRIENDS" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("FRIENDS")}
+            testID="visibility-friends-button"
+            accessibilityRole="button"
+            accessibilityLabel="Friends visibility"
           >
             <Ionicons
               name="people-outline"
@@ -1175,6 +1189,9 @@ function TransferScreen() {
               visibility === "PRIVATE" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("PRIVATE")}
+            testID="visibility-private-button"
+            accessibilityRole="button"
+            accessibilityLabel="Private visibility"
           >
             <Ionicons
               name="lock-closed-outline"
@@ -1237,23 +1254,37 @@ function TransferScreen() {
           </View>
         </View>
 
-        <View style={[styles.infoRow, { marginTop: 16 }]}>
+        <View style={[styles.infoRow, { marginTop: 16 }]} testID="summary-note-row">
           <View style={styles.recipientBadge}>
             <Ionicons name="chatbubble-outline" size={16} color="#777" />
           </View>
           <View style={styles.infoCol}>
             <Text style={styles.infoLabel}>Note</Text>
-            <Text style={styles.infoValue}>{description || "No note"}</Text>
+            <Text style={styles.infoValue} testID="summary-note-value">
+              {description || "No note"}
+            </Text>
           </View>
         </View>
 
-        <View style={[styles.infoRow, { marginTop: 16 }]}>
+        <View style={[styles.infoRow, { marginTop: 16 }]} testID="summary-privacy-row">
           <View style={styles.recipientBadge}>
-            <Ionicons name="eye-outline" size={16} color="#777" />
+            <Ionicons
+              name={
+                visibility === "PUBLIC"
+                  ? "globe-outline"
+                  : visibility === "FRIENDS"
+                  ? "people-outline"
+                  : "lock-closed-outline"
+              }
+              size={16}
+              color="#777"
+            />
           </View>
           <View style={styles.infoCol}>
             <Text style={styles.infoLabel}>Privacy</Text>
-            <Text style={styles.infoValue}>{visibility}</Text>
+            <Text style={styles.infoValue} testID="summary-privacy-value">
+              {visibility}
+            </Text>
           </View>
         </View>
       </View>
@@ -1279,6 +1310,7 @@ function TransferScreen() {
           amount={amount}
           tokenSymbol={token.symbol}
           description={description}
+          visibility={visibility}
           feeEstimate={transactionFeeEstimate}
         />
 

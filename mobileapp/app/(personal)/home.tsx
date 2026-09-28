@@ -866,9 +866,14 @@ export default function HomeScreen() {
             </Text>
           </View>
 
+          {/* Pay / Request trigger button (#886) */}
           <TouchableOpacity
             style={styles.payRequestButton}
             onPress={() => router.push("/transfer")}
+            accessibilityRole="button"
+            accessibilityLabel="Pay / Request"
+            testID="pay-request-button"
+            activeOpacity={0.8}
           >
             <Ionicons
               name="send"
