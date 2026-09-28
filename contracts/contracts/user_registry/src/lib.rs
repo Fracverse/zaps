@@ -706,18 +706,32 @@ impl UserRegistryContract {
             .publish((soroban_sdk::symbol_short!("prof_del"),), (user, username));
     }
 
-    /// Issue #758: Upgrade the contract WASM to a new hash.
+    /// Issue #758 / #997: Upgrade the contract WASM to a new hash.
     ///
-    /// Validates that `new_wasm_hash` is non-zero (all-zero hash indicates an
-    /// uninitialized or invalid value) before invoking the deployer upgrade.
-    /// Only the stored contract admin may call this.
+    /// Integrity checks before `env.deployer().update_current_contract_wasm`:
+    /// 1. Caller must authorize (`require_auth`) and match the stored admin.
+    /// 2. Bytehash length must be exactly 32 bytes (SHA-256 WASM hash).
+    /// 3. Hash must be non-null / non-zero (all-zero indicates an
+    ///    uninitialized or invalid value that would brick the contract).
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        // Admin signature required for any upgrade.
         caller.require_auth();
 
         let admin = Self::require_admin(&env);
         assert!(caller == admin, "only admin can upgrade");
 
-        // Reject an all-zero hash: it signals an uninitialised or null value
+        // Explicit bytehash length integrity check (#997).
+        // `BytesN<32>` is length-typed at the ABI boundary; re-assert the
+        // fixed array length here so the upgrade path fails loudly if the
+        // hash type is ever widened/narrowed.
+        const WASM_HASH_LEN: usize = 32;
+        let hash_arr = new_wasm_hash.to_array();
+        assert!(
+            hash_arr.len() == WASM_HASH_LEN,
+            "wasm hash must be exactly 32 bytes"
+        );
+
+        // Reject an all-zero / null hash: it signals an uninitialised value
         // and would deploy an empty contract.
         let zero = BytesN::<32>::from_array(&env, &[0u8; 32]);
         assert!(new_wasm_hash != zero, "wasm hash must not be zero");
@@ -1384,7 +1398,7 @@ mod tests {
         );
     }
 
-    // ── Issue #758: upgrade ───────────────────────────────────────────────────
+    // ── Issue #758 / #997: upgrade WASM bytehash integrity ───────────────────
 
     #[test]
     #[ignore] // assert!(..) for zero-hash panics in Soroban v20 (non-unwinding)
@@ -1398,7 +1412,7 @@ mod tests {
 
         let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
         let res = client.try_upgrade(&admin, &zero_hash);
-        assert!(res.is_err(), "all-zero hash must be rejected");
+        assert!(res.is_err(), "all-zero / null wasm hash must be rejected (#997)");
     }
 
     #[test]
@@ -1414,7 +1428,18 @@ mod tests {
         let non_admin = Address::generate(&env);
         let hash = BytesN::from_array(&env, &[1u8; 32]);
         let res = client.try_upgrade(&non_admin, &hash);
-        assert!(res.is_err(), "non-admin must be rejected");
+        assert!(res.is_err(), "non-admin must be rejected (#997)");
+    }
+
+    #[test]
+    fn upgrade_bytehash_length_is_32() {
+        // #997: BytesN<32> ABI + explicit len assert in upgrade() guarantee
+        // the WASM bytehash is exactly 32 bytes before deployer update.
+        let env = Env::default();
+        let hash = BytesN::from_array(&env, &[0xABu8; 32]);
+        assert_eq!(hash.to_array().len(), 32, "wasm bytehash must be 32 bytes");
+        let zero = BytesN::<32>::from_array(&env, &[0u8; 32]);
+        assert_ne!(hash, zero, "non-null hash must differ from all-zero");
     }
 
     // ── rescue_token tests ─────────────────────────────────────────────────

@@ -39,6 +39,7 @@ import {
   likePayment,
   unlikePayment,
   fetchFeed,
+  addComment,
 } from "../../src/services/socialService";
 import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
 import {
@@ -518,43 +519,65 @@ export default function HomeScreen() {
       () => undefined
     );
     setSelectedItem(item);
-    setCommentsList([
-      {
-        id: "c1",
-        user: "Tolu",
-        text: "Thanks for the food! 😋",
-        time: "1h ago",
-      },
-      {
-        id: "c2",
-        user: "Ebube",
-        text: "Anytime! Let's do it again.",
-        time: "45m ago",
-      },
-    ]);
+    setCommentText("");
+    // Seed with an empty list; new comments are appended after a successful
+    // POST /api/social/comment so the drawer always reflects backend state.
+    setCommentsList([]);
     setCommentsModalVisible(true);
   };
 
-  const submitComment = () => {
-    if (!commentText.trim() || !selectedItem) return;
-    const newComment = {
-      id: Date.now().toString(),
+  const submitComment = async () => {
+    const trimmed = commentText.trim();
+    if (!trimmed || !selectedItem) return;
+
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+
+    const paymentId = selectedItem.id;
+    const optimistic: Comment = {
+      id: `local-${Date.now()}`,
       user: "Me",
-      text: commentText,
+      text: trimmed,
       time: "Just now",
     };
-    setCommentsList([...commentsList, newComment]);
-    setCommentText("");
 
-    // Update comments count on item
-    setFeed(
-      feed.map((item) => {
-        if (item.id === selectedItem.id) {
-          return { ...item, comments: item.comments + 1 };
-        }
-        return item;
-      })
+    // Optimistic UI: show the comment + bump the count immediately.
+    setCommentsList((prev) => [...prev, optimistic]);
+    setCommentText("");
+    setFeed((prev) =>
+      prev.map((item) =>
+        item.id === paymentId
+          ? { ...item, comments: item.comments + 1 }
+          : item
+      )
     );
+
+    try {
+      const saved = await addComment(paymentId, trimmed);
+      setCommentsList((prev) =>
+        prev.map((c) =>
+          c.id === optimistic.id
+            ? {
+                id: saved.id,
+                user: saved.username || "Me",
+                text: saved.content,
+                time: "Just now",
+              }
+            : c
+        )
+      );
+    } catch {
+      // Revert optimistic comment + count on failure.
+      setCommentsList((prev) => prev.filter((c) => c.id !== optimistic.id));
+      setFeed((prev) =>
+        prev.map((item) =>
+          item.id === paymentId
+            ? { ...item, comments: Math.max(0, item.comments - 1) }
+            : item
+        )
+      );
+    }
   };
 
   const openEarningsModal = () => {
@@ -1047,15 +1070,22 @@ export default function HomeScreen() {
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
           <Text style={styles.feedSectionTitle}>Activity</Text>
-          {/* Feed Tabs — Segment Control */}
+          {/* Feed Tabs — Public / Friends (#882) */}
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={[
                 styles.tabItem,
                 activeTab === "public" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("public")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("public");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "public" }}
+              accessibilityLabel="Public Feed"
+              testID="feed-tab-public"
             >
               <Text
                 style={[
@@ -1071,8 +1101,15 @@ export default function HomeScreen() {
                 styles.tabItem,
                 activeTab === "friends" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("friends")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("friends");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "friends" }}
+              accessibilityLabel="Friends Feed"
+              testID="feed-tab-friends"
             >
               <Text
                 style={[
@@ -1132,6 +1169,11 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => handleLike(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    item.hasLiked ? "Unlike payment" : "Like payment"
+                  }
+                  testID={`feed-like-${item.id}`}
                 >
                   <Animated.View
                     style={{ transform: [{ scale: getScaleAnim(item.id) }] }}
@@ -1155,6 +1197,9 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => openComments(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open comments"
+                  testID={`feed-comments-${item.id}`}
                 >
                   <Ionicons name="chatbubble-outline" size={20} color="#666" />
                   <Text style={styles.actionCount}>{item.comments}</Text>
@@ -1619,17 +1664,29 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Comments Modal */}
+      {/* Comments bottom drawer (#885) — slide-up Modal */}
       <Modal
         visible={commentsModalVisible}
         animationType="slide"
         transparent={true}
+        onRequestClose={() => setCommentsModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setCommentsModalVisible(false)}
+            accessibilityLabel="Dismiss comments"
+          />
           <View style={styles.modalContent}>
+            <View style={styles.commentsGrabber} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Comments</Text>
-              <TouchableOpacity onPress={() => setCommentsModalVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setCommentsModalVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close comments"
+              >
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
@@ -1637,7 +1694,12 @@ export default function HomeScreen() {
             <FlatList<Comment>
               data={commentsList}
               keyExtractor={(item: Comment) => item.id}
-              contentContainerStyle={{ paddingVertical: 12 }}
+              contentContainerStyle={{ paddingVertical: 12, flexGrow: 1 }}
+              ListEmptyComponent={
+                <Text style={styles.commentsEmpty}>
+                  Be the first to comment
+                </Text>
+              }
               renderItem={({ item }: { item: Comment }) => (
                 <View style={styles.commentItem}>
                   <View style={styles.commentAvatar}>
@@ -1660,8 +1722,22 @@ export default function HomeScreen() {
                 placeholder="Write a comment..."
                 value={commentText}
                 onChangeText={setCommentText}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  void submitComment();
+                }}
+                accessibilityLabel="Comment input"
+                testID="comment-input"
               />
-              <TouchableOpacity style={styles.sendBtn} onPress={submitComment}>
+              <TouchableOpacity
+                style={styles.sendBtn}
+                onPress={() => {
+                  void submitComment();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send comment"
+                testID="comment-send"
+              >
                 <Ionicons name="send" size={20} color={COLORS.primary} />
               </TouchableOpacity>
             </View>
@@ -2424,8 +2500,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   tabItemActive: {
-    backgroundColor: "#0F3D2E",
-    shadowColor: "#0F3D2E",
+    // Dark green active state (#882)
+    backgroundColor: COLORS.primary,
+    shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.18,
     shadowRadius: 4,
@@ -2584,8 +2661,23 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingBottom: 40,
-    paddingTop: 20,
+    paddingTop: 12,
     maxHeight: "75%",
+  },
+  commentsGrabber: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "#E2E8F0",
+    marginBottom: 10,
+  },
+  commentsEmpty: {
+    textAlign: "center",
+    color: "#94A3B8",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 14,
+    paddingVertical: 28,
   },
   modalHeader: {
     flexDirection: "row",
