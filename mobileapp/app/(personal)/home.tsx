@@ -1094,16 +1094,25 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.paymentInfo}>
-                  <View style={styles.paymentRow}>
-                    <Text style={styles.paymentText} numberOfLines={2}>
-                      <Text style={styles.boldText}>{item.sender}</Text> paid{" "}
-                      <Text style={styles.boldText}>{item.receiver}</Text>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>FROM</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.sender}
                     </Text>
-                    <View style={styles.amountPill}>
-                      <Text style={styles.amountText}>{item.amount}</Text>
-                    </View>
+                  </View>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>TO</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.receiver}
+                    </Text>
                   </View>
                   <Text style={styles.timestamp}>{item.timestamp}</Text>
+                </View>
+
+                <View style={styles.amountPill}>
+                  <Text style={styles.amountText} numberOfLines={1}>
+                    {item.amount}
+                  </Text>
                 </View>
               </View>
 
@@ -2428,7 +2437,7 @@ const styles = StyleSheet.create({
   },
   feedCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 24,
+    borderRadius: 20,
     padding: 16,
     marginBottom: 14,
     borderWidth: 1,
@@ -2441,7 +2450,7 @@ const styles = StyleSheet.create({
   },
   feedHeader: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     marginBottom: 12,
   },
   avatarStack: {
@@ -2474,43 +2483,46 @@ const styles = StyleSheet.create({
   },
   paymentInfo: {
     flex: 1,
+    minWidth: 0,
+    gap: 3,
   },
-  paymentRow: {
+  partyRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: 6,
   },
-  paymentText: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    fontFamily: "Outfit_400Regular",
-    color: "#334155",
-    flexShrink: 1,
-    marginRight: 8,
-  },
-  boldText: {
+  partyLabel: {
+    width: 31,
+    fontSize: 9,
     fontFamily: "Outfit_700Bold",
-    color: "#111827",
+    color: "#94A3B8",
+  },
+  partyName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    fontFamily: "Outfit_700Bold",
+    color: "#17211D",
   },
   amountPill: {
     backgroundColor: "#F2F9F0",
     borderRadius: 999,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: "#DDF2DD",
-    alignSelf: "flex-start",
-    marginTop: 2,
+    alignSelf: "center",
+    marginLeft: 8,
+    maxWidth: 112,
   },
   amountText: {
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
   timestamp: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#94A3B8",
     marginTop: 4,
   },
@@ -2520,7 +2532,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 12,
   },
   memoLabel: {
     fontSize: 11,
