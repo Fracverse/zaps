@@ -21,6 +21,8 @@ const PROTO_LED_KEY: Symbol = symbol_short!("p_led");
 const PAUSED_KEY: Symbol = symbol_short!("paused");
 const USER_CAP_KEY: Symbol = symbol_short!("user_cap");
 const MAX_APY_KEY: Symbol = symbol_short!("max_apy");
+const TREASURY_KEY: Symbol = symbol_short!("treasury");
+const EXIT_FEE_KEY: Symbol = symbol_short!("exit_fee");
 /// Absolute safe bounds for target APY (0% to 25% expressed in basis points).
 /// `MAX_APY_CAP_BPS` is the hard ceiling that an admin-configurable cap
 /// (`MAX_APY_KEY`) can never exceed.
@@ -28,6 +30,10 @@ const MIN_APY_BPS: u32 = 0;
 const MAX_APY_CAP_BPS: u32 = 2_500; // 25%
 /// Back-compat alias: previous hard-coded ceiling was 2_000 bps (20%).
 const MAX_APY_BPS: u32 = MAX_APY_CAP_BPS;
+/// Default protocol exit fee on withdrawal: 10 bps = 0.1%.
+const DEFAULT_EXIT_FEE_BPS: u32 = 10;
+/// Hard ceiling for the optional exit fee (1% = 100 bps).
+const MAX_EXIT_FEE_BPS: u32 = 100;
 
 /// SC-053: Minimum delay (in seconds) between queuing an APY change and applying it.
 const APY_TIMELOCK_SECS: u64 = 86_400; // 24 hours
@@ -235,6 +241,11 @@ impl YieldVaultContract {
         env.storage()
             .instance()
             .set(&PROTO_LED_KEY, &env.ledger().sequence());
+        // #999: default treasury to owner; optional 0.1% exit fee on withdrawals.
+        env.storage().instance().set(&TREASURY_KEY, &owner);
+        env.storage()
+            .instance()
+            .set(&EXIT_FEE_KEY, &DEFAULT_EXIT_FEE_BPS);
     }
 
     // ─── SC-019: Yield compounding math ──────────────────────────────────────
@@ -263,21 +274,24 @@ impl YieldVaultContract {
     }
 
     /// Persist the latest yield index and reset the reference ledger.
+    /// #992: when the index compounds, publish `accrue_yield(old_index, new_index, total_assets)`.
     fn checkpoint_index(env: &Env) {
         let old_index: i128 = env.storage().instance().get(&IDX_KEY).unwrap_or(PRECISION);
         let new_index = Self::current_index(env);
         let total_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
-        
+
         env.storage().instance().set(&IDX_KEY, &new_index);
         env.storage()
             .instance()
             .set(&IDX_LED_KEY, &env.ledger().sequence());
-        
-        // Publish event when interest index compounds
-        env.events().publish(
-            (Symbol::new(env, "accrue_yield"),),
-            (old_index, new_index, total_assets),
-        );
+
+        // Emit only when the interest index actually compounds.
+        if new_index != old_index {
+            env.events().publish(
+                (Symbol::new(env, "accrue_yield"),),
+                (old_index, new_index, total_assets),
+            );
+        }
     }
 
     // ─── SC-017: Deposit ──────────────────────────────────────────────────────
@@ -651,6 +665,10 @@ impl YieldVaultContract {
 
     /// Burn `shares` from `user` and return the equivalent tokens (principal + yield).
     /// SC-051: assets_out = shares * (total_assets + VIRTUAL_OFFSET) / (total_shares + VIRTUAL_OFFSET)
+    ///
+    /// #999: Deducts an optional protocol exit fee (`fee = amount * fee_bps / 10000`,
+    /// default 0.1% / 10 bps). Fee is transferred to the treasury; the remainder
+    /// goes to the caller.
     pub fn withdraw(env: Env, user: Address, shares: i128) {
         user.require_auth();
         assert!(shares > 0, "shares must be positive");
@@ -703,23 +721,80 @@ impl YieldVaultContract {
             .instance()
             .set(&ASSETS_KEY, &(tot_assets - assets_out).max(0));
 
+        // #999: optional exit fee — fee = (amount * fee_bps) / 10000
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&EXIT_FEE_KEY)
+            .unwrap_or(DEFAULT_EXIT_FEE_BPS);
+        let fee = assets_out
+            .checked_mul(fee_bps as i128)
+            .expect("overflow")
+            / 10_000;
+        let net = assets_out - fee;
+
         let token_addr: Address = env
             .storage()
             .instance()
             .get(&TOKEN_KEY)
             .expect("not initialized");
         let vault_addr = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token_addr);
 
         // Lock before the external transfer so a token callback cannot
         // re-enter withdraw. Release after the transfer completes.
         Self::set_locked(&env, true);
-        token::Client::new(&env, &token_addr).transfer(&vault_addr, &user, &assets_out);
+        token_client.transfer(&vault_addr, &user, &net);
+        if fee > 0 {
+            let treasury: Address = env
+                .storage()
+                .instance()
+                .get(&TREASURY_KEY)
+                .expect("treasury not set");
+            token_client.transfer(&vault_addr, &treasury, &fee);
+        }
         Self::set_locked(&env, false);
 
         env.events().publish(
             (Symbol::new(&env, "YieldWithdrawn"),),
-            (user, assets_out, shares, 0i128),
+            (user, net, shares, fee),
         );
+    }
+
+    /// Set the address that receives the protocol exit fee on withdrawals (#999).
+    pub fn set_treasury(env: Env, caller: Address, treasury: Address) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        env.storage().instance().set(&TREASURY_KEY, &treasury);
+        env.events()
+            .publish((Symbol::new(&env, "TreasuryUpdated"),), (treasury,));
+    }
+
+    /// Configure the withdrawal exit fee in basis points (#999).
+    /// Default is 10 (0.1%). Pass 0 to disable. Capped at `MAX_EXIT_FEE_BPS`.
+    pub fn set_exit_fee_bps(env: Env, caller: Address, fee_bps: u32) {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+        assert!(fee_bps <= MAX_EXIT_FEE_BPS, "exit fee exceeds max");
+        env.storage().instance().set(&EXIT_FEE_KEY, &fee_bps);
+        env.events()
+            .publish((Symbol::new(&env, "ExitFeeUpdated"),), (fee_bps,));
+    }
+
+    /// Returns the configured treasury address (#999).
+    pub fn treasury(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&TREASURY_KEY)
+            .expect("treasury not set")
+    }
+
+    /// Returns the configured exit fee in basis points (#999).
+    pub fn exit_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&EXIT_FEE_KEY)
+            .unwrap_or(DEFAULT_EXIT_FEE_BPS)
     }
 
     // ─── Mock protocol adapter interface ──────────────────────────────────────

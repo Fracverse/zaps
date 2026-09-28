@@ -12,7 +12,6 @@ const FEE_COEFF_KEY: Symbol = symbol_short!("fee_coef");
 const NAIRA_TOKEN_KEY: Symbol = symbol_short!("ngn_tok");
 const USER_REG_KEY: Symbol = symbol_short!("user_reg");
 const PR_COUNT_KEY: Symbol = symbol_short!("pr_cnt");
-const NONCE_KEY_PREFIX: Symbol = symbol_short!("nonce");
 
 /// Number of ledgers a user must wait before liking the same transaction again.
 /// 5 ledgers ≈ 25 seconds on Stellar (5s per ledger).
@@ -859,7 +858,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events, Ledger},
-        vec, Address, Env, IntoVal, String, Symbol, TryIntoVal, Val,
+        vec, Address, BytesN, Env, IntoVal, String, Symbol, TryIntoVal, Val,
     };
 
     fn setup() -> (
@@ -1939,31 +1938,14 @@ mod tests {
         assert!(res.is_err(), "self payment requests must be rejected");
     }
 
-    // ── Nonce-based signed payment authorization tests ────────────────────────
+    // ── Nonce-based signed payment authorization tests (#996) ─────────────────
 
     #[test]
     fn test_get_nonce_returns_zero_for_new_user() {
         let (env, client, _admin, _treasury, _sender, _receiver) = setup();
         let new_user = Address::generate(&env);
-        
+
         assert_eq!(client.get_nonce(&new_user), 0);
-    }
-
-    #[test]
-    fn test_nonce_increments_after_successful_signed_payment() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
-        let token = mint_token(&env, &admin, &sender, 10_000);
-        client.set_naira_token(&token);
-
-        // Initial nonce should be 0
-        assert_eq!(client.get_nonce(&sender), 0);
-
-        // Note: In a real scenario, we would generate a proper Ed25519 signature.
-        // For this test structure, we're documenting the expected behavior.
-        // Actual signature generation would require the sender's private key.
-        
-        // The nonce should increment to 1 after successful payment
-        // (Implementation note: full signature test would require key generation)
     }
 
     #[test]
@@ -1972,23 +1954,34 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
-        // First payment with nonce 0 would succeed (with valid signature)
-        // Second payment attempting to reuse nonce 0 should fail with NonceAlreadyUsed
-        
-        // Create auth payload with nonce 0
+        // Simulate a prior successful signed payment by advancing the on-chain nonce.
+        env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Nonce(sender.clone()), &1u64);
+        });
+        assert_eq!(client.get_nonce(&sender), 1);
+
+        // Reusing nonce 0 (or any nonce != current) must be rejected before signature checks.
         let auth = SignedPaymentAuth {
             sender: sender.clone(),
             receiver: receiver.clone(),
             token: token.clone(),
             amount: 1000,
-            memo: String::from_str(&env, "test"),
+            memo: String::from_str(&env, "replay"),
             visibility: Visibility::Private,
             nonce: 0,
         };
+        let pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let signature = BytesN::from_array(&env, &[0u8; 64]);
 
-        // After a successful payment, nonce would be 1
-        // Attempting to use nonce 0 again should fail
-        // (Full test requires signature generation infrastructure)
+        assert_eq!(
+            client.try_pay_with_signature(&auth, &pubkey, &signature),
+            Err(Ok(Error::NonceAlreadyUsed)),
+            "reused nonce must be rejected"
+        );
+        // Nonce must remain unchanged after rejection.
+        assert_eq!(client.get_nonce(&sender), 1);
     }
 
     #[test]
@@ -1997,33 +1990,45 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
-        // Attempting to use nonce 5 when current nonce is 0 should fail
+        assert_eq!(client.get_nonce(&sender), 0);
+
         let auth = SignedPaymentAuth {
             sender: sender.clone(),
             receiver: receiver.clone(),
             token: token.clone(),
             amount: 1000,
-            memo: String::from_str(&env, "test"),
+            memo: String::from_str(&env, "future"),
             visibility: Visibility::Private,
-            nonce: 5, // Future nonce
+            nonce: 5,
         };
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let signature = BytesN::from_array(&env, &[1u8; 64]);
 
-        // This should be rejected with NonceAlreadyUsed error
-        // (The name is a bit misleading but the check catches both past and future nonces)
+        assert_eq!(
+            client.try_pay_with_signature(&auth, &pubkey, &signature),
+            Err(Ok(Error::NonceAlreadyUsed)),
+            "future nonce must be rejected"
+        );
+        assert_eq!(client.get_nonce(&sender), 0);
     }
 
     #[test]
     fn test_signed_payment_different_users_independent_nonces() {
-        let (env, client, _admin, _treasury, sender, _receiver) = setup();
+        let (env, client, _admin, _treasury, _sender, _receiver) = setup();
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
 
-        // Each user maintains their own nonce counter
         assert_eq!(client.get_nonce(&user1), 0);
         assert_eq!(client.get_nonce(&user2), 0);
 
-        // After user1 makes a payment, only their nonce should increment
-        // user2's nonce should remain at 0
+        env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Nonce(user1.clone()), &3u64);
+        });
+
+        assert_eq!(client.get_nonce(&user1), 3);
+        assert_eq!(client.get_nonce(&user2), 0);
     }
 
     // ── #977: Distributor / relayer whitelist ─────────────────────────────────

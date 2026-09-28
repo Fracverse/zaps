@@ -130,7 +130,7 @@ fn test_withdraw_releases_reentrancy_lock() {
 
 #[test]
 fn test_withdraw_returns_principal_at_initial_index() {
-    let (env, client, _contract_id, _owner, depositor, token) = setup();
+    let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
     client.deposit(&depositor, &amount, &0);
@@ -142,8 +142,71 @@ fn test_withdraw_returns_principal_at_initial_index() {
     assert_eq!(client.total_shares(), 0);
     assert_eq!(client.total_assets(), 0);
 
+    // #999: 0.1% exit fee (10 bps) goes to treasury (owner by default).
+    let fee = amount * 10 / 10_000;
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT - fee);
+    assert_eq!(token_client.balance(&owner), fee);
+}
+
+#[test]
+fn test_withdraw_exit_fee_routed_to_treasury() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 1_000_000i128;
+    let treasury = Address::generate(&env);
+
+    assert_eq!(client.exit_fee_bps(), 10);
+    assert_eq!(client.treasury(), owner);
+
+    client.set_treasury(&owner, &treasury);
+    client.deposit(&depositor, &amount, &0);
+    let shares = client.shares_of(&depositor);
+    client.withdraw(&depositor, &shares);
+
+    let fee = amount * 10 / 10_000; // 1_000
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&treasury), fee);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT - fee);
+}
+
+#[test]
+fn test_withdraw_zero_exit_fee_sends_full_amount() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 1_000_000i128;
+
+    client.set_exit_fee_bps(&owner, &0);
+    assert_eq!(client.exit_fee_bps(), 0);
+
+    client.deposit(&depositor, &amount, &0);
+    let shares = client.shares_of(&depositor);
+    client.withdraw(&depositor, &shares);
+
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT);
+    assert_eq!(token_client.balance(&owner), 0);
+}
+
+#[test]
+fn test_accrue_yield_emits_accrue_yield_event_on_compound() {
+    let (env, client, _contract_id, owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&depositor, &amount, &0);
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    client.accrue_yield(&owner);
+
+    let topic: Val = Symbol::new(&env, "accrue_yield").into_val(&env);
+    let mut found = false;
+    for item in env.events().all().iter() {
+        if item.1.contains(topic) {
+            let (old_index, new_index, total_assets): (i128, i128, i128) =
+                item.2.try_into_val(&env).unwrap();
+            assert!(new_index > old_index, "index must compound");
+            assert_eq!(total_assets, amount);
+            found = true;
+        }
+    }
+    assert!(found, "accrue_yield event not emitted on compound");
 }
 
 #[test]
@@ -408,10 +471,13 @@ fn test_full_yield_vault_lifecycle() {
     let expected_partial = partial_shares
         * (assets_after_accrual + VIRTUAL_OFFSET)
         / (client.total_shares() + VIRTUAL_OFFSET);
+    // #999: 0.1% exit fee deducted from the withdrawn amount.
+    let expected_partial_fee = expected_partial * 10 / 10_000;
+    let expected_partial_net = expected_partial - expected_partial_fee;
     let balance_before_partial = token::Client::new(&env, &token).balance(&depositor);
     client.withdraw(&depositor, &partial_shares);
     let balance_after_partial = token::Client::new(&env, &token).balance(&depositor);
-    assert_eq!(balance_after_partial - balance_before_partial, expected_partial);
+    assert_eq!(balance_after_partial - balance_before_partial, expected_partial_net);
     assert_eq!(client.shares_of(&depositor), shares_after_deposit - partial_shares);
     assert!(client.shares_of(&depositor) > 0);
 
@@ -426,7 +492,10 @@ fn test_full_yield_vault_lifecycle() {
     let final_user_balance = token::Client::new(&env, &token).balance(&depositor);
 
     assert_eq!(final_user_balance, balance_before_exit + expected_exit);
-    assert_eq!(final_user_balance, initial_user_balance - deposit_amount + expected_partial + expected_exit);
+    assert_eq!(
+        final_user_balance,
+        initial_user_balance - deposit_amount + expected_partial_net + expected_exit
+    );
     assert_eq!(client.shares_of(&depositor), 0);
     assert_eq!(client.user_deposit(&depositor), 0);
     assert_eq!(client.total_shares(), 0);
@@ -441,7 +510,7 @@ fn test_pause_unpause_and_deposit_rejection() {
 
     client.pause(&owner);
 
-    let res = client.try_deposit(&depositor, &1_000_000);
+    let res = client.try_deposit(&depositor, &1_000_000, &0);
     assert!(res.is_err(), "deposit must fail when vault is paused");
 
     client.unpause(&owner);
