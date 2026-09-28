@@ -133,4 +133,19 @@ describe("TransferConfirmationCard", () => {
     expect(getByText("Estimated total fee")).toBeTruthy();
     expect(getByText("350 stroops")).toBeTruthy();
   });
+
+  it("renders privacy visibility when provided", () => {
+    const { getByText, getByTestId } = render(
+      <TransferConfirmationCard
+        recipient={mockRecipient}
+        amount="500"
+        tokenSymbol="XLM"
+        visibility="FRIENDS"
+      />
+    );
+
+    expect(getByTestId("confirmation-visibility-row")).toBeTruthy();
+    expect(getByText("Privacy")).toBeTruthy();
+    expect(getByText("FRIENDS")).toBeTruthy();
+  });
 });

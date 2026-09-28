@@ -391,4 +391,128 @@ describe("TransferScreen – Registry Warning Banners", () => {
     // The "not registered" warning should be gone (replaced by idle/checking)
     expect(renderResult.queryByTestId("warning-not-registered")).toBeNull();
   });
+
+  // ── 5. Issue #887: Search recipients by Zaps ID dynamically ─────────────────
+
+  it("displays matching users in dropdown list as user types Zaps ID and allows selection", async () => {
+    const mockUsers = [
+      {
+        username: "tolu.zaps",
+        address: "GABC1234567890DEF1234567890ABCDEF1234567890ABCDEF1234567890AB",
+      },
+      {
+        username: "tolu2.zaps",
+        address: "GXYZ1234567890DEF1234567890ABCDEF1234567890ABCDEF1234567890CD",
+      },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => mockUsers,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => mockUsers[0],
+      });
+
+    const renderResult = render(<TransferScreenWithBoundary />);
+    await advanceToStep1(renderResult);
+
+    const input = renderResult.getByPlaceholderText(/Recipient ZAPS ID/i);
+    await act(async () => {
+      fireEvent.changeText(input, "tolu");
+      await new Promise((r) => setTimeout(r, 500));
+    });
+
+    await waitFor(() => {
+      expect(renderResult.getByTestId("search-results-dropdown")).toBeTruthy();
+    });
+
+    expect(renderResult.getByText("tolu.zaps")).toBeTruthy();
+    expect(renderResult.getByText("tolu2.zaps")).toBeTruthy();
+
+    // Tap first matching user to select
+    await act(async () => {
+      fireEvent.press(renderResult.getByTestId("search-result-tolu.zaps"));
+    });
+
+    expect(input.props.value).toBe("tolu.zaps");
+  });
+
+  // ── 6. Issue #888: Note / Description input field ─────────────────────────
+
+  it("renders note input field with 100 character maxLength", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    });
+
+    const renderResult = render(<TransferScreenWithBoundary />);
+    await advanceToStep1(renderResult);
+
+    const noteInput = renderResult.getByPlaceholderText(
+      "What is this for? (e.g. Lunch 🍕)"
+    );
+    expect(noteInput).toBeTruthy();
+    expect(noteInput.props.maxLength).toBe(100);
+
+    await act(async () => {
+      fireEvent.changeText(noteInput, "Dinner with friends 🍕");
+    });
+    expect(noteInput.props.value).toBe("Dinner with friends 🍕");
+  });
+
+  // ── 7. Issue #889: Payment Visibility Selector ────────────────────────────
+
+  it("allows selecting visibility options and updates transfer summary page", async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [{ username: "chidi.zaps", address: "GXYZ" }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          username: "chidi.zaps",
+          address: "GXYZ",
+        }),
+      });
+
+    const renderResult = render(<TransferScreenWithBoundary />);
+    await advanceToStep1(renderResult);
+
+    // Verify visibility section is rendered
+    expect(renderResult.getByTestId("visibility-selector-section")).toBeTruthy();
+    expect(renderResult.getByText("Who can see this payment?")).toBeTruthy();
+
+    // Default is Public
+    expect(renderResult.getByText("Visible to anyone on the Zaps network.")).toBeTruthy();
+
+    // Select Friends visibility
+    await act(async () => {
+      fireEvent.press(renderResult.getByTestId("visibility-friends-button"));
+    });
+    expect(renderResult.getByText("Visible only to you and your friends.")).toBeTruthy();
+
+    // Type recipient and amount
+    await typeRecipient(renderResult, "chidi.zaps");
+
+    // Advance to Step 2 (Summary)
+    const reviewBtn = renderResult.getByLabelText("Review");
+    await act(async () => {
+      fireEvent.press(reviewBtn);
+    });
+
+    // Verify Summary page shows FRIENDS visibility
+    await waitFor(() => {
+      expect(renderResult.getByTestId("summary-privacy-value")).toBeTruthy();
+    });
+    expect(renderResult.getByTestId("summary-privacy-value").props.children).toBe("FRIENDS");
+  });
 });
