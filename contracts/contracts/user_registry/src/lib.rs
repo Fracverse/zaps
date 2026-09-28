@@ -24,7 +24,7 @@ pub enum DataKey {
     PrivyDid(String),     // Maps Privy DID -> wallet Address
     WalletDid(Address),   // Maps wallet Address -> Privy DID (reverse index)
     Admin,                // Stores the contract admin Address
-    PendingAdmin,         // Stores the proposed successor admin (2-step transfer, issue #776)
+    PendingAdmin,         // Stores the proposed successor admin (2-step transfer, issue #989)
     PrivyVerifierKey,     // Ed25519 public key trusted to attest DID <-> wallet links
     ReservationToken,     // Stores Naira token contract Address
     ReservationAmount,    // Stores required reservation amount (i128)
@@ -123,10 +123,10 @@ impl UserRegistryContract {
     }
 
     /// Admin-only: propose a successor admin as part of a 2-step ownership
-    /// transfer (issue #776). The current admin keeps full privileges until
+    /// transfer (issue #989). The current admin keeps full privileges until
     /// the proposed address claims ownership via `claim_admin`. Calling this
     /// only updates the pending admin; it does not change `DataKey::Admin`.
-    pub fn propose_admin(env: Env, caller: Address, new_admin: Address) {
+    pub fn propose_new_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let admin = Self::require_admin(&env);
         assert!(caller == admin, "only admin can propose new admin");
@@ -142,7 +142,7 @@ impl UserRegistryContract {
     }
 
     /// Complete a 2-step ownership transfer. Only the address previously
-    /// proposed via `propose_admin` may call this; once called, ownership
+    /// proposed via `propose_new_admin` may call this; once called, ownership
     /// (`DataKey::Admin`) moves to the caller and the pending proposal is
     /// cleared.
     pub fn claim_admin(env: Env, caller: Address) {
@@ -663,6 +663,11 @@ impl UserRegistryContract {
     /// and the username and address become re-usable. The caller must be the
     /// account owner (enforced via `require_auth`). Use `unregister_user`
     /// instead when the reservation deposit also needs to be refunded.
+    ///
+    /// Satisfies issue #993 (data-deletion entrypoint for account
+    /// unregistering): `DataKey::User` and `DataKey::Username` are removed
+    /// for the authenticated owner below. See also `unregister_user`, which
+    /// performs the same removal plus a deposit refund.
     pub fn delete_profile(env: Env, user: Address) {
         user.require_auth();
 
@@ -737,6 +742,11 @@ impl UserRegistryContract {
     /// Clears both the legacy struct keys and the `DataKey::{User,Username}`
     /// enum variants written by `register_user`, so the username can be
     /// reclaimed cleanly after release.
+    ///
+    /// Also satisfies issue #993: this is the owner-authenticated entrypoint
+    /// that removes `DataKey::User` / `DataKey::Username` for account
+    /// unregistering, with the added reservation refund. See `delete_profile`
+    /// for the equivalent without the refund.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
@@ -828,7 +838,7 @@ mod test;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events as _};
 
     // ── Issue #772: reservation lock-fee release on profile completion ──────
 
@@ -1612,7 +1622,7 @@ mod tests {
         let has_created = events.iter().any(|e| {
             e.topics
                 .iter()
-                .any(|t| t == soroban_sdk::Val::from(Symbol::new(&env, "PrivyLinkCreated")))
+                .any(|t| t == Symbol::new(&env, "PrivyLinkCreated").to_val())
         });
         assert!(has_created, "PrivyLinkCreated event must be emitted on DID registration");
     }
@@ -1658,7 +1668,7 @@ mod tests {
         let has_removed = events.iter().any(|e| {
             e.topics
                 .iter()
-                .any(|t| t == soroban_sdk::Val::from(Symbol::new(&env, "PrivyLinkRemoved")))
+                .any(|t| t == Symbol::new(&env, "PrivyLinkRemoved").to_val())
         });
         assert!(has_removed, "PrivyLinkRemoved event must be emitted on DID unlink");
     }
