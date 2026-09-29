@@ -457,10 +457,10 @@ function SdpDisbursementTab() {
       disbursementName.trim() ||
       `${fileBasename(selectedFile.name)}-${Date.now()}`;
     try {
-      const disbursement = await api.sdp.uploadDisbursementCSV(
-        selectedFile,
-        name,
-      );
+      const disbursement = await api.sdp.transmitBatchParameters({
+        file: selectedFile,
+        disbursement_name: name,
+      });
       setUploadResult({ kind: "success", disbursement });
       clearFile();
       setDisbursementName("");
