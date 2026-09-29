@@ -253,6 +253,28 @@ export const api = {
   yieldRateHistory: () =>
     req<{ rates: { apy: number; created_at: string }[] }>("/api/yield/rates/history"),
 
+  // Yield vault ledger audit logs (#1012)
+  yieldAuditLogs: (params?: {
+    q?: string;
+    action?: string;
+    limit?: number;
+    offset?: number;
+    from?: string;
+    to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.action && params.action !== "all") qs.set("action", params.action);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    const query = qs.toString();
+    return req<{ items: YieldAuditLogItem[]; total: number }>(
+      `/api/yield/history${query ? `?${query}` : ""}`,
+    );
+  },
+
   // Username registry
   searchUsers: (query: string) =>
     req<UserSearchResult[]>(`/api/users/search?q=${encodeURIComponent(query)}`),
@@ -675,4 +697,20 @@ export interface SdpStatusResponse {
   latest_ledger?: number;
   details?: Record<string, unknown>;
 }
+
+/**
+ * Yield vault ledger audit log item (#1012).
+ */
+export interface YieldAuditLogItem {
+  id: string;
+  tx_hash: string;
+  type: string;
+  amount: number;
+  created_at: string;
+  address?: string;
+  asset?: string;
+  block_height?: number;
+  fee?: number;
+}
+
 
