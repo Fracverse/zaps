@@ -20,6 +20,7 @@ import {
 } from "@/lib/freighter";
 import { useSuperAdmin } from "@/lib/auth-context";
 import { api } from "@/lib/api";
+import EmergencyPauseControl from "@/components/EmergencyPauseControl";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -599,33 +600,15 @@ export default function YieldPage() {
                 )}
               </div>
 
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-semibold text-slate-600" id="vault-pause-label">Pause Vault</span>
-                {/* #786 — superadmin-only toggle */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={params.paused}
-                  aria-labelledby="vault-pause-label"
-                  disabled={!isSuperAdmin}
-                  aria-disabled={!isSuperAdmin}
-                  title={!isSuperAdmin ? "Superadmin access required" : undefined}
-                  data-testid="vault-pause-toggle"
-                  onClick={() => isSuperAdmin && setParams((p) => ({ ...p, paused: !p.paused }))}
-                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                    params.paused ? "bg-red-500" : "bg-slate-300"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
-                      params.paused ? "translate-x-4" : "translate-x-1"
-                    }`}
-                  />
-                </button>
-                <span className={`text-xs ${params.paused ? "text-red-600 font-medium" : "text-slate-400"}`}>
-                  {params.paused ? "Paused" : "Active"}
-                </span>
-              </div>
+              {/* #1013 Emergency pause control with double validation confirmation drawer */}
+              <EmergencyPauseControl
+                paused={params.paused}
+                isSuperAdmin={isSuperAdmin}
+                onTogglePause={(nextPaused) => {
+                  setParams((p) => ({ ...p, paused: nextPaused }));
+                }}
+              />
+
 
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                 ⚠ This will sign a Soroban contract call via Freighter. Verify parameters before confirming.
