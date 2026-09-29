@@ -330,6 +330,7 @@ function SdpDisbursementTab() {
     message: string;
   }>(null);
   const [logsForId, setLogsForId] = useState<string | null>(null);
+  const [checkoutFilter, setCheckoutFilter] = useState<"all" | "valid" | "invalid">("all");
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
@@ -630,125 +631,146 @@ function SdpDisbursementTab() {
               />
             )}
 
-            {/* ── Invalid preview (if any) ───────────────────────────── */}
-            {summary.rows.some((r) => !r.valid) && (
-              <div className="overflow-hidden rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Validation issues ({summary.invalidRows} rows)
+            {/* ── #1016: Interactive Checkout Review Grid before Batch Submission ───────── */}
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs" data-testid="checkout-review-grid">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    Recipient Checkout &amp; Verification Grid
                   </h3>
+                  <p className="text-xs text-slate-500">
+                    Review addresses and amounts before submitting disbursement batch to network.
+                  </p>
                 </div>
-                <div className="max-h-72 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Row
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Target
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Amount
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Errors
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {summary.rows
-                        .filter((r) => !r.valid)
-                        .slice(0, 100)
-                        .map((r) => (
-                          <tr key={r.rowNumber} className="bg-red-50/40">
-                            <td className="px-3 py-2 font-mono text-slate-500">
-                              #{r.rowNumber}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
-                              {r.stellarAddress ??
-                                (r.raw as any).phone ??
-                                (r.raw as any).id ??
-                                "—"}
-                            </td>
-                            <td className="px-3 py-2 text-slate-700">
-                              {r.amount !== undefined
-                                ? r.amount.toString()
-                                : (r.raw as any).amount ?? "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              <ul className="list-disc pl-4 space-y-0.5 text-red-700">
-                                {r.errors.map((e, idx) => (
-                                  <li key={idx}>{e}</li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("all")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "all"
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    All ({summary.totalRows})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("valid")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "valid"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    Valid ({summary.validRows})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("invalid")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "invalid"
+                        ? "bg-red-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    Flagged ({summary.invalidRows})
+                  </button>
                 </div>
               </div>
-            )}
 
-            {/* ── Valid rows summary table ───────────────────────────── */}
-            {summary.rows.some((r) => r.valid) && (
-              <div className="overflow-hidden rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Valid rows ({summary.validRows})
-                  </h3>
-                  <span className="text-xs text-slate-400">
-                    Showing first{" "}
-                    {Math.min(summary.validRows, 50).toString()}
+              {/* Status Warning Banner if invalid rows detected */}
+              {summary.invalidRows > 0 && (
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-xs text-amber-800">
+                  <AlertTriangle size={15} className="shrink-0 text-amber-600" />
+                  <span>
+                    <strong>Warning:</strong> {summary.invalidRows} row{summary.invalidRows > 1 ? "s contain" : " contains"} validation or address format errors (highlighted in orange/red below). Correct these rows in your CSV to enable batch submission.
                   </span>
                 </div>
-                <div className="max-h-64 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Row
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Destination
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Amount
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Currency
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {summary.rows
-                        .filter((r) => r.valid)
-                        .slice(0, 50)
-                        .map((r) => (
-                          <tr key={r.rowNumber}>
-                            <td className="px-3 py-2 font-mono text-slate-500">
+              )}
+
+              <div className="max-h-80 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-500 border-b border-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Row</th>
+                      <th className="px-3 py-2 text-left font-semibold">Target Destination</th>
+                      <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                      <th className="px-3 py-2 text-left font-semibold">Currency</th>
+                      <th className="px-3 py-2 text-left font-semibold">Address Status</th>
+                      <th className="px-3 py-2 text-left font-semibold">Registry Lookup</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {summary.rows
+                      .filter((r) => {
+                        if (checkoutFilter === "valid") return r.valid;
+                        if (checkoutFilter === "invalid") return !r.valid;
+                        return true;
+                      })
+                      .slice(0, 100)
+                      .map((r) => {
+                        const isAddrValid = r.stellarAddress && STELLAR_ADDRESS_REGEX.test(r.stellarAddress);
+                        return (
+                          <tr
+                            key={r.rowNumber}
+                            className={
+                              !r.valid
+                                ? "bg-red-50/60 border-l-4 border-l-red-500"
+                                : "hover:bg-slate-50/80 border-l-4 border-l-emerald-500"
+                            }
+                          >
+                            <td className="px-3 py-2 font-mono text-slate-500 font-medium">
                               #{r.rowNumber}
                             </td>
-                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
-                              {r.stellarAddress ??
-                                (r.raw as any).phone ??
-                                (r.raw as any).id ??
-                                "—"}
+                            <td className="px-3 py-2 font-mono break-all font-medium text-slate-800">
+                              {r.stellarAddress ?? (r.raw as any).phone ?? (r.raw as any).id ?? "—"}
                             </td>
                             <td className="px-3 py-2 text-right font-medium text-slate-800">
-                              {r.amount?.toLocaleString() ?? "—"}
+                              {r.amount !== undefined ? r.amount.toLocaleString() : (r.raw as any).amount ?? "—"}
                             </td>
                             <td className="px-3 py-2 text-slate-700">
                               {r.currency ?? "—"}
                             </td>
+                            <td className="px-3 py-2">
+                              {r.valid ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-800">
+                                  <CheckCircle2 size={12} />
+                                  <span>Valid Recipient</span>
+                                </span>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-800">
+                                    <AlertTriangle size={12} />
+                                    <span>Invalid Address / Format</span>
+                                  </span>
+                                  {r.errors.length > 0 && (
+                                    <p className="text-[10px] text-red-600 mt-0.5 max-w-xs">{r.errors.join(", ")}</p>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isAddrValid ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  G-Address Verified
+                                </span>
+                              ) : r.stellarAddress ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-amber-50 text-amber-700 border border-amber-200">
+                                  Registry Lookup Failed
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-[11px]">N/A</span>
+                              )}
+                            </td>
                           </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
+                        );
+                      })}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
+
           </div>
         )}
 
