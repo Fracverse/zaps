@@ -297,8 +297,9 @@ impl YieldVaultContract {
     // ─── SC-017: Deposit ──────────────────────────────────────────────────────
 
     /// Deposit `amount` tokens from `depositor` into the vault.
-    /// Mints vault shares proportional to the current yield index.
-    /// shares_minted = amount * PRECISION / current_index
+    /// Mints vault shares at the current yield-index exchange rate, with
+    /// virtual shares/assets retained to make the initial conversion resistant
+    /// to donation-based inflation attacks.
     ///
     /// `min_shares_out` is a slippage-protection parameter: the deposit
     /// reverts with `SlippageExceeded` if the number of shares actually
@@ -338,17 +339,26 @@ impl YieldVaultContract {
         let tot_shares: i128 = env.storage().instance().get(&SHARES_KEY).unwrap_or(0);
         let tot_assets: i128 = env.storage().instance().get(&ASSETS_KEY).unwrap_or(0);
 
-        // SC-051: Use virtual shares/assets offset to prevent inflation attack.
-        // shares_minted = amount * (total_shares + VIRTUAL_OFFSET) / (total_assets + VIRTUAL_OFFSET)
-        // At genesis (both zero) this simplifies to amount * 1, identical to the prior formula.
-        let virtual_shares = tot_shares + VIRTUAL_OFFSET;
-        let virtual_assets = tot_assets + VIRTUAL_OFFSET;
+        // SC-051: Price the virtual shares at the current yield index. Keeping
+        // the virtual asset offset in sync with the index both protects the
+        // empty-vault exchange rate from donation attacks and makes the
+        // initial conversion equal amount * PRECISION / index.
+        let virtual_shares = tot_shares
+            .checked_add(VIRTUAL_OFFSET)
+            .expect("overflow");
+        let virtual_assets = VIRTUAL_OFFSET
+            .checked_mul(index)
+            .expect("overflow")
+            .checked_div(PRECISION)
+            .expect("divide by zero");
+        let share_pricing_assets = tot_assets
+            .checked_add(virtual_assets)
+            .expect("overflow");
         let shares = amount
             .checked_mul(virtual_shares)
             .expect("overflow")
-            .checked_div(virtual_assets)
+            .checked_div(share_pricing_assets)
             .expect("divide by zero");
-        let _ = index; // index still used by withdraw path; not needed here with virtual formula
         assert!(shares > 0, "deposit too small");
 
         // Slippage protection: reject the deposit if the shares actually
