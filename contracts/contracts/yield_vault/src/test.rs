@@ -85,6 +85,45 @@ fn test_deposit_mints_shares_at_initial_index() {
 }
 
 #[test]
+fn test_deposit_uses_current_index_for_empty_vault_shares() {
+    let (env, client, _contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    let index = client.yield_index();
+    assert!(index > PRECISION, "the seeded ledger should accrue yield");
+
+    // With no existing shares/assets, virtual shares and assets price the
+    // deposit at the current index while protecting the initial exchange rate.
+    let virtual_assets = VIRTUAL_OFFSET * index / PRECISION;
+    let expected_shares = amount * VIRTUAL_OFFSET / virtual_assets;
+    client.deposit(&depositor, &amount, &expected_shares);
+
+    assert_eq!(client.shares_of(&depositor), expected_shares);
+    assert!(expected_shares < amount);
+}
+
+#[test]
+fn test_deposit_uses_current_index_with_existing_vault_shares() {
+    let (env, client, _contract_id, _owner, first_depositor, token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&first_depositor, &amount, &0);
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    let index = client.yield_index();
+    let second_depositor = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&second_depositor, &amount);
+
+    let virtual_assets = VIRTUAL_OFFSET * index / PRECISION;
+    let expected_shares = amount * (client.total_shares() + VIRTUAL_OFFSET)
+        / (client.total_assets() + virtual_assets);
+    client.deposit(&second_depositor, &amount, &expected_shares);
+
+    assert_eq!(client.shares_of(&second_depositor), expected_shares);
+    assert!(expected_shares < amount);
+}
+
+#[test]
 #[ignore]
 fn test_deposit_rejects_zero_amount() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
