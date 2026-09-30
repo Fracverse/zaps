@@ -20,6 +20,7 @@ import {
 } from "@/lib/freighter";
 import { useSuperAdmin } from "@/lib/auth-context";
 import { api } from "@/lib/api";
+import EmergencyPauseControl from "@/components/EmergencyPauseControl";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
