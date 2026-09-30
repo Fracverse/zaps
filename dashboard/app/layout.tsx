@@ -1,33 +1,30 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { PrivyProvider } from "@privy-io/react-auth";
-import { ThemeProvider } from "next-themes";
-import { WalletProvider } from "@/lib/wallet-context";
-import { AuthProvider } from "@/lib/auth-context";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Zaps Merchant Dashboard",
   description: "Manage transactions, payouts, and analytics",
 };
 
+/**
+ * Root layout — Server Component.
+ *
+ * All client-side context providers live in <Providers> (providers.tsx),
+ * which carries the "use client" boundary. This keeps the layout itself
+ * server-renderable so `metadata` exports, future `fetch()` calls, and
+ * React Server Component optimisations all work as expected.
+ *
+ * Auth state is accessible in any client component via:
+ *   const { authenticated } = usePrivy();   // Privy session
+ *   const { token, role }   = useAuth();    // backend JWT / role
+ *   const isSuperAdmin      = useSuperAdmin();
+ */
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <PrivyProvider
-          appId={process.env.NEXT_PUBLIC_PRIVY_APP_ID || ""}
-          config={{
-            loginMethods: ["google", "apple", "email"],
-            appearance: { theme: "light" },
-          }}
-        >
-          <AuthProvider>
-            <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-              {/* #778 — one Freighter session for the whole app, restored on mount */}
-              <WalletProvider>{children}</WalletProvider>
-            </ThemeProvider>
-          </AuthProvider>
-        </PrivyProvider>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
