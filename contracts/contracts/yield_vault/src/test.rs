@@ -60,6 +60,43 @@ fn test_initialize_sets_defaults() {
 }
 
 #[test]
+fn test_initialize_stores_configuration_in_instance_storage() {
+    let (env, client, contract_id, owner, depositor, token) = setup();
+
+    env.as_contract(&contract_id, || {
+        assert_eq!(env.storage().instance().get(&OWNER_KEY), Some(owner));
+        assert_eq!(env.storage().instance().get(&TOKEN_KEY), Some(token));
+        assert_eq!(env.storage().instance().get(&APY_KEY), Some(APY_BPS));
+        assert_eq!(env.storage().instance().get(&SHARES_KEY), Some(0i128));
+        assert_eq!(env.storage().instance().get(&ASSETS_KEY), Some(0i128));
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&DataKey::UserShares(depositor)));
+    });
+
+    assert_eq!(client.apy(), APY_BPS);
+}
+
+#[test]
+fn test_deposit_keeps_user_shares_in_persistent_storage() {
+    let (env, client, contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&depositor, &amount, &0);
+
+    env.as_contract(&contract_id, || {
+        let user_shares_key = DataKey::UserShares(depositor);
+        assert_eq!(
+            env.storage().persistent().get(&user_shares_key),
+            Some(amount)
+        );
+        assert!(!env.storage().instance().has(&user_shares_key));
+        assert_eq!(env.storage().instance().get(&SHARES_KEY), Some(amount));
+        assert_eq!(env.storage().instance().get(&ASSETS_KEY), Some(amount));
+    });
+}
+
+#[test]
 #[ignore]
 fn test_initialize_twice_panics() {
     let (_env, client, _contract_id, owner, _depositor, token) = setup();
