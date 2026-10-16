@@ -454,26 +454,105 @@ function CopyButton({ text }: { text: string }) {
 function IdentityLinkGrid() {
   const [searchInput, setSearchInput] = useState("");
   const [committedQuery, setCommittedQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "pending" | "revoked">("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState<"linked_at" | "display_name" | "status">("linked_at");
+  const [sortAsc, setSortAsc] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const { data, loading, error, refresh } = usePolling(
-    () => api.identityLinks({ query: committedQuery || undefined, limit: 50 }),
+    () => api.identityLinks({
+      query: committedQuery || undefined,
+      limit: 50,
+      offset: (page - 1) * 50,
+    }),
     60_000,
-    [committedQuery]
+    [committedQuery, page]
   );
 
   const links: IdentityLink[] = data?.links ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / 50));
+
+  const filteredLinks = useMemo(() => {
+    let filtered = [...links];
+
+    if (statusFilter !== "all") {
+      filtered = filtered.filter((link) => link.status === statusFilter);
+    }
+
+    if (dateFrom) {
+      const from = new Date(dateFrom).getTime();
+      filtered = filtered.filter((link) => new Date(link.linked_at).getTime() >= from);
+    }
+
+    if (dateTo) {
+      const to = new Date(dateTo + "T23:59:59Z").getTime();
+      filtered = filtered.filter((link) => new Date(link.linked_at).getTime() <= to);
+    }
+
+    filtered.sort((a, b) => {
+      const cmp = sortKey === "linked_at"
+        ? new Date(a.linked_at).getTime() - new Date(b.linked_at).getTime()
+        : sortKey === "display_name"
+        ? (a.display_name || a.user_id).localeCompare(b.display_name || b.user_id)
+        : a.status.localeCompare(b.status);
+      return sortAsc ? cmp : -cmp;
+    });
+
+    return filtered;
+  }, [links, statusFilter, dateFrom, dateTo, sortKey, sortAsc]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setCommittedQuery(searchInput.trim());
+    setPage(1);
   };
 
   const clearSearch = () => {
     setSearchInput("");
     setCommittedQuery("");
+    setPage(1);
     searchRef.current?.focus();
   };
+
+  const handleExportCSV = () => {
+    const headers = ["User ID", "Privy DID", "Stellar Address", "Display Name", "Email", "Status", "Linked At"];
+    const csvRows = [headers.join(",")];
+    filteredLinks.forEach((link) => {
+      csvRows.push([
+        link.user_id,
+        link.privy_did,
+        link.stellar_address,
+        link.display_name ?? "",
+        link.email ?? "",
+        link.status,
+        link.linked_at,
+      ].map((v) => `"${v}"`).join(","));
+    });
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `identity-links-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const clearFilters = () => {
+    setSearchInput("");
+    setCommittedQuery("");
+    setStatusFilter("all");
+    setDateFrom("");
+    setDateTo("");
+    setPage(1);
+  };
+
+  const hasActiveFilters = committedQuery || statusFilter !== "all" || dateFrom || dateTo;
 
   return (
     <section className="mb-10" id="identity-link-grid">
@@ -487,22 +566,35 @@ function IdentityLinkGrid() {
             Maps Privy DID strings to verified Stellar wallet addresses
           </p>
         </div>
-        <form onSubmit={handleSearch} className="flex items-center gap-2">
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-            <input
-              ref={searchRef}
-              id="identity-search"
-              type="text"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search DID, Stellar address or username…"
-              className="pl-8 pr-8 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72"
-            />
-            {searchInput && (
-              <button
-                type="button"
-                onClick={clearSearch}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
+            title="Export to CSV"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" x2="12" y1="15" y2="3" />
+            </svg>
+            Export
+          </button>
+          <form onSubmit={handleSearch} className="flex items-center gap-2">
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                ref={searchRef}
+                id="identity-search"
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search DID, Stellar address or username…"
+                className="pl-8 pr-8 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72"
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
                 <X size={13} />
@@ -517,6 +609,63 @@ function IdentityLinkGrid() {
             Search
           </button>
         </form>
+      </div>
+
+      {/* Filter Controls */}
+      <div className="bg-white border border-slate-200 rounded-xl p-4 mb-4 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value as typeof statusFilter);
+                setPage(1);
+              }}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            >
+              <option value="all">All Statuses</option>
+              <option value="active">Active</option>
+              <option value="pending">Pending</option>
+              <option value="revoked">Revoked</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">From Date</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setDateFrom(e.target.value);
+                setPage(1);
+              }}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">To Date</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setDateTo(e.target.value);
+                setPage(1);
+              }}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="text-xs text-slate-500 hover:text-slate-800 underline underline-offset-2 transition-colors mt-5"
+            >
+              Clear filters
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-400 mt-5">
+            {filteredLinks.length} of {total} link{total !== 1 ? "s" : ""}
+          </span>
+        </div>
       </div>
 
       {error && (
@@ -536,12 +685,28 @@ function IdentityLinkGrid() {
               <th className="text-left px-5 py-3">
                 <span className="flex items-center gap-1"><Wallet size={11} /> Stellar Address</span>
               </th>
-              <th className="text-left px-5 py-3">Linked</th>
-              <th className="text-left px-5 py-3">Status</th>
+              <th
+                className="text-left px-5 py-3 cursor-pointer hover:text-slate-700 select-none"
+                onClick={() => {
+                  if (sortKey === "linked_at") setSortAsc(!sortAsc);
+                  else { setSortKey("linked_at"); setSortAsc(true); }
+                }}
+              >
+                Linked {sortKey === "linked_at" ? (sortAsc ? "↑" : "↓") : ""}
+              </th>
+              <th
+                className="text-left px-5 py-3 cursor-pointer hover:text-slate-700 select-none"
+                onClick={() => {
+                  if (sortKey === "status") setSortAsc(!sortAsc);
+                  else { setSortKey("status"); setSortAsc(true); }
+                }}
+              >
+                Status {sortKey === "status" ? (sortAsc ? "↑" : "↓") : ""}
+              </th>
             </tr>
           </thead>
           <tbody>
-            {loading && links.length === 0 ? (
+            {loading && filteredLinks.length === 0 ? (
               Array.from({ length: 5 }).map((_, row) => (
                 <tr key={row} className="border-t border-slate-100">
                   {Array.from({ length: 5 }).map((__, col) => (
@@ -551,16 +716,16 @@ function IdentityLinkGrid() {
                   ))}
                 </tr>
               ))
-            ) : links.length === 0 ? (
+            ) : filteredLinks.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-5 py-10 text-center text-slate-400 text-sm">
-                  {committedQuery
-                    ? `No identity links match "${committedQuery}"`
+                  {hasActiveFilters
+                    ? "No identity links match your filters"
                     : "No identity links found — ensure the backend admin API is connected"}
                 </td>
               </tr>
             ) : (
-              links.map((link) => (
+              filteredLinks.map((link) => (
                 <tr
                   key={link.user_id}
                   className="border-t border-slate-100 hover:bg-slate-50 transition-colors"
@@ -609,20 +774,70 @@ function IdentityLinkGrid() {
           </tbody>
         </table>
 
-        {links.length > 0 && (
+        {filteredLinks.length > 0 && (
           <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
             <p className="text-xs text-slate-400">
-              Showing {links.length}
-              {data?.total != null && data.total > links.length ? ` of ${data.total}` : ""}{" "}
-              identity link{links.length !== 1 ? "s" : ""}
-              {committedQuery && ` matching "${committedQuery}"`}
+              Showing {filteredLinks.length} of {total} identity link{total !== 1 ? "s" : ""}
+              {hasActiveFilters && " (filtered)"}
             </p>
-            <button
-              onClick={refresh}
-              className="text-xs text-slate-400 hover:text-slate-700 transition-colors"
-            >
-              Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={refresh}
+                className="text-xs text-slate-400 hover:text-slate-700 transition-colors"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              Page {page} of {totalPages}
+            </p>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                ‹ Prev
+              </button>
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                let pageNum;
+                if (totalPages <= 5) {
+                  pageNum = i + 1;
+                } else if (page <= 3) {
+                  pageNum = i + 1;
+                } else if (page >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i;
+                } else {
+                  pageNum = page - 2 + i;
+                }
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                      pageNum === page
+                        ? "border-indigo-600 bg-indigo-600 text-white"
+                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next ›
+              </button>
+            </div>
           </div>
         )}
       </div>

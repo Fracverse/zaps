@@ -662,6 +662,9 @@ export default function YieldPage() {
   const [apyHistory, setApyHistory] = useState<{ date: string; apy: number }[]>([]);
   const [apyLoading, setApyLoading] = useState(false);
   const [apyError, setApyError] = useState<string | null>(null);
+  const [timeRange, setTimeRange] = useState<"7d" | "30d" | "90d" | "all">("30d");
+  const [customDateFrom, setCustomDateFrom] = useState("");
+  const [customDateTo, setCustomDateTo] = useState("");
 
   useEffect(() => {
     if (tab !== "apy-history") return;
@@ -691,6 +694,40 @@ export default function YieldPage() {
       cancelled = true;
     };
   }, [tab]);
+
+  const filteredApyHistory = useMemo(() => {
+    if (timeRange === "all") return apyHistory;
+
+    const now = new Date();
+    const cutoffDate = new Date();
+
+    switch (timeRange) {
+      case "7d":
+        cutoffDate.setDate(now.getDate() - 7);
+        break;
+      case "30d":
+        cutoffDate.setDate(now.getDate() - 30);
+        break;
+      case "90d":
+        cutoffDate.setDate(now.getDate() - 90);
+        break;
+    }
+
+    return apyHistory.filter((item) => new Date(item.date) >= cutoffDate);
+  }, [apyHistory, timeRange]);
+
+  const customFilteredApyHistory = useMemo(() => {
+    if (!customDateFrom && !customDateTo) return filteredApyHistory;
+
+    return filteredApyHistory.filter((item) => {
+      const itemDate = new Date(item.date);
+      if (customDateFrom && itemDate < new Date(customDateFrom)) return false;
+      if (customDateTo && itemDate > new Date(customDateTo)) return false;
+      return true;
+    });
+  }, [filteredApyHistory, customDateFrom, customDateTo]);
+
+  const displayData = (customDateFrom || customDateTo) ? customFilteredApyHistory : filteredApyHistory;
 
   // ── Summary stats
   const stats = useMemo(() => {
@@ -1616,8 +1653,57 @@ export default function YieldPage() {
       {/* ── APY History Tab ──────────────────────────────────────────────────── */}
       {tab === "apy-history" && (
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-          <h2 className="font-semibold text-slate-800 mb-1">APY Rate History</h2>
-          <p className="text-xs text-slate-500 mb-4">Historical APY rate trends over time.</p>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-slate-800 mb-1">APY Rate History</h2>
+              <p className="text-xs text-slate-500">Historical APY rate trends over time.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={timeRange}
+                onChange={(e) => setTimeRange(e.target.value as typeof timeRange)}
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+              >
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+                <option value="all">All time</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Custom Date Range */}
+          <div className="flex items-center gap-3 mb-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
+              <input
+                type="date"
+                value={customDateFrom}
+                onChange={(e) => setCustomDateFrom(e.target.value)}
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">To</label>
+              <input
+                type="date"
+                value={customDateTo}
+                onChange={(e) => setCustomDateTo(e.target.value)}
+                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            {(customDateFrom || customDateTo) && (
+              <button
+                onClick={() => {
+                  setCustomDateFrom("");
+                  setCustomDateTo("");
+                }}
+                className="text-xs text-slate-500 hover:text-slate-800 underline underline-offset-2 transition-colors mt-5"
+              >
+                Clear custom range
+              </button>
+            )}
+          </div>
 
           {apyError && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
@@ -1627,14 +1713,14 @@ export default function YieldPage() {
 
           {apyLoading ? (
             <div className="h-80 animate-pulse rounded-lg bg-slate-100" />
-          ) : apyHistory.length === 0 ? (
+          ) : displayData.length === 0 ? (
             <div className="h-80 flex items-center justify-center text-slate-400 text-sm">
-              No rate history available
+              No rate history available for selected range
             </div>
           ) : (
             <div className="h-80 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={apyHistory} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <AreaChart data={displayData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="apyGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.3} />
@@ -1677,6 +1763,11 @@ export default function YieldPage() {
               </ResponsiveContainer>
             </div>
           )}
+
+          <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
+            <span>Showing {displayData.length} data point{displayData.length !== 1 ? "s" : ""}</span>
+            <span>Avg APY: {displayData.length > 0 ? (displayData.reduce((sum, d) => sum + d.apy, 0) / displayData.length).toFixed(2) : "—"}%</span>
+          </div>
         </div>
       )}
     </div>
