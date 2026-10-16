@@ -1099,12 +1099,13 @@ function fileBasename(name: string): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// SDP Status Integration Indicator (#794)
+// SDP Status Integration Indicator (#794 / #1042)
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**
  * Stellar Disbursement Platform (SDP) server sync status indicator.
  * Polls `api.getSdpStatus()` and displays real-time sync badge.
+ * Shows 'Synced' when status is operational/synced/ok (#1042).
  */
 export function SdpStatusIndicator() {
   const { data, loading, error } = usePolling<SdpStatusResponse>(
