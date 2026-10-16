@@ -1,19 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePrivy } from "@privy-io/react-auth";
 import Sidebar from "@/components/Sidebar";
 import SearchBar from "@/components/SearchBar";
 import ThemeSelector from "@/components/ThemeSelector";
 import NotificationBell from "@/components/NotificationBell";
-import CommandPalette from "@/components/CommandPalette";
+import CommandPalette, { NAV_ITEMS } from "@/components/CommandPalette";
 import MobileNavDrawer from "@/components/MobileNavDrawer";
 import { NotificationsProvider } from "@/lib/notifications-context";
 import HealthStatusIndicator from "@/components/HealthStatusIndicator";
 
+/** Typing in a form field must never trigger navigation shortcuts. */
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+  );
+}
+
 function DashboardShell({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // #1041 — timestamp of the last bare "g" press, for `g` + key tab shortcuts
+  const pendingGRef = useRef(0);
   // #808 — mobile drawer, only reachable below the md breakpoint
   const [navOpen, setNavOpen] = useState(false);
 
@@ -22,8 +34,23 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
     if ((e.metaKey || e.ctrlKey) && e.key === "k") {
       e.preventDefault();
       setPaletteOpen((prev) => !prev);
+      return;
     }
-  }, []);
+
+    // #1041 — `g` then a tab key (see NAV_ITEMS) jumps between dashboard tabs
+    if (paletteOpen || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+    const key = e.key.toLowerCase();
+    if (Date.now() - pendingGRef.current < 1000) {
+      pendingGRef.current = 0;
+      const item = NAV_ITEMS.find((nav) => nav.shortcut === key);
+      if (item) {
+        e.preventDefault();
+        router.push(item.href);
+      }
+      return;
+    }
+    if (key === "g" && !e.shiftKey) pendingGRef.current = Date.now();
+  }, [paletteOpen, router]);
 
   useEffect(() => {
     document.addEventListener("keydown", handleKeyDown);
