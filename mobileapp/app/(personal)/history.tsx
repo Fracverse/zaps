@@ -183,16 +183,16 @@ const TransactionRow = React.memo(function TransactionRow({
             {isMassPayout && item.senderName ? item.senderName : label}
           </Text>
           {isMassPayout && (
-            <View style={styles.massPayoutBadge}>
-              <Ionicons name="people" size={10} color="#7C3AED" />
-              <Text style={styles.massPayoutBadgeText}>Mass Payout</Text>
+            <View style={styles.massPayoutBadge} testID="sdp-disbursement-badge">
+              <Ionicons name="shield-checkmark" size={10} color="#7C3AED" />
+              <Text style={styles.massPayoutBadgeText}>SDP Disbursement</Text>
             </View>
           )}
         </View>
         {/* Anchor/sender info for SDP disbursements */}
-        {isMassPayout && item.senderAnchor && (
-          <Text style={styles.senderAnchor} numberOfLines={1}>
-            via {item.senderAnchor}
+        {isMassPayout && (
+          <Text style={styles.senderAnchor} numberOfLines={1} testID="sender-anchor-info">
+            {item.senderAnchor ? `via ${item.senderAnchor}` : "Stellar Disbursement Platform"}
           </Text>
         )}
         <View style={styles.txMeta}>

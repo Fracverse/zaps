@@ -3,6 +3,10 @@ import {
   completePrivySignup,
   linkPrivyAddress,
   stellarAddressFromPrivyPublicKey,
+  getRecentRecipients,
+  saveRecentRecipient,
+  getCachedRecentRecipientsSync,
+  clearRecentRecipientsCache,
 } from "../src/services/api";
 
 jest.mock("@react-native-async-storage/async-storage", () => ({
@@ -179,5 +183,50 @@ describe("Privy signup API service", () => {
     ).rejects.toThrow("Privy token verification failed");
 
     expect(mockAsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+});
+
+describe("Recent recipient local cache helper (Issue #914)", () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await clearRecentRecipientsCache();
+  });
+
+  it("stores and fetches recent recipients from local persistent storage", async () => {
+    await saveRecentRecipient("alice.zaps");
+    await saveRecentRecipient("bob.zaps");
+
+    const cached = await getRecentRecipients();
+    expect(cached).toEqual(["bob.zaps", "alice.zaps"]);
+    expect(mockAsyncStorage.setItem).toHaveBeenCalledWith(
+      "recent_recipient_usernames",
+      JSON.stringify(["bob.zaps", "alice.zaps"])
+    );
+  });
+
+  it("fetches from cache instantly without waiting for network", () => {
+    saveRecentRecipient("instant.zaps");
+    const syncResult = getCachedRecentRecipientsSync();
+    expect(syncResult).toContain("instant.zaps");
+  });
+
+  it("limits cached contacts to 20 maximum", async () => {
+    for (let i = 1; i <= 25; i++) {
+      await saveRecentRecipient(`user${i}.zaps`);
+    }
+
+    const cached = await getRecentRecipients();
+    expect(cached.length).toBe(20);
+    expect(cached[0]).toBe("user25.zaps");
+    expect(cached).not.toContain("user1.zaps");
+  });
+
+  it("deduplicates and moves re-used recipient to the top", async () => {
+    await saveRecentRecipient("user1.zaps");
+    await saveRecentRecipient("user2.zaps");
+    await saveRecentRecipient("user1.zaps");
+
+    const cached = await getRecentRecipients();
+    expect(cached).toEqual(["user1.zaps", "user2.zaps"]);
   });
 });

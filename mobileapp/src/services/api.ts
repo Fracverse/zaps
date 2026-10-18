@@ -149,37 +149,66 @@ export async function apiFetch(
   return response;
 }
 
-// ── Recent recipients (unchanged; still uses AsyncStorage for non-sensitive data) ──
-
+// Local cache for frequently paid usernames with AsyncStorage persistence
 const RECENT_RECIPIENTS_KEY = "recent_recipient_usernames";
 const MAX_RECENT_RECIPIENTS = 20;
 
+let inMemoryRecentRecipients: string[] | null = null;
+
+export function getCachedRecentRecipientsSync(): string[] {
+  return inMemoryRecentRecipients ? [...inMemoryRecentRecipients] : [];
+}
+
 export async function getRecentRecipients(): Promise<string[]> {
+  if (inMemoryRecentRecipients !== null) {
+    return [...inMemoryRecentRecipients];
+  }
   try {
     const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+    inMemoryRecentRecipients = Array.isArray(parsed)
+      ? parsed.slice(0, MAX_RECENT_RECIPIENTS)
+      : [];
+    return [...inMemoryRecentRecipients];
   } catch {
     return [];
   }
 }
 
 export async function saveRecentRecipient(username: string): Promise<void> {
-  if (!username) return;
+  const trimmed = username ? username.trim() : "";
+  if (!trimmed) return;
   try {
-    const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
-    const current = raw ? (JSON.parse(raw) as string[]) : [];
+    let current = inMemoryRecentRecipients;
+    if (current === null) {
+      const raw = await AsyncStorage.getItem(RECENT_RECIPIENTS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as string[]) : [];
+      current = Array.isArray(parsed) ? parsed : [];
+    }
     const next = [
-      username,
-      ...current.filter((item) => item !== username),
+      trimmed,
+      ...current.filter((item) => item.toLowerCase() !== trimmed.toLowerCase()),
     ].slice(0, MAX_RECENT_RECIPIENTS);
+    inMemoryRecentRecipients = next;
     await AsyncStorage.setItem(RECENT_RECIPIENTS_KEY, JSON.stringify(next));
   } catch {
-    // Ignore cache failures.
+    // Ignore cache failures
   }
 }
 
-// ── Yield API ─────────────────────────────────────────────────────────────────
+export const cacheRecentRecipient = saveRecentRecipient;
+export const getFrequentlyPaidUsernames = getRecentRecipients;
 
+export async function clearRecentRecipientsCache(): Promise<void> {
+  inMemoryRecentRecipients = [];
+  try {
+    await AsyncStorage.removeItem(RECENT_RECIPIENTS_KEY);
+  } catch {
+    // Ignore cache failures
+  }
+}
+
+// Yield API
 export interface YieldBalance {
   apy: string | number;
   totalYieldEarned: string | number;
@@ -197,12 +226,18 @@ export async function fetchYieldBalance(): Promise<YieldBalance> {
 
 export async function updateAutoEarn(enabled: boolean): Promise<void> {
   try {
-    await apiFetch(`${API_BASE}/api/yield/auto-earn`, {
-      method: "PATCH",
+    const res = await apiFetch(`${API_BASE}/api/yield/toggle-auto`, {
+      method: "POST",
       body: JSON.stringify({ enabled }),
     });
+    if (!res.ok) {
+      await apiFetch(`${API_BASE}/api/yield/auto-earn`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }).catch(() => {});
+    }
   } catch {
-    // Non-fatal — local state already reflects the toggle
+    // Non-fatal: local state already reflects the toggle
   }
 }
 
