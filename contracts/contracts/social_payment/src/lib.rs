@@ -303,6 +303,14 @@ impl SocialPaymentContract {
             .expect("naira token not initialized")
     }
 
+    /// #1058: Admin-only entrypoint used by the dashboard system configuration
+    /// page to adjust the Naira stablecoin transaction fee coefficient.
+    ///
+    /// `fee_coef` is expressed in basis points (1 bps = 0.01%), so 10 = 0.1%.
+    /// Requires the stored admin's authorization, rejects values above 10000
+    /// (100%), persists the new coefficient under `FEE_COEFF_KEY`, and emits a
+    /// `FeeCoefficientUpdated` event carrying the old and new values so
+    /// off-chain indexers can track fee schedule changes.
     pub fn set_fee_coefficient(env: Env, fee_coef: u32) {
         let admin: Address = env
             .storage()
@@ -313,7 +321,16 @@ impl SocialPaymentContract {
         if fee_coef > 10000 {
             panic!("fee coefficient cannot exceed 10000 basis points");
         }
+        let old_fee_coef = env
+            .storage()
+            .instance()
+            .get(&FEE_COEFF_KEY)
+            .unwrap_or(10u32);
         env.storage().instance().set(&FEE_COEFF_KEY, &fee_coef);
+        env.events().publish(
+            (Symbol::new(&env, "FeeCoefficientUpdated"),),
+            (admin, old_fee_coef, fee_coef),
+        );
     }
 
     pub fn fee_coefficient(env: Env) -> u32 {
