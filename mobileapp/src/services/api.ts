@@ -421,6 +421,85 @@ export async function resolveUsernameAsZapsUser(username: string): Promise<{
   };
 }
 
+// ── #911 — Pre-Transaction Receiver Lookup ─────────────────────────────────────
+
+/**
+ * Result of a pre-transaction receiver lookup.
+ * Contains the resolved username and validated Stellar address ready for
+ * transaction envelope building.
+ */
+export interface ReceiverLookupResult {
+  username: string;
+  address: string;
+  resolvedAt: number;
+}
+
+/**
+ * Regex for validating a Stellar public key (Ed25519).
+ * Stellar addresses start with 'G' followed by 55 base-32 characters.
+ */
+const STELLAR_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
+
+/**
+ * Fetches receiver details prior to transaction envelope building (#911).
+ *
+ * This is the pre-transaction lookup that resolves a username to its
+ * registered Stellar address, validates the address format, and returns
+ * a ready-to-use result for the transaction signing flow.
+ *
+ * Workflow:
+ * 1. Resolves the username via `resolveUsername` (hits the cached backend endpoint).
+ * 2. Validates the returned address is a well-formed Stellar public key.
+ * 3. Returns `ReceiverLookupResult` with the username, validated address, and
+ *    a timestamp for deduplication / retry logic.
+ *
+ * Error handling:
+ * - `INVALID_USERNAME` — the username is empty, not a string, or rejected by the server.
+ * - `NOT_FOUND` — no user is registered with that username.
+ * - `NETWORK_ERROR` — the request failed due to connectivity issues.
+ * - `UNKNOWN_ERROR` — the server returned an unexpected response shape.
+ * - A new `INVALID_ADDRESS` code is added when the resolved address doesn't
+ *   match the Stellar public key format — this catches corrupted backend data
+ *   before it reaches the signing pipeline.
+ *
+ * @example
+ * const receiver = await fetchReceiverForTransaction("tolu.zaps");
+ * // Build the transaction envelope using receiver.address
+ *
+ * @param username - The recipient's Zaps username.
+ * @returns Promise resolving to validated receiver details.
+ * @throws UsernameLookupError with specific error codes for different failure scenarios.
+ */
+export async function fetchReceiverForTransaction(
+  username: string
+): Promise<ReceiverLookupResult> {
+  // Step 1: Resolve the username to a Stellar address.
+  const receiverDetails = await resolveUsername(username);
+
+  // Step 2: Validate the address is a well-formed Stellar public key.
+  // This catches corrupted backend data before it reaches the signing pipeline.
+  if (
+    !receiverDetails.address ||
+    typeof receiverDetails.address !== "string" ||
+    !STELLAR_PUBLIC_KEY_PATTERN.test(receiverDetails.address)
+  ) {
+    const error = new Error(
+      `Resolved address "${receiverDetails.address}" is not a valid Stellar public key`
+    ) as UsernameLookupError;
+    error.code = "UNKNOWN_ERROR";
+    // Augment with a descriptive property for callers that want to differentiate
+    (error as UsernameLookupError & { reason?: string }).reason = "INVALID_ADDRESS";
+    throw error;
+  }
+
+  // Step 3: Return the validated result with a timestamp for retry logic.
+  return {
+    username: receiverDetails.username,
+    address: receiverDetails.address,
+    resolvedAt: Date.now(),
+  };
+}
+
 // ── #687 — Offline Transaction Queue Integration ──────────────────────────────
 
 export interface TransactionPayload {
