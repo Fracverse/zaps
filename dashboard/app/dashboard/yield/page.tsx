@@ -543,10 +543,14 @@ export default function YieldPage() {
   const [sortAsc, setSortAsc] = useState(false);
   const [page, setPage] = useState(1);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [totalFromApi, setTotalFromApi] = useState<number | null>(null);
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   // Fetch audit log entries from database endpoints (#1012)
   const fetchAuditHistory = useCallback(async () => {
     setAuditLoading(true);
+    setAuditError(null);
     try {
       const res = await api.yieldAuditLogs({
         q: search.trim() || undefined,
@@ -555,6 +559,12 @@ export default function YieldPage() {
         to: dateTo || undefined,
         limit: 50,
       });
+
+      if (res && typeof res.total === "number") {
+        setTotalFromApi(res.total);
+      } else {
+        setTotalFromApi(null);
+      }
 
       if (res && Array.isArray(res.items) && res.items.length > 0) {
         const mapped: YieldTx[] = res.items.map((item) => ({
@@ -583,8 +593,12 @@ export default function YieldPage() {
           return [...uniqueConfigs, ...mapped];
         });
       }
-    } catch {
+    } catch (err) {
       // Backend database offline: graceful local query filtering over ledger history
+      setTotalFromApi(null);
+      setAuditError(
+        err instanceof Error ? err.message : "Failed to load audit history from database",
+      );
     } finally {
       setAuditLoading(false);
     }
@@ -638,6 +652,18 @@ export default function YieldPage() {
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const copyHash = useCallback(async (hash: string) => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(hash);
+        setCopiedHash(hash);
+        setTimeout(() => setCopiedHash((cur) => (cur === hash ? null : cur)), 1500);
+      }
+    } catch {
+      // Clipboard unavailable — silently ignore
+    }
+  }, []);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortAsc((v) => !v);
@@ -1438,9 +1464,22 @@ export default function YieldPage() {
 
               <span className="ml-auto text-xs text-slate-400 shrink-0">
                 {filtered.length} record{filtered.length !== 1 ? "s" : ""}
+                {totalFromApi != null && totalFromApi !== filtered.length
+                  ? ` of ${totalFromApi}`
+                  : ""}
               </span>
             </div>
           </div>
+
+          {auditError && (
+            <div
+              role="alert"
+              data-testid="audit-error"
+              className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"
+            >
+              {auditError} — showing locally cached ledger history.
+            </div>
+          )}
 
           {/* Table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
@@ -1488,7 +1527,26 @@ export default function YieldPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {paginated.length === 0 ? (
+                  {auditLoading && paginated.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                        <span className="inline-flex items-center gap-2">
+                          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                          </svg>
+                          Loading audit history…
+                        </span>
+                      </td>
+                    </tr>
+                  ) : paginated.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
                         No transactions match your filters
@@ -1509,9 +1567,22 @@ export default function YieldPage() {
                               className="flex items-center px-4 py-3 cursor-pointer select-none"
                             >
                               <div className="w-[18%] font-mono text-xs text-slate-500 whitespace-nowrap">
-                                <span title={tx.txHash}>
-                                  {tx.txHash.slice(0, 10)}…{tx.txHash.slice(-6)}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyHash(tx.txHash);
+                                  }}
+                                  title={`Copy ${tx.txHash}`}
+                                  className="inline-flex items-center gap-1 hover:text-indigo-600 transition-colors"
+                                >
+                                  <span>
+                                    {tx.txHash.slice(0, 10)}…{tx.txHash.slice(-6)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {copiedHash === tx.txHash ? "✓" : "⧉"}
+                                  </span>
+                                </button>
                               </div>
                               <div className="w-[18%] text-slate-600 whitespace-nowrap">
                                 <div>{format(new Date(tx.timestamp), "MMM d, yyyy")}</div>
@@ -1537,6 +1608,11 @@ export default function YieldPage() {
                                       maximumFractionDigits: 4,
                                     })
                                   : "—"}
+                                {tx.tokenVolume > 0 && tx.asset && tx.asset !== "—" && (
+                                  <span className="ml-1 text-xs font-normal text-slate-400">
+                                    {tx.asset}
+                                  </span>
+                                )}
                               </div>
                               <div className="w-[7%] text-slate-500">{tx.asset}</div>
                               <div className="w-[7%] font-mono text-xs text-slate-500">
@@ -1614,6 +1690,7 @@ export default function YieldPage() {
               <div className="border-t border-slate-100 px-4 py-3 flex items-center justify-between">
                 <p className="text-xs text-slate-500">
                   Page {page} of {totalPages} · {filtered.length} records
+                  {totalFromApi != null ? ` (${totalFromApi} total in database)` : ""}
                 </p>
                 <div className="flex gap-1">
                   <button

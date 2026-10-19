@@ -1027,14 +1027,22 @@ export default function HomeScreen() {
             </View>
             <View style={styles.autoEarnTitleWrap}>
               <View style={styles.autoEarnTitleRow}>
-                <Text style={styles.autoEarnCardTitle}>
-                  Auto-Earn on Idle Funds
-                </Text>
                 <TouchableOpacity
                   onPress={openAutoEarnDescModal}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Learn about Auto-Earn"
+                  activeOpacity={0.8}
+                  accessibilityLabel="Learn about Auto-Earn yield rules"
                   accessibilityRole="button"
+                >
+                  <Text style={styles.autoEarnCardTitle}>
+                    Auto-Earn on Idle Funds
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={toggleAutoEarnTooltip}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Quick definition tooltip"
+                  accessibilityRole="button"
+                  testID="auto-earn-tooltip-trigger"
                 >
                   <Ionicons
                     name="information-circle-outline"
@@ -1051,7 +1059,13 @@ export default function HomeScreen() {
             </View>
             <Switch
               value={autoYieldEnabled}
-              onValueChange={handleAutoYieldToggle}
+              onValueChange={(val: boolean) => {
+                if (val) {
+                  openAutoEarnDescModal();
+                } else {
+                  void handleAutoYieldToggle(false);
+                }
+              }}
               disabled={autoEarnSyncing}
               trackColor={{ false: "#E2E8F0", true: "#34D399" }}
               thumbColor={COLORS.white}
@@ -1059,6 +1073,19 @@ export default function HomeScreen() {
               accessibilityRole="switch"
             />
           </View>
+          {autoEarnTooltipVisible && (
+            <View style={styles.autoEarnTooltip} testID="auto-earn-tooltip">
+              <Ionicons
+                name="information-circle"
+                size={16}
+                color="#166534"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.autoEarnTooltipText}>
+                Auto-Earn automatically sweeps idle funds into yield-earning vaults at competitive APYs while remaining instantly spendable.
+              </Text>
+            </View>
+          )}
           {autoEarnSyncing && (
             <View style={styles.autoEarnSyncingRow}>
               <Ionicons name="sync" size={13} color="#64748B" />

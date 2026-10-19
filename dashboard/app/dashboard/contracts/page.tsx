@@ -3,8 +3,13 @@ import { useMemo, useState, useCallback, useRef } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api, IdentityLink } from "@/lib/api";
 import { useSuperAdmin } from "@/lib/auth-context";
+import { useWallet } from "@/lib/wallet-context";
 import StatCard from "@/components/StatCard";
 import { X, Shield, AlertTriangle, Search, Copy, Check, Link2, Wallet } from "lucide-react";
+
+const STELLAR_NETWORK_PASSPHRASE =
+  process.env.NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE ??
+  "Test SDF Network ; September 2015";
 
 function severityColor(severity: string) {
   if (severity === "critical") return "bg-red-50 border-red-200 text-red-800";
@@ -17,6 +22,9 @@ function severityColor(severity: string) {
 function FeeConfigPanel() {
   // #786 — superadmin-only action
   const isSuperAdmin = useSuperAdmin();
+  // #1058 — on-chain submission requires a connected wallet
+  const wallet = useWallet();
+  const isWalletConnected = Boolean(wallet?.isConnected && wallet?.address);
   const config = usePolling(() => api.contractConfig(), 30000);
   const currentFee = config.data?.fee_coefficient;
 
@@ -39,18 +47,38 @@ function FeeConfigPanel() {
     ? `${(basisPoints / 100).toFixed(2)}%`
     : null;
 
+  const canSubmit =
+    isSuperAdmin && isWalletConnected && isValid && status.kind !== "submitting";
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!isValid) return;
+    if (!canSubmit) return;
     setStatus({ kind: "submitting" });
     try {
+      // 1. Build the contract-invocation XDR for the payment contract's
+      //    set_fee_coefficient method (backend builder endpoint).
+      const { xdr } = await api.buildSetFeeCoefficientTx(basisPoints);
+
+      // 2. Sign with the connected wallet.
+      const signedXdr = await wallet.signTransaction(
+        xdr,
+        STELLAR_NETWORK_PASSPHRASE
+      );
+
+      // 3. Submit the signed transaction on-chain.
+      const submitted = await api.submitTransaction(signedXdr);
+
+      // 4. Persist / refresh state only after the on-chain tx succeeds.
       const result = await api.setFeeCoefficient(basisPoints);
+
       setInputValue("");
       setStatus({
         kind: "success",
         newValue: result.fee_coefficient,
-        txHash: result.tx_hash,
+        txHash: submitted.tx_hash ?? result.tx_hash,
       });
+      // Refresh the displayed current value.
+      config.refresh();
     } catch (err) {
       setStatus({
         kind: "error",
@@ -98,6 +126,17 @@ function FeeConfigPanel() {
               🔒 Superadmin access required to update the fee coefficient.
             </div>
           )}
+          {/* #1058 — wallet connection notice */}
+          {isSuperAdmin && !isWalletConnected && (
+            <div
+              role="alert"
+              data-testid="fee-wallet-required"
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+            >
+              🔌 Connect your wallet to submit the fee coefficient update
+              on-chain.
+            </div>
+          )}
           <div>
             <label
               htmlFor="fee-coefficient-input"
@@ -118,9 +157,15 @@ function FeeConfigPanel() {
                   if (status.kind !== "idle") setStatus({ kind: "idle" });
                 }}
                 placeholder="e.g. 50"
-                disabled={!isSuperAdmin || status.kind === "submitting"}
-                aria-disabled={!isSuperAdmin}
-                title={!isSuperAdmin ? "Superadmin access required" : undefined}
+                disabled={!canSubmit}
+                aria-disabled={!canSubmit}
+                title={
+                  !isSuperAdmin
+                    ? "Superadmin access required"
+                    : !isWalletConnected
+                    ? "Connect your wallet to submit"
+                    : undefined
+                }
                 className="w-32 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900
                            focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200
                            disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
@@ -137,9 +182,15 @@ function FeeConfigPanel() {
             id="fee-coefficient-submit"
             type="submit"
             data-testid="fee-coefficient-submit"
-            disabled={!isSuperAdmin || !isValid || status.kind === "submitting"}
-            title={!isSuperAdmin ? "Superadmin access required" : undefined}
-            aria-disabled={!isSuperAdmin}
+            disabled={!canSubmit}
+            title={
+              !isSuperAdmin
+                ? "Superadmin access required"
+                : !isWalletConnected
+                ? "Connect your wallet to submit"
+                : undefined
+            }
+            aria-disabled={!canSubmit}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm
                        font-medium text-white hover:bg-indigo-700 active:bg-indigo-800
                        disabled:cursor-not-allowed disabled:opacity-50 transition-colors"

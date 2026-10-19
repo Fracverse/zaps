@@ -44,7 +44,11 @@ import {
   StellarWalletState,
   type TransactionFeeEstimate,
 } from "../src/services/stellarWallet";
-import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+import {
+  getCachedRecentRecipientsSync,
+  getRecentRecipients,
+  saveRecentRecipient,
+} from "../src/services/api";
 import { isFederatedAddress } from "../src/utils/sep0007";
 // #580 — Biometric Verification Overlay
 import { authenticateWithBiometrics } from "./biometric";
@@ -316,7 +320,9 @@ function TransferScreen() {
 
   // Recipient search state
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
-  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>(() =>
+    getCachedRecentRecipientsSync()
+  );
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
@@ -399,12 +405,27 @@ function TransferScreen() {
         setUsernameStatus("idle");
         return;
       }
-      const body: { username: string; address: string; is_blacklisted?: boolean } =
-        await res.json();
+      const body: {
+        username: string;
+        address: string;
+        is_blacklisted?: boolean;
+        display_name?: string;
+        name?: string;
+        avatar_url?: string;
+        is_verified?: boolean;
+      } = await res.json();
       if (body.is_blacklisted) {
         setUsernameStatus("blacklisted");
       } else {
         setUsernameStatus("registered");
+        setSelectedUser((prev: ZapsUser | null) => ({
+          username: body.username,
+          address: body.address,
+          avatar_url: body.avatar_url ?? prev?.avatar_url ?? null,
+          name: body.display_name ?? body.name ?? prev?.name ?? null,
+          display_name: body.display_name ?? prev?.display_name ?? null,
+          isVerified: body.is_verified ?? prev?.isVerified ?? false,
+        }));
       }
     } catch {
       // Network error — don't block the user from proceeding
@@ -524,6 +545,8 @@ function TransferScreen() {
     setRecipient(contact.username);
     setSelectedUser({
       username: contact.username,
+      name: contact.contactName,
+      display_name: contact.contactName,
       address: contact.address,
       avatar_url: contact.avatarUrl ?? null,
       isVerified: false,
@@ -658,6 +681,63 @@ function TransferScreen() {
     []
   );
 
+  const processConfirmedTransfer = async () => {
+    // Biometric Verification Overlay
+    // Gate the payment submission behind biometric / passcode authentication.
+    // The transfer is blocked unless the user successfully authenticates.
+    const biometricResult = await authenticateWithBiometrics(
+      "Verify your identity to confirm the transfer"
+    );
+
+    if (!biometricResult.success) {
+      if (biometricResult.reason === "cancelled") {
+        return;
+      }
+      Alert.alert(
+        "Authentication Required",
+        "You must verify your identity before sending a payment. Please try again.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const assetIssuer =
+        token.symbol !== "XLM"
+          ? STELLAR_ASSET_ISSUERS[token.symbol]
+          : undefined;
+      const result = await submitPayment(
+        recipient,
+        amount,
+        walletState!.source!,
+        walletState!.publicKey,
+        token.symbol,
+        assetIssuer,
+        description || undefined
+      );
+      const stored = await AsyncStorage.getItem("pending_transfers");
+      const list = stored ? JSON.parse(stored) : [];
+      list.unshift({
+        recipient,
+        amount,
+        description: description || "Sent money",
+        visibility,
+        token: token.symbol,
+        hash: result.hash,
+      });
+      await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
+      await saveRecentRecipient(recipient);
+    } catch (e) {
+      Alert.alert("Transfer Failed", (e as Error).message);
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setStep(4);
+  };
+
   const handleNext = async () => {
     if (step === 0 && transferType === "BATCH") {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -676,61 +756,27 @@ function TransferScreen() {
     }
 
     if (step === 3) {
-      // #580 — Biometric Verification Overlay
-      // Gate the payment submission behind biometric / passcode authentication.
-      // The transfer is blocked unless the user successfully authenticates.
-      const biometricResult = await authenticateWithBiometrics(
-        "Verify your identity to confirm the transfer"
+      const recipientDisplayName =
+        selectedUser?.name ||
+        selectedUser?.display_name ||
+        selectedUser?.real_name;
+      const recipientLabel = recipientDisplayName
+        ? `${recipientDisplayName} (@${recipient})`
+        : recipient;
+
+      Alert.alert(
+        "Confirm Transfer",
+        `Are you sure you want to send ${amount} ${token.symbol} to ${recipientLabel}?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Confirm",
+            onPress: () => {
+              void processConfirmedTransfer();
+            },
+          },
+        ]
       );
-
-      if (!biometricResult.success) {
-        if (biometricResult.reason === "cancelled") {
-          // User deliberately dismissed the prompt — do nothing, stay on step 3.
-          return;
-        }
-        Alert.alert(
-          "Authentication Required",
-          "You must verify your identity before sending a payment. Please try again.",
-          [{ text: "OK" }]
-        );
-        return;
-      }
-
-      setSubmitting(true);
-      try {
-        const assetIssuer =
-          token.symbol !== "XLM"
-            ? STELLAR_ASSET_ISSUERS[token.symbol]
-            : undefined;
-        const result = await submitPayment(
-          recipient,
-          amount,
-          walletState!.source!,
-          walletState!.publicKey,
-          token.symbol,
-          assetIssuer,
-          description || undefined
-        );
-        const stored = await AsyncStorage.getItem("pending_transfers");
-        const list = stored ? JSON.parse(stored) : [];
-        list.unshift({
-          recipient,
-          amount,
-          description: description || "Sent money",
-          visibility,
-          token: token.symbol,
-          hash: result.hash,
-        });
-        await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
-        await saveRecentRecipient(recipient);
-      } catch (e) {
-        Alert.alert("Transfer Failed", (e as Error).message);
-        setSubmitting(false);
-        return;
-      }
-      setSubmitting(false);
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setStep(4);
       return;
     }
 

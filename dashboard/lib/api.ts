@@ -234,15 +234,68 @@ export const api = {
     serverReq<{ alerts: ContractAlert[] }>("/api/v1/admin/contracts/alerts"),
 
   // Contract config (fee coefficient)
+  /**
+   * Fetch the payment contract's current fee coefficient.
+   *
+   * GET /api/v1/admin/contracts/config
+   *   → { fee_coefficient: number }
+   */
   contractConfig: () =>
     serverReq<ContractConfig>("/api/v1/admin/contracts/config"),
 
+  /**
+   * Submit an on-chain transaction updating the payment contract's fee
+   * coefficient.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient
+   *   body: { fee_coefficient: number }
+   *   → { fee_coefficient: number; tx_hash: string }
+   *
+   * The server builds, signs and submits the Soroban invocation against the
+   * payment contract and returns the resulting transaction hash.
+   */
   setFeeCoefficient: (fee_coefficient: number) =>
     serverReq<{ fee_coefficient: number; tx_hash: string }>(
       "/api/v1/admin/contracts/config/fee-coefficient",
       {
         method: "POST",
         body: JSON.stringify({ fee_coefficient }),
+      },
+    ),
+
+  /**
+   * Build an unsigned fee-coefficient invocation for client-side signing.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient/prepare
+   *   body: { fee_coefficient: number }
+   *   → { xdr: string; contract_id: string; network_passphrase: string }
+   *
+   * Use this when the admin signs with a wallet (e.g. Freighter) instead of
+   * the server-held key. Submit the signed XDR via `submitSignedFeeCoefficient`.
+   */
+  prepareFeeCoefficient: (fee_coefficient: number) =>
+    serverReq<{
+      xdr: string;
+      contract_id: string;
+      network_passphrase: string;
+    }>("/api/v1/admin/contracts/config/fee-coefficient/prepare", {
+      method: "POST",
+      body: JSON.stringify({ fee_coefficient }),
+    }),
+
+  /**
+   * Submit a signed fee-coefficient invocation XDR.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient/submit
+   *   body: { xdr: string }
+   *   → { fee_coefficient: number; tx_hash: string }
+   */
+  submitSignedFeeCoefficient: (xdr: string) =>
+    serverReq<{ fee_coefficient: number; tx_hash: string }>(
+      "/api/v1/admin/contracts/config/fee-coefficient/submit",
+      {
+        method: "POST",
+        body: JSON.stringify({ xdr }),
       },
     ),
 
@@ -253,7 +306,16 @@ export const api = {
   yieldRateHistory: () =>
     req<{ rates: { apy: number; created_at: string }[] }>("/api/yield/rates/history"),
 
-  // Yield vault ledger audit logs (#1012)
+  // Yield vault ledger audit logs (#1012, #1063)
+  /**
+   * Fetch historical yield vault transactions for the audit list.
+   *
+   * GET /api/yield/history?q=&action=&limit=&offset=&from=&to=
+   *   → { items: YieldAuditLogItem[]; total: number }
+   *
+   * `q` matches tx hash / address; `action` filters by action type
+   * ("all" or empty means no filter); `from`/`to` are ISO-8601 bounds.
+   */
   yieldAuditLogs: (params?: {
     q?: string;
     action?: string;
@@ -789,14 +851,21 @@ export interface SdpStatusResponse {
 }
 
 /**
- * Yield vault ledger audit log item (#1012).
+ * Yield vault ledger audit log item (#1012, #1063).
+ *
+ * One row in the historical yield transactions audit list. `type` is the
+ * action type (e.g. "deposit", "withdraw", "yield_distribution") and
+ * `amount` is the token volume moved by the action.
  */
 export interface YieldAuditLogItem {
   id: string;
   tx_hash: string;
+  /** Action type, e.g. "deposit" | "withdraw" | "yield_distribution". */
   type: string;
+  /** Token volume moved by the action. */
   amount: number;
   created_at: string;
+  /** Stellar address of the user who performed the action. */
   address?: string;
   asset?: string;
   block_height?: number;
