@@ -541,9 +541,9 @@ export default function OverviewPage() {
       </div>
 
       <AuditLogTable
-        logs={auditData?.logs ?? null}
-        loading={auditLoading}
-        error={auditError}
+        logs={logsData?.logs ?? null}
+        loading={logsLoading}
+        error={logsError}
       />
 
       <p className="mt-4 text-xs text-slate-400">

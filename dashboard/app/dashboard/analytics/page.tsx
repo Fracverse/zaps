@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api } from "@/lib/api";
 import {
@@ -24,9 +24,10 @@ export default function AnalyticsPage() {
   const { data: txs, loading } = usePolling(() => api.transactions(), 30000);
   const { data: authStats } = usePolling(() => api.authProviderStats(), 30000);
   const { data: socialStats } = usePolling(() => api.socialPaymentStats(), 60000);
+  const [yieldGranularity, setYieldGranularity] = useState<"daily" | "monthly">("monthly");
 
-  const { dailyVolume, statusDist, assetDist, monthlyYield, socialGrowth } = useMemo(() => {
-    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [], monthlyYield: [], socialGrowth: [] };
+  const { dailyVolume, statusDist, assetDist, monthlyYield, dailyYield, socialGrowth } = useMemo(() => {
+    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [], monthlyYield: [], dailyYield: [], socialGrowth: [] };
 
     const byDay: Record<string, number> = {};
     txs.forEach((t) => {
@@ -53,7 +54,15 @@ export default function AnalyticsPage() {
     });
     const monthlyYield = Object.entries(byMonth).map(([month, yield_]) => ({ month, yield: Number(yield_.toFixed(2)) }));
 
-    const monthlyYield = Object.entries(byMonth).map(([month, yield_]) => ({ month, yield: Number(yield_.toFixed(2)) }));
+    // Daily yield payment volume from completed transactions
+    const byYieldDay: Record<string, number> = {};
+    completed.forEach((t) => {
+      const day = format(startOfDay(parseISO(t.created_at)), "MMM d");
+      byYieldDay[day] = (byYieldDay[day] ?? 0) + t.send_amount / 1_000_000;
+    });
+    const dailyYield = Object.entries(byYieldDay)
+      .slice(-30)
+      .map(([date, yield_]) => ({ date, yield: Number(yield_.toFixed(2)) }));
 
     // Social payment growth - monthly interactions
     const socialGrowth: { month: string; interactions: number; likes: number; comments: number }[] = [];
@@ -73,7 +82,7 @@ export default function AnalyticsPage() {
       });
     }
 
-    return { dailyVolume, statusDist, assetDist, monthlyYield, socialGrowth };
+    return { dailyVolume, statusDist, assetDist, monthlyYield, dailyYield, socialGrowth };
   }, [txs, socialStats]);
 
   if (loading && !txs) {
@@ -188,18 +197,66 @@ export default function AnalyticsPage() {
           )}
         </div>
 
-        {/* Yield Distribution over Time */}
+        {/* #1060: Yield Distribution over Time */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm lg:col-span-2">
-          <h2 className="font-semibold text-slate-800 mb-4">Yield Distribution Over Time (Monthly)</h2>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={monthlyYield}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => [Number(v).toLocaleString(), "Yield"]} />
-              <Line type="monotone" dataKey="yield" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-slate-800">Yield Distribution Over Time</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Yield payment volume trends from completed transactions</p>
+            </div>
+            <div className="mt-3 sm:mt-0 inline-flex rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setYieldGranularity("daily")}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  yieldGranularity === "daily"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Daily
+              </button>
+              <button
+                type="button"
+                onClick={() => setYieldGranularity("monthly")}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  yieldGranularity === "monthly"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Monthly
+              </button>
+            </div>
+          </div>
+          {(yieldGranularity === "monthly" ? monthlyYield : dailyYield).length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart
+                data={yieldGranularity === "monthly" ? monthlyYield : dailyYield}
+                margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey={yieldGranularity === "monthly" ? "month" : "date"} tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(v) => [Number(v).toLocaleString(), "Yield"]}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="yield"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={{ r: 4 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-60 flex items-center justify-center text-slate-400 text-sm">
+              No yield data available
+            </div>
+          )}
         </div>
 
         {/* ── #1020: Authentication Provider Stats (Privy vs Standard Signups) ── */}

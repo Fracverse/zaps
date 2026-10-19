@@ -120,7 +120,7 @@ function authHeaders(
  * too, the token is not the problem and looping would just multiply the
  * failure.
  */
-async function authedFetch(
+export async function authedFetch(
   url: string,
   init: RequestInit | undefined,
   buildHeaders: (token: string | null) => HeadersInit,
