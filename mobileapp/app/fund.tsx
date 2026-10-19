@@ -359,23 +359,35 @@ export default function FundScreen() {
             <View style={styles.progressContainer}>
               {BRIDGE_STEPS.map((s, i) => {
                 const currentStep = getStepIndex();
-                const isActive = i < currentStep;
+                const isStepCompleted =
+                  i < currentStep - 1 ||
+                  (i === currentStep - 1 && bridgeStatus?.completed);
+                const isCurrent =
+                  i === currentStep - 1 && !bridgeStatus?.completed;
                 const isLast = i === BRIDGE_STEPS.length - 1;
+
                 return (
                   <React.Fragment key={s.key}>
                     <View
                       style={[
                         styles.progressDot,
-                        isActive && styles.progressDotActive,
+                        isStepCompleted && styles.progressDotActive,
+                        isCurrent && styles.progressDotCurrent,
                       ]}
                     >
-                      {isActive && (
+                      {isStepCompleted ? (
                         <Ionicons
                           name="checkmark"
-                          size={10}
+                          size={12}
                           color={COLORS.secondary}
                         />
-                      )}
+                      ) : isCurrent ? (
+                        <ActivityIndicator
+                          size="small"
+                          color={COLORS.secondary}
+                          style={{ transform: [{ scale: 0.6 }] }}
+                        />
+                      ) : null}
                     </View>
                     {!isLast && (
                       <View
@@ -393,15 +405,17 @@ export default function FundScreen() {
             <View style={styles.progressLabels}>
               {BRIDGE_STEPS.map((s, i) => {
                 const currentStep = getStepIndex();
+                const isStepCompleted =
+                  i < currentStep - 1 ||
+                  (i === currentStep - 1 && bridgeStatus?.completed);
+                const isCurrent =
+                  i === currentStep - 1 && !bridgeStatus?.completed;
                 return (
                   <Text
                     key={s.key}
                     style={[
                       styles.progressLabel,
-                      i < currentStep && styles.progressLabelActive,
-                      i === currentStep - 1 && bridgeStatus?.completed
-                        ? styles.progressLabelActive
-                        : null,
+                      (isStepCompleted || isCurrent) && styles.progressLabelActive,
                     ]}
                   >
                     {i + 1}. {s.label}
@@ -409,6 +423,41 @@ export default function FundScreen() {
                 );
               })}
             </View>
+
+            {/* Dynamic polling confirmations badge & progress bar */}
+            {bridgeStatus &&
+              bridgeStatus.requiredConfirmations > 0 &&
+              !bridgeStatus.completed && (
+                <View style={styles.confirmationBox}>
+                  <View style={styles.confirmationHeader}>
+                    <View style={styles.confirmationPulseDot} />
+                    <Text style={styles.confirmationLabel}>Lock Confirmations</Text>
+                    <Text style={styles.confirmationCount}>
+                      {bridgeStatus.confirmations} / {bridgeStatus.requiredConfirmations}
+                    </Text>
+                  </View>
+                  <View style={styles.confirmationProgressBar}>
+                    <View
+                      style={[
+                        styles.confirmationProgressFill,
+                        {
+                          width: `${Math.min(
+                            100,
+                            Math.max(
+                              5,
+                              Math.round(
+                                (bridgeStatus.confirmations /
+                                  bridgeStatus.requiredConfirmations) *
+                                  100
+                              )
+                            )
+                          )}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+              )}
 
             {bridgeStatus?.txHash ? (
               <Text style={styles.txHash}>
@@ -674,6 +723,56 @@ const styles = StyleSheet.create({
   },
   progressDotActive: {
     backgroundColor: COLORS.primary,
+  },
+  progressDotCurrent: {
+    backgroundColor: COLORS.primary,
+    borderWidth: 2,
+    borderColor: "#4ADE80",
+    transform: [{ scale: 1.15 }],
+  },
+  confirmationBox: {
+    width: "82%",
+    backgroundColor: "#F4FAF6",
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 24,
+    borderWidth: 1,
+    borderColor: "#D1E7DD",
+  },
+  confirmationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  confirmationPulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#16A34A",
+    marginRight: 6,
+  },
+  confirmationLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#166534",
+  },
+  confirmationCount: {
+    fontSize: 13,
+    fontFamily: "Outfit_700Bold",
+    color: "#166534",
+  },
+  confirmationProgressBar: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  confirmationProgressFill: {
+    height: "100%",
+    backgroundColor: "#16A34A",
+    borderRadius: 3,
   },
   progressLine: {
     flex: 1,

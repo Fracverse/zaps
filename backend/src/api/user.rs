@@ -35,8 +35,10 @@ impl FromRef<UserState> for sqlx::PgPool {
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
+    #[serde(alias = "displayName")]
     pub display_name: Option<String>,
     pub bio: Option<String>,
+    #[serde(alias = "avatarUri", alias = "avatar_uri")]
     pub avatar_url: Option<String>,
 }
 

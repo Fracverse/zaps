@@ -879,7 +879,14 @@ export default function HomeScreen() {
           </View>
 
           {/* Earning Balance Section */}
-          <View style={styles.earningBalanceSection}>
+          <TouchableOpacity
+            style={styles.earningBalanceSection}
+            activeOpacity={0.8}
+            onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance"
+            testID="earning-balance-section"
+          >
             <View style={styles.earningBalanceHeader}>
               <View style={styles.earningDot} />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
@@ -887,7 +894,7 @@ export default function HomeScreen() {
             <Text style={styles.earningBalanceAmount}>
               {displayBalance(totalYieldEarned)}
             </Text>
-          </View>
+          </TouchableOpacity>
 
           {/* Pay / Request trigger button (#886) */}
           <TouchableOpacity
@@ -961,6 +968,9 @@ export default function HomeScreen() {
             style={styles.earningBalanceCard}
             activeOpacity={0.9}
             onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance Card"
+            testID="earning-balance-card"
           >
             <View>
               <Text style={styles.earningLabel}>Earning Balance</Text>
@@ -1522,8 +1532,31 @@ export default function HomeScreen() {
                 </View>
 
                 <Text style={styles.earningsInfoCopy}>
-                  {yieldData?.explanation}
+                  {yieldData?.explanation ||
+                    "Idle balances are automatically swept into yield-earning vaults at competitive APYs with daily compounding interest while remaining instantly spendable."}
                 </Text>
+
+                <TouchableOpacity
+                  style={styles.manageYieldButton}
+                  onPress={() => {
+                    closeEarningsModal();
+                    router.push("/yield-transaction");
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Deposit or Withdraw Yield"
+                  testID="manage-yield-button"
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={18}
+                    color={COLORS.secondary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.manageYieldButtonText}>
+                    Deposit / Withdraw Yield
+                  </Text>
+                </TouchableOpacity>
               </>
             )}
           </Animated.View>
@@ -2372,6 +2405,21 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+    marginBottom: 16,
+  },
+  manageYieldButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+    borderRadius: 24,
+    height: 48,
+    width: "100%",
+  },
+  manageYieldButtonText: {
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
   },
   earningsChartSection: {
     backgroundColor: "#F9FCF8",
