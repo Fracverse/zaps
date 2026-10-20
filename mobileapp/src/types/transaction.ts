@@ -44,6 +44,8 @@ export interface TransactionFilters {
   amountMin?: string;
   amountMax?: string;
   yieldOnly?: boolean;
+  /** Narrow yield updates to one yield type (implies yieldOnly). */
+  yieldType?: YieldType;
   /** Asset code filter (e.g. "XLM", "USDC", "USDT"). */
   asset?: string;
 }

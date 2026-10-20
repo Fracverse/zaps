@@ -124,3 +124,48 @@ describe("TransactionsScreen Disbursement History (Issue #921)", () => {
     expect(queryByText("Standard Transfers")).toBeNull();
   });
 });
+
+describe("TransactionsScreen yield filter tags (#905)", () => {
+  const baseFilters = { type: "all", status: "all", search: "" };
+
+  beforeEach(() => {
+    mockSetFilters.mockClear();
+  });
+
+  it("renders a tag for all yield and each yield type", () => {
+    const { getByTestId, getByText } = render(<TransactionsScreen />);
+
+    expect(getByTestId("yield-filter-tags")).toBeTruthy();
+    expect(getByText("All yield")).toBeTruthy();
+    expect(getByText("Interest")).toBeTruthy();
+    expect(getByText("Reward")).toBeTruthy();
+    expect(getByText("APY")).toBeTruthy();
+  });
+
+  it("applies the yield type when a tag is pressed", () => {
+    const { getByTestId } = render(<TransactionsScreen />);
+
+    fireEvent.press(getByTestId("yield-tag-interest"));
+
+    expect(mockSetFilters).toHaveBeenCalledTimes(1);
+    const updater = mockSetFilters.mock.calls[0][0];
+    expect(updater(baseFilters)).toEqual({
+      ...baseFilters,
+      yieldOnly: true,
+      yieldType: "interest",
+    });
+  });
+
+  it("applies the all-yield filter without narrowing the type", () => {
+    const { getByTestId } = render(<TransactionsScreen />);
+
+    fireEvent.press(getByTestId("yield-tag-yield"));
+
+    const updater = mockSetFilters.mock.calls[0][0];
+    expect(updater(baseFilters)).toEqual({
+      ...baseFilters,
+      yieldOnly: true,
+      yieldType: undefined,
+    });
+  });
+});

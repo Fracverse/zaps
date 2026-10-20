@@ -16,6 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { useRouter, Stack } from "expo-router";
 import { COLORS } from "../src/constants/colors";
 import { useBiometric } from "../hooks/useBiometric";
@@ -204,6 +205,12 @@ function NairaKeypad({ onPress }: { onPress: (key: string) => void }) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function lightHaptic(): void {
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+    () => undefined
+  );
+}
+
 function formatCurrency(value: number): string {
   return `₦${value.toLocaleString("en-NG", {
     minimumFractionDigits: 2,
@@ -344,6 +351,7 @@ export default function YieldTransaction(props: YieldTransactionProps = {}) {
         setAvailableBalance((prev) => prev + numericAmount);
       }
 
+      if (mode === "deposit") lightHaptic();
       setShowConfirm(false);
       setSubmitted(true);
     } finally {
@@ -430,6 +438,7 @@ export default function YieldTransaction(props: YieldTransactionProps = {}) {
                 mode === "deposit" && styles.toggleBtnActive,
               ]}
               onPress={() => {
+                lightHaptic();
                 setMode("deposit");
                 setAmount("");
                 setSliderPct(0);
@@ -457,6 +466,7 @@ export default function YieldTransaction(props: YieldTransactionProps = {}) {
                 mode === "withdraw" && styles.toggleBtnActive,
               ]}
               onPress={() => {
+                lightHaptic();
                 setMode("withdraw");
                 setAmount("");
                 setSliderPct(0);

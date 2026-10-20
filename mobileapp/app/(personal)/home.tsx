@@ -49,6 +49,11 @@ import {
   fiatFromTokens,
 } from "../../src/utils/balanceDisplay";
 import {
+  YIELD_REQUEST_TIMEOUT_MS,
+  describeYieldError,
+  withTimeout,
+} from "../../src/utils/yieldRequest";
+import {
   markNotificationPromptDismissed,
   registerForPushNotificationsAsync,
   requestNotificationPermissionsAsync,
@@ -169,6 +174,7 @@ export default function HomeScreen() {
   const [notifRequesting, setNotifRequesting] = useState(false);
   const [balanceMasked, setBalanceMasked] = useState(true);
   const MASKED_BALANCE = "••••••";
+  const BALANCE_UNAVAILABLE = "--";
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
@@ -195,7 +201,6 @@ export default function HomeScreen() {
 
   const FEED_CACHE_KEY = "feed_items_cache";
   const HOME_CURRENCY_PREF_KEY = "home_display_currency";
-  const YIELD_REQUEST_TIMEOUT_MS = 4500;
 
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
@@ -259,11 +264,7 @@ export default function HomeScreen() {
       setYieldStatus("success");
     } catch (error) {
       if (requestId !== yieldRequestRef.current) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to load yield details right now.";
-      setYieldError(message);
+      setYieldError(describeYieldError(error));
       setYieldStatus("error");
     }
   }, []);
@@ -659,6 +660,12 @@ export default function HomeScreen() {
     setAutoEarnSyncing(true);
     try {
       await updateAutoEarn(value);
+      if (value) {
+        // Idle funds start sweeping into yield — confirm with a light bump.
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+          () => undefined
+        );
+      }
     } catch {
       // Revert on failure
       setAutoYieldEnabled(previous);
@@ -787,8 +794,14 @@ export default function HomeScreen() {
     monthlyEarnings,
   ]);
 
-  const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
-    <View style={[styles.skeletonBase, style]}>
+  const SkeletonBlock = ({
+    style,
+    testID,
+  }: {
+    style?: StyleProp<ViewStyle>;
+    testID?: string;
+  }) => (
+    <View style={[styles.skeletonBase, style]} testID={testID}>
       <Animated.View
         style={[
           styles.skeletonShimmer,
@@ -883,26 +896,51 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Balance Card */}
+        {/* Balance Card — available and earning balances, side by side */}
         <View style={styles.balanceCard}>
-          {/* Available Balance Section */}
-          <View style={styles.balanceSection}>
-            <View style={styles.balanceLabelRow}>
-              <Text style={styles.balanceLabel}>Available Balance</Text>
-              <TouchableOpacity
-                onPress={toggleBalanceMask}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  balanceMasked ? "Show balance" : "Hide balance"
-                }
-              >
-                <Ionicons
-                  name={balanceMasked ? "eye-outline" : "eye-off-outline"}
-                  size={20}
-                  color="#777"
+          <View style={styles.balanceSplit}>
+            {/* Available Balance Section */}
+            <View
+              style={[styles.balancePanel, styles.availablePanel]}
+              testID="available-balance-section"
+            >
+              <View style={styles.balanceLabelRow}>
+                <Text style={styles.availableLabel}>Available</Text>
+                <TouchableOpacity
+                  onPress={toggleBalanceMask}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    balanceMasked ? "Show balance" : "Hide balance"
+                  }
+                >
+                  <Ionicons
+                    name={balanceMasked ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color="#A9D8CF"
+                  />
+                </TouchableOpacity>
+              </View>
+              {yieldStatus === "loading" ? (
+                <SkeletonBlock
+                  testID="available-balance-skeleton"
+                  style={[
+                    styles.balanceAmountSkeleton,
+                    styles.availableSkeleton,
+                  ]}
                 />
-              </TouchableOpacity>
+              ) : (
+                <Text
+                  style={styles.availableAmount}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  testID="available-balance-amount"
+                >
+                  {yieldStatus === "error"
+                    ? BALANCE_UNAVAILABLE
+                    : displayBalance(availableBalanceDisplay)}
+                </Text>
+              )}
             </View>
             <Text style={styles.balanceAmount}>
               {displayBalance(availableBalanceDisplay)}
@@ -1054,41 +1092,26 @@ export default function HomeScreen() {
             accessibilityLabel="Earning Balance Card"
             testID="earning-balance-card"
           >
-            <View>
-              <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>
-                {totalYieldEarnedDisplay}
-              </Text>
-              <View style={styles.earningStatusRow}>
-                <Animated.View
-                  style={[
-                    styles.earningStatusDot,
-                    { transform: [{ scale: earningPulseAnim }] },
-                  ]}
-                />
-                <Text style={styles.earningStatusText}>
-                  {autoYieldEnabled
-                    ? "Your money is working"
-                    : "Auto-earn is off"}
-                </Text>
-              </View>
-            </View>
             {yieldStatus === "loading" ? (
-              <View style={styles.earningContent}>
+              <View
+                style={styles.earningContent}
+                testID="earning-card-skeleton"
+              >
                 <SkeletonBlock style={styles.earningLabelSkeleton} />
                 <SkeletonBlock style={styles.earningAmountSkeleton} />
                 <SkeletonBlock style={styles.earningHintSkeleton} />
               </View>
             ) : yieldStatus === "error" ? (
-              <View style={styles.earningContent}>
+              <View style={styles.earningContent} testID="earning-card-error">
                 <Text style={styles.earningLabel}>Earning Balance</Text>
-                <Text style={styles.earningErrorText}>
-                  Unable to load yield
-                </Text>
+                <Text style={styles.earningErrorText}>{yieldError}</Text>
                 <TouchableOpacity
                   style={styles.retryChip}
                   onPress={handleYieldRetry}
                   activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading yield"
+                  testID="earning-card-retry"
                 >
                   <Ionicons name="refresh" size={12} color={COLORS.primary} />
                   <Text style={styles.retryChipText}>Retry</Text>
@@ -1100,9 +1123,19 @@ export default function HomeScreen() {
                 <Text style={styles.earningAmount}>
                   {totalYieldEarnedDisplay}
                 </Text>
-                <Text style={styles.earningHint}>
-                  Tap to view yield breakdown
-                </Text>
+                <View style={styles.earningStatusRow}>
+                  <Animated.View
+                    style={[
+                      styles.earningStatusDot,
+                      { transform: [{ scale: earningPulseAnim }] },
+                    ]}
+                  />
+                  <Text style={styles.earningStatusText}>
+                    {autoYieldEnabled
+                      ? "Your money is working"
+                      : "Auto-earn is off"}
+                  </Text>
+                </View>
               </View>
             )}
             <View style={styles.earningIconWrap}>
@@ -1395,7 +1428,7 @@ export default function HomeScreen() {
                   Could not load details
                 </Text>
                 <Text style={styles.yieldErrorCopy}>
-                  {yieldError}. Check your connection and try again.
+                  {yieldError} Check your connection and try again.
                 </Text>
                 <TouchableOpacity
                   style={styles.retryButton}
@@ -2005,8 +2038,25 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
     color: COLORS.secondary,
   },
-  balanceSection: {
+  balanceSplit: {
+    flexDirection: "row",
+    gap: 10,
     marginBottom: 16,
+  },
+  balancePanel: {
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    minHeight: 92,
+    justifyContent: "space-between",
+  },
+  availablePanel: {
+    flex: 1.2,
+    backgroundColor: COLORS.primary,
+  },
+  earningPanel: {
+    flex: 1,
+    backgroundColor: "#E4F7EA",
   },
   balanceLabelRow: {
     flexDirection: "row",
@@ -2014,15 +2064,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 4,
   },
-  balanceLabel: {
+  availableLabel: {
     fontSize: 13,
-    fontFamily: "Outfit_400Regular",
-    color: "#777",
+    fontFamily: "Outfit_500Medium",
+    color: "#A9D8CF",
   },
-  balanceAmount: {
-    fontSize: 34,
+  availableAmount: {
+    fontSize: 24,
     fontFamily: "Outfit_700Bold",
-    color: COLORS.primary,
+    color: COLORS.secondary,
   },
   earningBalanceSection: {
     position: "relative",
@@ -2060,11 +2110,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
     color: "#456047",
-  },
-  earningBalanceAmount: {
-    fontSize: 28,
-    fontFamily: "Outfit_700Bold",
-    color: "#2E7D32",
   },
   quickActions: {
     flexDirection: "row",
@@ -2406,7 +2451,7 @@ const styles = StyleSheet.create({
   earningErrorText: {
     fontSize: 14,
     fontFamily: "Outfit_600SemiBold",
-    color: "#B45309",
+    color: "#FBBF24",
     marginBottom: 6,
   },
   retryChip: {
