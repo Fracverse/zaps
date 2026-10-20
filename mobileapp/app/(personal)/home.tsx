@@ -918,8 +918,37 @@ export default function HomeScreen() {
             accessibilityLabel="Earning Balance"
             testID="earning-balance-section"
           >
+            {autoYieldEnabled && yieldStatus === "success" && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.earningBalanceGlow,
+                  {
+                    opacity: earningGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.2, 0.75],
+                    }),
+                    transform: [
+                      {
+                        scale: earningGlowAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1, 1.025],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+                testID="earning-balance-glow"
+              />
+            )}
             <View style={styles.earningBalanceHeader}>
-              <View style={styles.earningDot} />
+              <Animated.View
+                style={[
+                  styles.earningDot,
+                  { transform: [{ scale: earningPulseAnim }] },
+                ]}
+                testID="earning-balance-pulse"
+              />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
             <Text style={styles.earningBalanceAmount}>
@@ -1996,12 +2025,24 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
   },
   earningBalanceSection: {
+    position: "relative",
     backgroundColor: "#F2F9F0",
     borderRadius: 16,
     padding: 16,
     marginBottom: 20,
     borderWidth: 1,
     borderColor: "#E8F5E9",
+  },
+  earningBalanceGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: "#34D399",
+    shadowColor: "#34D399",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    elevation: 5,
   },
   earningBalanceHeader: {
     flexDirection: "row",

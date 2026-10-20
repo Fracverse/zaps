@@ -292,6 +292,31 @@ describe("HomeScreen – AsyncStorage feed cache (#895)", () => {
     expect(mockFetchYieldBalance).toHaveBeenCalledTimes(2);
   }, 15000);
 
+  it("shows the earning balance glow when auto-earn is active", async () => {
+    mockFetchYieldBalance.mockResolvedValue(defaultYield);
+
+    const { getByTestId } = render(<HomeScreen />);
+
+    await waitFor(() => {
+      expect(getByTestId("earning-balance-glow")).toBeTruthy();
+    });
+    expect(getByTestId("earning-balance-pulse")).toBeTruthy();
+  });
+
+  it("hides the earning balance glow when auto-earn is off", async () => {
+    mockFetchYieldBalance.mockResolvedValue({
+      ...defaultYield,
+      autoEarnEnabled: false,
+    });
+
+    const { getByText, queryByTestId } = render(<HomeScreen />);
+
+    await waitFor(() => {
+      expect(getByText("Auto-earn is off")).toBeTruthy();
+    });
+    expect(queryByTestId("earning-balance-glow")).toBeNull();
+  });
+
   it("refreshes yield and clears the spinner when feed refresh fails", async () => {
     mockFetchYieldBalance.mockResolvedValue(defaultYield);
     mockFetchFeed.mockResolvedValue([]);
