@@ -174,6 +174,7 @@ export default function HomeScreen() {
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
   const earningGlowAnim = useRef(new Animated.Value(0)).current;
   const earningPulseAnim = useRef(new Animated.Value(1)).current;
+  const earningOuterGlowAnim = useRef(new Animated.Value(0)).current;
   const yieldRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
@@ -389,8 +390,10 @@ export default function HomeScreen() {
     if (!autoYieldEnabled || yieldStatus !== "success") {
       earningGlowAnim.stopAnimation();
       earningPulseAnim.stopAnimation();
+      earningOuterGlowAnim.stopAnimation();
       earningGlowAnim.setValue(0);
       earningPulseAnim.setValue(1);
+      earningOuterGlowAnim.setValue(0);
       return;
     }
     const glowLoop = Animated.loop(
@@ -414,6 +417,22 @@ export default function HomeScreen() {
         }),
       ])
     );
+    // Outer glow ring pulses slower for a layered depth effect
+    const outerGlowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(400),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
     const pulseLoop = Animated.loop(
       Animated.sequence([
         // Slight delay so the status dot follows the card glow.
@@ -421,13 +440,13 @@ export default function HomeScreen() {
         Animated.delay(250),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.03,
+          toValue: 1.04,
           duration: 500,
           useNativeDriver: true,
         }),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.06,
+          toValue: 1.07,
           duration: 450,
           useNativeDriver: true,
         }),
@@ -440,12 +459,14 @@ export default function HomeScreen() {
       ])
     );
     glowLoop.start();
+    outerGlowLoop.start();
     pulseLoop.start();
     return () => {
       glowLoop.stop();
+      outerGlowLoop.stop();
       pulseLoop.stop();
     };
-  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim]);
+  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim, earningOuterGlowAnim]);
 
   const onPullRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -944,6 +965,28 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.earningCardWrapper}>
+          {/* Outer soft glow ring — slower pulse for layered depth */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.earningGlow,
+              styles.earningOuterGlow,
+              {
+                opacity: earningOuterGlowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.28],
+                }),
+                transform: [
+                  {
+                    scale: earningOuterGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1.02, 1.12],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
           <Animated.View
             pointerEvents="none"
             style={[
@@ -951,13 +994,13 @@ export default function HomeScreen() {
               {
                 opacity: earningGlowAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0.15, 0.55],
+                  outputRange: [0.12, 0.65],
                 }),
                 transform: [
                   {
                     scale: earningGlowAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.98, 1.04],
+                      outputRange: [0.97, 1.05],
                     }),
                   },
                 ],
@@ -1332,9 +1375,16 @@ export default function HomeScreen() {
               <>
                 <View style={styles.earningsMetricCard}>
                   <Text style={styles.earningsMetricLabel}>Current APY</Text>
-                  <Text style={styles.earningsMetricValue}>
-                    {yieldData?.apy ?? "0.00%"}
-                  </Text>
+                  <View style={styles.apyValueRow}>
+                    <Text style={styles.earningsMetricValue}>
+                      {yieldData?.apy ?? "0.00%"}
+                    </Text>
+                    <View style={styles.apyTrendBadge}>
+                      <Ionicons name="trending-up" size={13} color="#16A34A" />
+                      <Text style={styles.apyTrendText}>+0.12%</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.apyTrendSubtext}>vs. last month</Text>
                 </View>
 
                 <View style={styles.earningsMetricCard}>
@@ -2057,6 +2107,15 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     elevation: 8,
   },
+  earningOuterGlow: {
+    top: -18,
+    left: -18,
+    right: -18,
+    bottom: -18,
+    borderRadius: 40,
+    shadowRadius: 36,
+    elevation: 4,
+  },
   earningBalanceCard: {
     backgroundColor: "#0F3D2E",
     borderRadius: 22,
@@ -2373,6 +2432,31 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontFamily: "Outfit_700Bold",
     color: "#111827",
+  },
+  apyValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  apyTrendBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#DCFCE7",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  apyTrendText: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  apyTrendSubtext: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#9CA3AF",
+    marginTop: 2,
   },
   autoYieldRow: {
     flexDirection: "row",

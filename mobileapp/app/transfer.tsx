@@ -524,7 +524,7 @@ function TransferScreen() {
       } else {
         setUsernameStatus("idle");
       }
-    }, 350);
+    }, 300);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
       if (federationTimer.current) clearTimeout(federationTimer.current);
@@ -858,30 +858,38 @@ function TransferScreen() {
       <View style={styles.inputsSection}>
         {/* Recipient input + live-search dropdown (ZAPS mode only) */}
         <View style={styles.recipientSearchWrapper}>
-          <Input
-            placeholder={
-              transferType === "ZAPS"
-                ? "Recipient ZAPS ID (e.g. tolu.zaps)"
-                : "Wallet Address"
-            }
-            value={recipient}
-            onChangeText={(text: string) => {
-              setRecipient(text);
-              setSelectedUser(null);
-              // Reset registry warning when user edits the field
-              setUsernameStatus("idle");
-              // #686 — Reset federation status when user edits the field
-              setFederationStatus("idle");
-              setFederationError(null);
-              if (transferType !== "ZAPS") return;
-              if (text.length < 2) {
-                setShowDropdown(false);
-                setSearchResults([]);
+          <View style={styles.searchInputRow}>
+            <Ionicons
+              name="search"
+              size={18}
+              color="#9CA3AF"
+              style={styles.searchInputIcon}
+            />
+            <Input
+              placeholder={
+                transferType === "ZAPS"
+                  ? "Recipient ZAPS ID (e.g. tolu.zaps)"
+                  : "Wallet Address"
               }
-            }}
-            autoCapitalize="none"
-            style={styles.transferInput}
-          />
+              value={recipient}
+              onChangeText={(text: string) => {
+                setRecipient(text);
+                setSelectedUser(null);
+                // Reset registry warning when user edits the field
+                setUsernameStatus("idle");
+                // #686 — Reset federation status when user edits the field
+                setFederationStatus("idle");
+                setFederationError(null);
+                if (transferType !== "ZAPS") return;
+                if (text.length < 2) {
+                  setShowDropdown(false);
+                  setSearchResults([]);
+                }
+              }}
+              autoCapitalize="none"
+              style={[styles.transferInput, styles.searchInputWithIcon]}
+            />
+          </View>
           {/* Searching indicator */}
           {transferType === "ZAPS" && searching && (
             <ActivityIndicator
@@ -2128,6 +2136,19 @@ const styles = StyleSheet.create({
   recipientSearchWrapper: {
     position: "relative",
     zIndex: 10,
+  },
+  searchInputRow: {
+    position: "relative",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputIcon: {
+    position: "absolute",
+    left: 14,
+    zIndex: 1,
+  },
+  searchInputWithIcon: {
+    paddingLeft: 40,
   },
   searchingIndicator: {
     position: "absolute",

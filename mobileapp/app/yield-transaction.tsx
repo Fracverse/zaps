@@ -544,6 +544,32 @@ export default function YieldTransaction(props: YieldTransactionProps = {}) {
             </View>
           )}
 
+          {/* Quick-pick shortcuts for common deposit amounts */}
+          <View style={styles.quickPickRow}>
+            {([25, 50, 100] as const).map((pct) => (
+              <TouchableOpacity
+                key={pct}
+                style={[
+                  styles.quickPickBtn,
+                  sliderPct === pct && styles.quickPickBtnActive,
+                ]}
+                onPress={() => handleSliderChange(pct)}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={`Quick pick ${pct} percent`}
+              >
+                <Text
+                  style={[
+                    styles.quickPickText,
+                    sliderPct === pct && styles.quickPickTextActive,
+                  ]}
+                >
+                  {pct}%
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
           {/* Percentage slider */}
           <PercentageSlider
             value={sliderPct}
@@ -910,6 +936,32 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: "#e5e7eb",
     marginVertical: 8,
+  },
+  quickPickRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 12,
+    justifyContent: "flex-start",
+  },
+  quickPickBtn: {
+    paddingVertical: 7,
+    paddingHorizontal: 18,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "#D1FAE5",
+    backgroundColor: "#F0FDF4",
+  },
+  quickPickBtnActive: {
+    backgroundColor: "#34D399",
+    borderColor: "#34D399",
+  },
+  quickPickText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#059669",
+  },
+  quickPickTextActive: {
+    color: "#fff",
   },
   keypad: {
     flexDirection: "row",
