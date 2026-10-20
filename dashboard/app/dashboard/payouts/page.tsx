@@ -330,6 +330,7 @@ function SdpDisbursementTab() {
     message: string;
   }>(null);
   const [logsForId, setLogsForId] = useState<string | null>(null);
+  const [checkoutFilter, setCheckoutFilter] = useState<"all" | "valid" | "invalid">("all");
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
@@ -457,10 +458,10 @@ function SdpDisbursementTab() {
       disbursementName.trim() ||
       `${fileBasename(selectedFile.name)}-${Date.now()}`;
     try {
-      const disbursement = await api.sdp.uploadDisbursementCSV(
-        selectedFile,
-        name,
-      );
+      const disbursement = await api.sdp.transmitBatchParameters({
+        file: selectedFile,
+        disbursement_name: name,
+      });
       setUploadResult({ kind: "success", disbursement });
       clearFile();
       setDisbursementName("");
@@ -630,125 +631,146 @@ function SdpDisbursementTab() {
               />
             )}
 
-            {/* ── Invalid preview (if any) ───────────────────────────── */}
-            {summary.rows.some((r) => !r.valid) && (
-              <div className="overflow-hidden rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Validation issues ({summary.invalidRows} rows)
+            {/* ── #1016: Interactive Checkout Review Grid before Batch Submission ───────── */}
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs" data-testid="checkout-review-grid">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 bg-slate-50 px-4 py-3 gap-2">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-800">
+                    Recipient Checkout &amp; Verification Grid
                   </h3>
+                  <p className="text-xs text-slate-500">
+                    Review addresses and amounts before submitting disbursement batch to network.
+                  </p>
                 </div>
-                <div className="max-h-72 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Row
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Target
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Amount
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Errors
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {summary.rows
-                        .filter((r) => !r.valid)
-                        .slice(0, 100)
-                        .map((r) => (
-                          <tr key={r.rowNumber} className="bg-red-50/40">
-                            <td className="px-3 py-2 font-mono text-slate-500">
-                              #{r.rowNumber}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
-                              {r.stellarAddress ??
-                                (r.raw as any).phone ??
-                                (r.raw as any).id ??
-                                "—"}
-                            </td>
-                            <td className="px-3 py-2 text-slate-700">
-                              {r.amount !== undefined
-                                ? r.amount.toString()
-                                : (r.raw as any).amount ?? "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              <ul className="list-disc pl-4 space-y-0.5 text-red-700">
-                                {r.errors.map((e, idx) => (
-                                  <li key={idx}>{e}</li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+                <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("all")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "all"
+                        ? "bg-indigo-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    All ({summary.totalRows})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("valid")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "valid"
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    Valid ({summary.validRows})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCheckoutFilter("invalid")}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      checkoutFilter === "invalid"
+                        ? "bg-red-600 text-white shadow-xs"
+                        : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    Flagged ({summary.invalidRows})
+                  </button>
                 </div>
               </div>
-            )}
 
-            {/* ── Valid rows summary table ───────────────────────────── */}
-            {summary.rows.some((r) => r.valid) && (
-              <div className="overflow-hidden rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                    Valid rows ({summary.validRows})
-                  </h3>
-                  <span className="text-xs text-slate-400">
-                    Showing first{" "}
-                    {Math.min(summary.validRows, 50).toString()}
+              {/* Status Warning Banner if invalid rows detected */}
+              {summary.invalidRows > 0 && (
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-xs text-amber-800">
+                  <AlertTriangle size={15} className="shrink-0 text-amber-600" />
+                  <span>
+                    <strong>Warning:</strong> {summary.invalidRows} row{summary.invalidRows > 1 ? "s contain" : " contains"} validation or address format errors (highlighted in orange/red below). Correct these rows in your CSV to enable batch submission.
                   </span>
                 </div>
-                <div className="max-h-64 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Row
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Destination
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Amount
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Currency
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {summary.rows
-                        .filter((r) => r.valid)
-                        .slice(0, 50)
-                        .map((r) => (
-                          <tr key={r.rowNumber}>
-                            <td className="px-3 py-2 font-mono text-slate-500">
+              )}
+
+              <div className="max-h-80 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-500 border-b border-slate-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Row</th>
+                      <th className="px-3 py-2 text-left font-semibold">Target Destination</th>
+                      <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                      <th className="px-3 py-2 text-left font-semibold">Currency</th>
+                      <th className="px-3 py-2 text-left font-semibold">Address Status</th>
+                      <th className="px-3 py-2 text-left font-semibold">Registry Lookup</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {summary.rows
+                      .filter((r) => {
+                        if (checkoutFilter === "valid") return r.valid;
+                        if (checkoutFilter === "invalid") return !r.valid;
+                        return true;
+                      })
+                      .slice(0, 100)
+                      .map((r) => {
+                        const isAddrValid = r.stellarAddress && STELLAR_ADDRESS_REGEX.test(r.stellarAddress);
+                        return (
+                          <tr
+                            key={r.rowNumber}
+                            className={
+                              !r.valid
+                                ? "bg-red-50/60 border-l-4 border-l-red-500"
+                                : "hover:bg-slate-50/80 border-l-4 border-l-emerald-500"
+                            }
+                          >
+                            <td className="px-3 py-2 font-mono text-slate-500 font-medium">
                               #{r.rowNumber}
                             </td>
-                            <td className="px-3 py-2 font-mono text-slate-700 break-all">
-                              {r.stellarAddress ??
-                                (r.raw as any).phone ??
-                                (r.raw as any).id ??
-                                "—"}
+                            <td className="px-3 py-2 font-mono break-all font-medium text-slate-800">
+                              {r.stellarAddress ?? (r.raw as any).phone ?? (r.raw as any).id ?? "—"}
                             </td>
                             <td className="px-3 py-2 text-right font-medium text-slate-800">
-                              {r.amount?.toLocaleString() ?? "—"}
+                              {r.amount !== undefined ? r.amount.toLocaleString() : (r.raw as any).amount ?? "—"}
                             </td>
                             <td className="px-3 py-2 text-slate-700">
                               {r.currency ?? "—"}
                             </td>
+                            <td className="px-3 py-2">
+                              {r.valid ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 text-emerald-800">
+                                  <CheckCircle2 size={12} />
+                                  <span>Valid Recipient</span>
+                                </span>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-800">
+                                    <AlertTriangle size={12} />
+                                    <span>Invalid Address / Format</span>
+                                  </span>
+                                  {r.errors.length > 0 && (
+                                    <p className="text-[10px] text-red-600 mt-0.5 max-w-xs">{r.errors.join(", ")}</p>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              {isAddrValid ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  G-Address Verified
+                                </span>
+                              ) : r.stellarAddress ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-amber-50 text-amber-700 border border-amber-200">
+                                  Registry Lookup Failed
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-[11px]">N/A</span>
+                              )}
+                            </td>
                           </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
+                        );
+                      })}
+                  </tbody>
+                </table>
               </div>
-            )}
+            </div>
+
           </div>
         )}
 
@@ -970,6 +992,162 @@ function StatTile({
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// #1039: Radial Bar Chart / Progress Ring & Batch Payout Summary Statistics Banner
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Helper to convert polar coordinates to Cartesian for SVG circle path calculations */
+function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
+  const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+  return {
+    x: centerX + radius * Math.cos(angleInRadians),
+    y: centerY + radius * Math.sin(angleInRadians),
+  };
+}
+
+/** Calculate an SVG arc path string from start to end angle */
+function describeArc(x: number, y: number, radius: number, startAngle: number, endAngle: number) {
+  const clampedEnd = Math.min(endAngle, startAngle + 359.999);
+  const start = polarToCartesian(x, y, radius, clampedEnd);
+  const end = polarToCartesian(x, y, radius, startAngle);
+  const largeArcFlag = clampedEnd - startAngle <= 180 ? "0" : "1";
+  return [
+    "M", start.x, start.y,
+    "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
+  ].join(" ");
+}
+
+interface RadialProgressRingProps {
+  completedCount: number;
+  failedCount: number;
+  totalCount: number;
+  size?: number;
+  strokeWidth?: number;
+  label?: string;
+  sublabel?: string;
+}
+
+/**
+ * Radial bar chart / progress ring representing completed vs failed batch recipient items.
+ * Uses SVG circle path and circumference calculation (C = 2 * PI * r) to display:
+ * - Green radial arc for completed recipient items
+ * - Red radial arc for failed recipient items
+ * - Center text displaying completion success percentage
+ */
+function RadialProgressBarChart({
+  completedCount,
+  failedCount,
+  totalCount,
+  size = 140,
+  strokeWidth = 10,
+  label = "Success Rate",
+  sublabel,
+}: RadialProgressRingProps) {
+  const completedRatio = totalCount > 0 ? Math.min(1, Math.max(0, completedCount / totalCount)) : 0;
+  const failedRatio = totalCount > 0 ? Math.min(1, Math.max(0, failedCount / totalCount)) : 0;
+  const successPercentage = Math.round(completedRatio * 100);
+
+  // Outer ring for completed items
+  const outerRadius = (size - strokeWidth) / 2;
+  const outerCircumference = 2 * Math.PI * outerRadius;
+  const outerOffset = outerCircumference * (1 - completedRatio);
+
+  // Inner ring for failed items
+  const innerRadius = outerRadius - strokeWidth - 4;
+  const innerCircumference = 2 * Math.PI * innerRadius;
+  const innerOffset = innerCircumference * (1 - failedRatio);
+
+  return (
+    <div className="flex flex-col items-center gap-2" data-testid="radial-bar-chart">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg
+          width={size}
+          height={size}
+          viewBox={`0 0 ${size} ${size}`}
+          className="transform -rotate-90"
+        >
+          {/* Outer track (Completed background) */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={outerRadius}
+            fill="none"
+            stroke="#e2e8f0"
+            strokeWidth={strokeWidth}
+          />
+          {/* Outer progress ring (Completed items - emerald) */}
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={outerRadius}
+            fill="none"
+            stroke="#10b981"
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeDasharray={outerCircumference}
+            strokeDashoffset={outerOffset}
+            className="transition-all duration-700 ease-out"
+          />
+
+          {/* Inner track (Failed background) */}
+          {innerRadius > 0 && (
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={innerRadius}
+              fill="none"
+              stroke="#f1f5f9"
+              strokeWidth={strokeWidth - 2}
+            />
+          )}
+          {/* Inner progress ring (Failed items - rose) */}
+          {innerRadius > 0 && (
+            <circle
+              cx={size / 2}
+              cy={size / 2}
+              r={innerRadius}
+              fill="none"
+              stroke="#ef4444"
+              strokeWidth={strokeWidth - 2}
+              strokeLinecap="round"
+              strokeDasharray={innerCircumference}
+              strokeDashoffset={innerOffset}
+              className="transition-all duration-700 ease-out"
+            />
+          )}
+        </svg>
+
+        {/* Center Success Percentage Badge */}
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+          <span className="text-xl font-bold text-slate-900 leading-none">
+            {successPercentage}%
+          </span>
+          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mt-0.5">
+            Success
+          </span>
+        </div>
+      </div>
+
+      <div className="text-center">
+        {label && <p className="text-xs font-semibold text-slate-800">{label}</p>}
+        {sublabel && <p className="text-[11px] text-slate-500">{sublabel}</p>}
+      </div>
+
+      {/* Mini Legend for Completed vs Failed */}
+      <div className="flex items-center gap-3 text-[11px]">
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+          <span>Completed ({completedCount})</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="inline-block h-2 w-2 rounded-full bg-rose-500" />
+          <span>Failed ({failedCount})</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressRing({
   percent,
   size = 120,
@@ -978,18 +1156,38 @@ function ProgressRing({
   progressColor = "#4f46e5",
   label,
   sublabel,
+  completedCount,
+  failedCount,
+  totalCount,
 }: {
-  percent: number;
+  percent?: number;
   size?: number;
   strokeWidth?: number;
   trackColor?: string;
   progressColor?: string;
   label?: string;
   sublabel?: string;
+  completedCount?: number;
+  failedCount?: number;
+  totalCount?: number;
 }) {
+  if (completedCount !== undefined && failedCount !== undefined && totalCount !== undefined) {
+    return (
+      <RadialProgressBarChart
+        completedCount={completedCount}
+        failedCount={failedCount}
+        totalCount={totalCount}
+        size={size}
+        strokeWidth={strokeWidth}
+        label={label}
+        sublabel={sublabel}
+      />
+    );
+  }
+
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(1, percent));
+  const clamped = Math.max(0, Math.min(1, percent ?? 0));
   const offset = circumference * (1 - clamped);
 
   return (
@@ -1037,6 +1235,175 @@ function ProgressRing({
   );
 }
 
+/**
+ * Batch payout summary statistics banner showing success percentage
+ * with progress ring chart representing completed vs failed recipient items (#1039).
+ */
+function BatchPayoutSummaryBanner({
+  totalBatches,
+  totalRecipients,
+  completedCount,
+  failedCount,
+  totalVolume,
+  currency = "USDC",
+  isCompact = false,
+}: {
+  totalBatches?: number;
+  totalRecipients: number;
+  completedCount: number;
+  failedCount: number;
+  totalVolume: number;
+  currency?: string;
+  isCompact?: boolean;
+}) {
+  const successRatio = totalRecipients > 0 ? completedCount / totalRecipients : 0;
+  const failureRatio = totalRecipients > 0 ? failedCount / totalRecipients : 0;
+  const successPercentage = (successRatio * 100).toFixed(1);
+  const pendingCount = Math.max(0, totalRecipients - completedCount - failedCount);
+
+  return (
+    <section
+      data-testid="batch-payout-summary-banner"
+      className={`rounded-2xl border border-slate-200 bg-white p-6 shadow-sm overflow-hidden ${
+        isCompact ? "border-slate-100 bg-slate-50/40 p-4" : ""
+      }`}
+    >
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+        {/* Banner Title & Description */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+              Disbursement Analytics
+            </span>
+            <span
+              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                successRatio >= 0.9
+                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  : successRatio >= 0.7
+                    ? "bg-amber-50 text-amber-700 border border-amber-200"
+                    : "bg-red-50 text-red-700 border border-red-200"
+              }`}
+            >
+              {successPercentage}% Success Rate
+            </span>
+          </div>
+          <h2 className="text-lg font-bold text-slate-900">
+            Batch Payout Summary Statistics
+          </h2>
+          <p className="text-xs text-slate-500 max-w-xl">
+            Live recipient items progress representing completed vs failed batch disbursements with SVG radial chart calculations.
+          </p>
+        </div>
+
+        {/* Visual Progress Ratio Bar */}
+        <div className="hidden sm:block flex-1 max-w-xs">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-600 mb-1.5">
+            <span>Item Completion Ratio</span>
+            <span className="font-semibold text-slate-800">{completedCount} / {totalRecipients}</span>
+          </div>
+          <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden flex">
+            <div
+              style={{ width: `${successRatio * 100}%` }}
+              className="bg-emerald-500 transition-all duration-500"
+              title={`Completed: ${completedCount} (${(successRatio * 100).toFixed(1)}%)`}
+            />
+            <div
+              style={{ width: `${failureRatio * 100}%` }}
+              className="bg-rose-500 transition-all duration-500"
+              title={`Failed: ${failedCount} (${(failureRatio * 100).toFixed(1)}%)`}
+            />
+            {pendingCount > 0 && (
+              <div
+                style={{ width: `${(pendingCount / totalRecipients) * 100}%` }}
+                className="bg-slate-300 transition-all duration-500"
+                title={`Pending: ${pendingCount}`}
+              />
+            )}
+          </div>
+          <div className="flex justify-between items-center text-[10px] text-slate-400 mt-1">
+            <span className="text-emerald-600 font-medium">{completedCount} completed</span>
+            {pendingCount > 0 && <span>{pendingCount} pending</span>}
+            <span className="text-rose-600 font-medium">{failedCount} failed</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-12 gap-6 items-center border-t border-slate-100 pt-6">
+        {/* Progress Ring Radial Chart */}
+        <div className="md:col-span-4 flex items-center justify-center p-3 bg-slate-50/60 rounded-xl border border-slate-100">
+          <RadialProgressBarChart
+            completedCount={completedCount}
+            failedCount={failedCount}
+            totalCount={totalRecipients}
+            size={130}
+            strokeWidth={9}
+            label="Recipient Item Success"
+            sublabel={`${completedCount} succeeded · ${failedCount} failed`}
+          />
+        </div>
+
+        {/* Key Summary Metric Tiles */}
+        <div className="md:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {totalBatches !== undefined && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Total Batches
+              </p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">
+                {totalBatches}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-400">Processed batches</p>
+            </div>
+          )}
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              Total Recipients
+            </p>
+            <p className="mt-1 text-2xl font-bold text-slate-900">
+              {totalRecipients.toLocaleString()}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">Recipient items</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
+              Completed Items
+            </p>
+            <p className="mt-1 text-2xl font-bold text-emerald-700">
+              {completedCount.toLocaleString()}
+            </p>
+            <p className="mt-1 text-[11px] text-emerald-600 font-medium">
+              {totalRecipients > 0 ? `${((completedCount / totalRecipients) * 100).toFixed(1)}%` : "0%"} of total
+            </p>
+          </div>
+          <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-rose-700">
+              Failed Items
+            </p>
+            <p className="mt-1 text-2xl font-bold text-rose-700">
+              {failedCount.toLocaleString()}
+            </p>
+            <p className="mt-1 text-[11px] text-rose-600 font-medium">
+              {totalRecipients > 0 ? `${((failedCount / totalRecipients) * 100).toFixed(1)}%` : "0%"} of total
+            </p>
+          </div>
+          <div className={`rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 ${totalBatches === undefined ? "col-span-2 sm:col-span-1" : ""}`}>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-indigo-700">
+              Volume ({currency})
+            </p>
+            <p className="mt-1 text-2xl font-bold text-indigo-900 truncate">
+              {totalVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </p>
+            <p className="mt-1 text-[11px] text-indigo-600 font-medium">
+              Total disbursed
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
 function Banner({
   tone,
   icon,
@@ -1077,12 +1444,13 @@ function fileBasename(name: string): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// SDP Status Integration Indicator (#794)
+// SDP Status Integration Indicator (#794 / #1042)
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**
  * Stellar Disbursement Platform (SDP) server sync status indicator.
  * Polls `api.getSdpStatus()` and displays real-time sync badge.
+ * Shows 'Synced' when status is operational/synced/ok (#1042).
  */
 export function SdpStatusIndicator() {
   const { data, loading, error } = usePolling<SdpStatusResponse>(
@@ -1385,44 +1753,24 @@ export default function PayoutsPage() {
               (sum, b) => sum + (b.succeeded_count || 0),
               0,
             );
-            const successRate = totalRecipients > 0 ? totalSucceeded / totalRecipients : 0;
+            const totalFailed = batches.reduce(
+              (sum, b) => sum + (b.failed_count || 0),
+              0,
+            );
+            const totalVolume = batches.reduce(
+              (sum, b) => sum + (b.total_amount || 0),
+              0,
+            ) / 1_000_000;
 
             return (
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-sm text-slate-500">Total Batches</p>
-                  <p className="mt-1 text-3xl font-bold text-slate-900">
-                    {batches.length}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-sm text-slate-500">Total Recipients</p>
-                  <p className="mt-1 text-3xl font-bold text-slate-900">
-                    {totalRecipients}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-sm text-slate-500">Total Volume (USDC)</p>
-                  <p className="mt-1 text-3xl font-bold text-slate-900">
-                    {(
-                      batches.reduce(
-                        (sum, b) => sum + (b.total_amount || 0),
-                        0,
-                      ) / 1_000_000
-                    ).toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <ProgressRing
-                    percent={successRate}
-                    size={110}
-                    strokeWidth={10}
-                    progressColor={successRate === 1 ? "#059669" : "#4f46e5"}
-                    label="Success Rate"
-                    sublabel={`${totalSucceeded} of ${totalRecipients} recipients`}
-                  />
-                </div>
-              </div>
+              <BatchPayoutSummaryBanner
+                totalBatches={batches.length}
+                totalRecipients={totalRecipients}
+                completedCount={totalSucceeded}
+                failedCount={totalFailed}
+                totalVolume={totalVolume}
+                currency="USDC"
+              />
             );
           })()}
 
@@ -1582,6 +1930,14 @@ function BatchDetailsModal({
     }
   };
 
+  const completedItemsCount = rows.length > 0
+    ? rows.filter((r) => r.status.toLowerCase() === "completed" || r.status.toLowerCase() === "succeeded").length
+    : batch.succeeded_count;
+  const failedItemsCount = rows.length > 0
+    ? rows.filter((r) => r.status.toLowerCase() === "failed").length
+    : batch.failed_count;
+  const totalItemsCount = rows.length > 0 ? rows.length : batch.total_recipients;
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
@@ -1600,7 +1956,17 @@ function BatchDetailsModal({
             <X size={18} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* ── #1039: Batch Summary Statistics Banner inside Modal ────── */}
+          <BatchPayoutSummaryBanner
+            totalRecipients={totalItemsCount}
+            completedCount={completedItemsCount}
+            failedCount={failedItemsCount}
+            totalVolume={batch.total_amount / 1_000_000}
+            currency={batch.currency}
+            isCompact
+          />
+
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
             <InfoCell label="Batch ID" value={batch.id} mono />
             <InfoCell label="Status">
@@ -1764,6 +2130,17 @@ function InfoCell({
       >
         {children ?? value ?? "—"}
       </div>
+
+      {/* Allbridge cross-chain deposits */}
+      <div className="mt-10 mb-3">
+        <h2 className="font-semibold text-slate-800">Cross-Chain Deposits (Allbridge)</h2>
+        <p className="mt-1 text-sm text-slate-500">Incoming bridge transfers · refreshes every 15 s</p>
+      </div>
+      <BridgeDepositMonitor
+        deposits={bridge.data?.deposits ?? null}
+        loading={bridge.loading}
+        error={bridge.error}
+      />
     </div>
   );
 }

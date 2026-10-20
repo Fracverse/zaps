@@ -263,6 +263,23 @@ async fn main() {
         None => None,
     };
 
+    // #952: Redis-backed distributed lock for payout batches.
+    let batch_lock = match config.redis_url.as_deref() {
+        Some(url) => match services::redis_cache::BatchLock::connect(url) {
+            Ok(lock) => {
+                tracing::info!("BatchLock enabled against Redis");
+                Some(lock)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to initialize BatchLock, continuing without it: {e}"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
     // Bridge state: shares the DB pool and the Allbridge API client.
     let bridge_state =
         api::bridge::BridgeState::new(pool.clone(), config.allbridge_api_url.clone());
@@ -292,6 +309,7 @@ async fn main() {
                         config.privy_jwks_url.clone(),
                     )),
                     privy_app_id: config.privy_app_id.clone(),
+                    cache: Some(auth_cache.clone()),
                 },
                 // #949: Redis sliding window shared across API instances.
                 api::auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
@@ -326,7 +344,7 @@ async fn main() {
                     yield_cache.clone(),
                 )),
             )
-            .nest("/api/payouts", api::payout_routes(pool.clone())),
+            .nest("/api/payouts", api::payout_routes(bridge_state.clone())),
         pool.clone(),
         auth_cache.clone(),
         privy_jwks,
@@ -393,8 +411,7 @@ async fn main() {
         )
         .layer(cors_layer(&config.cors_allowed_origins));
 
-    // #726 — Track background worker tasks so they can be allowed to finish
-    // their current batch item before the process exits on shutdown.
+    // #726 — Keep background worker tasks alive for the lifetime of the server.
     let mut worker_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     worker_handles.push(event_streamer_handle);
 
@@ -445,9 +462,11 @@ async fn main() {
     // BE-554 / Issue #936: Background queue worker processing bulk disbursement requests asynchronously
     let disbursement_pool = pool.clone();
     let disbursement_config = services::disbursement_worker::DisbursementWorkerConfig::from_env();
-    worker_handles.push(tokio::spawn(async move {
-        services::disbursement_worker::run(disbursement_pool, disbursement_config).await;
-    }));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let disbursement_handle = tokio::spawn(async move {
+        services::disbursement_worker::run(disbursement_pool, disbursement_config, shutdown_rx)
+            .await;
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("Listening on {}", addr);
@@ -457,12 +476,29 @@ async fn main() {
     // on every request so IP-based rate limiting (auth::auth_rate_limit,
     // rate_limiter_middleware) has a real peer address to fall back on when
     // there's no `X-Forwarded-For` header (i.e. no reverse proxy in front).
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+    );
+
+    tokio::select! {
+        result = server => {
+            if let Err(error) = result {
+                tracing::error!("HTTP server stopped: {error}");
+            }
+        }
+        result = tokio::signal::ctrl_c() => {
+            match result {
+                Ok(()) => tracing::info!("Shutdown signal received"),
+                Err(error) => tracing::error!("Failed to listen for shutdown signal: {error}"),
+            }
+        }
+    }
+
+    let _ = shutdown_tx.send(());
+    if let Err(error) = disbursement_handle.await {
+        tracing::error!("Disbursement worker task failed during shutdown: {error}");
+    }
 }
 
 // ── /api/v1/config — mobile minimum-version gate (#805) ───────────────────────
@@ -717,6 +753,72 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
             latency_ms,
             error: Some(e),
         },
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::liveness_probe;
+    use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
+    use tower::ServiceExt;
+
+    fn liveness_router() -> Router {
+        Router::new().route("/healthz", get(liveness_probe))
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_returns_200() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_body_contains_status_ok() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn liveness_probe_response_is_json() {
+        let response = liveness_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+
+        assert!(content_type.contains("application/json"), "expected JSON content-type, got {content_type}");
     }
 }
 

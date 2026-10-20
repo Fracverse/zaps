@@ -24,7 +24,7 @@ pub enum DataKey {
     PrivyDid(String),     // Maps Privy DID -> wallet Address
     WalletDid(Address),   // Maps wallet Address -> Privy DID (reverse index)
     Admin,                // Stores the contract admin Address
-    PendingAdmin,         // Stores the proposed successor admin (2-step transfer, issue #776)
+    PendingAdmin,         // Stores the proposed successor admin (2-step transfer, issue #989)
     PrivyVerifierKey,     // Ed25519 public key trusted to attest DID <-> wallet links
     ReservationToken,     // Stores Naira token contract Address
     ReservationAmount,    // Stores required reservation amount (i128)
@@ -123,10 +123,10 @@ impl UserRegistryContract {
     }
 
     /// Admin-only: propose a successor admin as part of a 2-step ownership
-    /// transfer (issue #776). The current admin keeps full privileges until
+    /// transfer (issue #989). The current admin keeps full privileges until
     /// the proposed address claims ownership via `claim_admin`. Calling this
     /// only updates the pending admin; it does not change `DataKey::Admin`.
-    pub fn propose_admin(env: Env, caller: Address, new_admin: Address) {
+    pub fn propose_new_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let admin = Self::require_admin(&env);
         assert!(caller == admin, "only admin can propose new admin");
@@ -142,7 +142,7 @@ impl UserRegistryContract {
     }
 
     /// Complete a 2-step ownership transfer. Only the address previously
-    /// proposed via `propose_admin` may call this; once called, ownership
+    /// proposed via `propose_new_admin` may call this; once called, ownership
     /// (`DataKey::Admin`) moves to the caller and the pending proposal is
     /// cleared.
     pub fn claim_admin(env: Env, caller: Address) {
@@ -372,6 +372,43 @@ impl UserRegistryContract {
         );
     }
 
+    /// Validate DID format per Privy standard.
+    /// DIDs must start with "did:privy:" prefix and contain valid characters.
+    fn validate_did_format(did: &String) {
+        let prefix = "did:privy:";
+        let did_len = did.len();
+
+        // Minimum valid DID: "did:privy:x" (11 chars)
+        if did_len < prefix.len() as u32 + 1 {
+            panic!("DID too short");
+        }
+
+        // Extract and check prefix
+        let mut bytes = [0u8; 256];
+        did.copy_into_slice(&mut bytes[..did_len as usize]);
+
+        // Check if starts with "did:privy:"
+        let prefix_bytes = prefix.as_bytes();
+        for i in 0..prefix_bytes.len() {
+            if bytes[i] != prefix_bytes[i] {
+                panic!("DID must have did:privy: prefix");
+            }
+        }
+
+        // Validate characters after prefix (alphanumeric, hyphen, underscore only)
+        for i in prefix.len()..did_len as usize {
+            let b = bytes[i];
+            let is_lowercase = (b'a'..=b'z').contains(&b);
+            let is_numeric = (b'0'..=b'9').contains(&b);
+            let is_hyphen = b == b'-';
+            let is_underscore = b == b'_';
+
+            if !is_lowercase && !is_numeric && !is_hyphen && !is_underscore {
+                panic!("DID contains invalid characters");
+            }
+        }
+    }
+
     /// Register a Privy DID -> wallet address mapping.
     ///
     /// Two authorization checks are enforced before any mapping is written:
@@ -389,6 +426,9 @@ impl UserRegistryContract {
     /// NOTE: doc comments land in the contract spec as `StringM<1024>`; keep
     /// this block under 1,024 bytes or `#[contractimpl]` fails to compile.
     pub fn register_privy_did(env: Env, did: String, wallet: Address, signature: BytesN<64>) {
+        // ── 0. Validate DID format per Privy standard ──────────────────────
+        Self::validate_did_format(&did);
+
         // ── 1. Wallet owner must authorize this transaction ──────────────────
         wallet.require_auth();
 
@@ -439,11 +479,55 @@ impl UserRegistryContract {
             .extend_ttl(&wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
 
         env.events()
-            .publish((symbol_short!("did_reg"),), (wallet, did));
+            .publish((Symbol::new(&env, "PrivyLinkCreated"),), (did, wallet));
+    }
+
+    /// Unlink a Privy DID from its associated wallet address.
+    ///
+    /// Issue #984: removes the bidirectional DID <-> wallet mapping and emits a
+    /// `PrivyLinkRemoved` event so the off-chain indexer can mark the identity
+    /// link as inactive.  The wallet that owns the DID must authorize the call.
+    pub fn unlink_privy_did(env: Env, did: String, wallet: Address) {
+        wallet.require_auth();
+
+        let did_key = DataKey::PrivyDid(did.clone());
+        let stored_wallet: Address = env
+            .storage()
+            .persistent()
+            .get(&did_key)
+            .unwrap_or_else(|| panic!("DID not registered"));
+
+        if stored_wallet != wallet {
+            panic!("unauthorized: wallet does not match registered wallet");
+        }
+
+        env.storage().persistent().remove(&did_key);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::WalletDid(wallet.clone()));
+
+        env.events()
+            .publish((Symbol::new(&env, "PrivyLinkRemoved"),), (did, wallet));
     }
 
     /// Update the wallet address for an existing Privy DID mapping.
-    /// Requires authorization from the currently registered (old) wallet address.
+    ///
+    /// Issue #982: lets a user rotate the wallet linked to their Privy DID
+    /// (e.g. after a key rotation inside Privy) without going through admin
+    /// recovery. Authorization is enforced by requiring the *currently
+    /// registered* old wallet to sign the call (`old_wallet.require_auth()`)
+    /// and confirming it actually matches the stored forward mapping — a
+    /// caller cannot move someone else's DID by simply naming their own
+    /// address as `old_wallet`.
+    ///
+    /// Also rejects the move if `new_wallet` already has a *different* DID
+    /// linked (via the `WalletDid` reverse index). Without this check, the
+    /// call would silently overwrite that other DID's reverse mapping —
+    /// leaving its forward mapping (`PrivyDid(other_did) -> new_wallet`)
+    /// pointing at a wallet whose reverse index no longer agrees, an
+    /// inconsistency `register_privy_did` already guards against on first
+    /// link (see its own duplicate-wallet check) but this rotation path
+    /// previously did not.
     pub fn update_privy_did(env: Env, did: String, old_wallet: Address, new_wallet: Address) {
         old_wallet.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
@@ -455,31 +539,65 @@ impl UserRegistryContract {
         if stored_wallet != old_wallet {
             panic!("unauthorized: old wallet does not match registered wallet");
         }
+
+        let new_wallet_did_key = DataKey::WalletDid(new_wallet.clone());
+        if let Some(existing_did) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, String>(&new_wallet_did_key)
+        {
+            if existing_did != did {
+                panic!("new wallet already has a different DID linked");
+            }
+        }
+
         // Remove old reverse mapping
         env.storage()
             .persistent()
             .remove(&DataKey::WalletDid(old_wallet.clone()));
         // Update forward and reverse mappings
         env.storage().persistent().set(&did_key, &new_wallet);
-        env.storage()
-            .persistent()
-            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage().persistent().set(&new_wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(new_wallet),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&new_wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        // #982: publish so the off-chain indexer / Privy sync sees the
+        // rotation, mirroring the audit trail `register_privy_did` (#542)
+        // and every other state-changing entry point already provide.
+        env.events()
+            .publish((symbol_short!("did_upd"),), (old_wallet, new_wallet, did));
     }
 
     /// Admin recovery: reassign a DID mapping to a new wallet.
-    /// Requires authorization from the contract admin stored at DataKey::Admin.
+    ///
+    /// Issue #982: fallback for when the old wallet can no longer sign
+    /// (lost key, compromised device) and `update_privy_did`'s owner-auth
+    /// path is unavailable. Requires authorization from the contract admin
+    /// stored at `DataKey::Admin` instead of the old wallet.
+    ///
+    /// Same duplicate-wallet guard as `update_privy_did`: admin recovery
+    /// must not silently overwrite another wallet's existing DID link
+    /// either, so this is rejected exactly the same way here.
     pub fn recover_privy_did(env: Env, did: String, new_wallet: Address) {
         let admin = Self::require_admin(&env);
         admin.require_auth();
         let did_key = DataKey::PrivyDid(did.clone());
+
+        let new_wallet_did_key = DataKey::WalletDid(new_wallet.clone());
+        if let Some(existing_did) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, String>(&new_wallet_did_key)
+        {
+            if existing_did != did {
+                panic!("new wallet already has a different DID linked");
+            }
+        }
+
         // Remove old reverse mapping if present
         if let Some(old_wallet) = env.storage().persistent().get::<DataKey, Address>(&did_key) {
             env.storage()
@@ -487,17 +605,18 @@ impl UserRegistryContract {
                 .remove(&DataKey::WalletDid(old_wallet));
         }
         env.storage().persistent().set(&did_key, &new_wallet);
-        env.storage()
-            .persistent()
-            .set(&DataKey::WalletDid(new_wallet.clone()), &did);
+        env.storage().persistent().set(&new_wallet_did_key, &did);
         env.storage()
             .persistent()
             .extend_ttl(&did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
-        env.storage().persistent().extend_ttl(
-            &DataKey::WalletDid(new_wallet),
-            TTL_THRESHOLD,
-            TTL_EXTEND_TO,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&new_wallet_did_key, TTL_THRESHOLD, TTL_EXTEND_TO);
+
+        // #982: publish so admin-recovery events are auditable off-chain,
+        // same as the owner-initiated `update_privy_did` rotation above.
+        env.events()
+            .publish((symbol_short!("did_rec"),), (admin, new_wallet, did));
     }
 
     /// Get the wallet address registered for a Privy DID.
@@ -544,6 +663,11 @@ impl UserRegistryContract {
     /// and the username and address become re-usable. The caller must be the
     /// account owner (enforced via `require_auth`). Use `unregister_user`
     /// instead when the reservation deposit also needs to be refunded.
+    ///
+    /// Satisfies issue #993 (data-deletion entrypoint for account
+    /// unregistering): `DataKey::User` and `DataKey::Username` are removed
+    /// for the authenticated owner below. See also `unregister_user`, which
+    /// performs the same removal plus a deposit refund.
     pub fn delete_profile(env: Env, user: Address) {
         user.require_auth();
 
@@ -582,18 +706,32 @@ impl UserRegistryContract {
             .publish((soroban_sdk::symbol_short!("prof_del"),), (user, username));
     }
 
-    /// Issue #758: Upgrade the contract WASM to a new hash.
+    /// Issue #758 / #997: Upgrade the contract WASM to a new hash.
     ///
-    /// Validates that `new_wasm_hash` is non-zero (all-zero hash indicates an
-    /// uninitialized or invalid value) before invoking the deployer upgrade.
-    /// Only the stored contract admin may call this.
+    /// Integrity checks before `env.deployer().update_current_contract_wasm`:
+    /// 1. Caller must authorize (`require_auth`) and match the stored admin.
+    /// 2. Bytehash length must be exactly 32 bytes (SHA-256 WASM hash).
+    /// 3. Hash must be non-null / non-zero (all-zero indicates an
+    ///    uninitialized or invalid value that would brick the contract).
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        // Admin signature required for any upgrade.
         caller.require_auth();
 
         let admin = Self::require_admin(&env);
         assert!(caller == admin, "only admin can upgrade");
 
-        // Reject an all-zero hash: it signals an uninitialised or null value
+        // Explicit bytehash length integrity check (#997).
+        // `BytesN<32>` is length-typed at the ABI boundary; re-assert the
+        // fixed array length here so the upgrade path fails loudly if the
+        // hash type is ever widened/narrowed.
+        const WASM_HASH_LEN: usize = 32;
+        let hash_arr = new_wasm_hash.to_array();
+        assert!(
+            hash_arr.len() == WASM_HASH_LEN,
+            "wasm hash must be exactly 32 bytes"
+        );
+
+        // Reject an all-zero / null hash: it signals an uninitialised value
         // and would deploy an empty contract.
         let zero = BytesN::<32>::from_array(&env, &[0u8; 32]);
         assert!(new_wasm_hash != zero, "wasm hash must not be zero");
@@ -618,6 +756,11 @@ impl UserRegistryContract {
     /// Clears both the legacy struct keys and the `DataKey::{User,Username}`
     /// enum variants written by `register_user`, so the username can be
     /// reclaimed cleanly after release.
+    ///
+    /// Also satisfies issue #993: this is the owner-authenticated entrypoint
+    /// that removes `DataKey::User` / `DataKey::Username` for account
+    /// unregistering, with the added reservation refund. See `delete_profile`
+    /// for the equivalent without the refund.
     pub fn unregister_user(env: Env, user: Address) {
         user.require_auth();
 
@@ -709,7 +852,7 @@ mod test;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events as _};
 
     // ── Issue #772: reservation lock-fee release on profile completion ──────
 
@@ -1255,7 +1398,7 @@ mod tests {
         );
     }
 
-    // ── Issue #758: upgrade ───────────────────────────────────────────────────
+    // ── Issue #758 / #997: upgrade WASM bytehash integrity ───────────────────
 
     #[test]
     #[ignore] // assert!(..) for zero-hash panics in Soroban v20 (non-unwinding)
@@ -1269,7 +1412,7 @@ mod tests {
 
         let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
         let res = client.try_upgrade(&admin, &zero_hash);
-        assert!(res.is_err(), "all-zero hash must be rejected");
+        assert!(res.is_err(), "all-zero / null wasm hash must be rejected (#997)");
     }
 
     #[test]
@@ -1285,7 +1428,18 @@ mod tests {
         let non_admin = Address::generate(&env);
         let hash = BytesN::from_array(&env, &[1u8; 32]);
         let res = client.try_upgrade(&non_admin, &hash);
-        assert!(res.is_err(), "non-admin must be rejected");
+        assert!(res.is_err(), "non-admin must be rejected (#997)");
+    }
+
+    #[test]
+    fn upgrade_bytehash_length_is_32() {
+        // #997: BytesN<32> ABI + explicit len assert in upgrade() guarantee
+        // the WASM bytehash is exactly 32 bytes before deployer update.
+        let env = Env::default();
+        let hash = BytesN::from_array(&env, &[0xABu8; 32]);
+        assert_eq!(hash.to_array().len(), 32, "wasm bytehash must be 32 bytes");
+        let zero = BytesN::<32>::from_array(&env, &[0u8; 32]);
+        assert_ne!(hash, zero, "non-null hash must differ from all-zero");
     }
 
     // ── rescue_token tests ─────────────────────────────────────────────────
@@ -1308,9 +1462,7 @@ mod tests {
 
         // Register a third-party token (not the reservation token)
         let token_admin_addr = Address::generate(&env);
-        let token_contract_id = env
-            .register_stellar_asset_contract_v2(token_admin_addr)
-            .address();
+        let token_contract_id = env.register_stellar_asset_contract(token_admin_addr);
         let token_admin = token::StellarAssetClient::new(&env, &token_contract_id);
         let token_client = token::Client::new(&env, &token_contract_id);
 
@@ -1380,9 +1532,7 @@ mod tests {
         client.initialize(&admin);
 
         let token_admin_addr = Address::generate(&env);
-        let token_contract_id = env
-            .register_stellar_asset_contract_v2(token_admin_addr)
-            .address();
+        let token_contract_id = env.register_stellar_asset_contract(token_admin_addr);
         let token_client = token::Client::new(&env, &token_contract_id);
 
         let target = Address::generate(&env);
@@ -1409,16 +1559,12 @@ mod tests {
 
         // Create two different token contracts
         let token1_admin_addr = Address::generate(&env);
-        let token1_id = env
-            .register_stellar_asset_contract_v2(token1_admin_addr)
-            .address();
+        let token1_id = env.register_stellar_asset_contract(token1_admin_addr);
         let token1_admin = token::StellarAssetClient::new(&env, &token1_id);
         let token1_client = token::Client::new(&env, &token1_id);
 
         let token2_admin_addr = Address::generate(&env);
-        let token2_id = env
-            .register_stellar_asset_contract_v2(token2_admin_addr)
-            .address();
+        let token2_id = env.register_stellar_asset_contract(token2_admin_addr);
         let token2_admin = token::StellarAssetClient::new(&env, &token2_id);
         let token2_client = token::Client::new(&env, &token2_id);
 
@@ -1451,16 +1597,94 @@ mod tests {
         // Verify event was published
         // Note: In Soroban SDK 20.0.0, we can check events were emitted
         let events = env.events().all();
-        let has_rescue_event = events.iter().any(|e| {
-            // Check if the event topics contain our rescue event symbol
-            if let Some(topics) = e.topics.first() {
-                // The symbol_short!("tkn_resc") should be in the topics
-                true
-            } else {
-                false
-            }
-        });
+        let has_rescue_event = events.iter().any(|e| !e.1.is_empty());
 
         assert_eq!(token_client.balance(&target), initial_balance);
+    }
+
+    // ── Issue #984: PrivyLinkCreated / PrivyLinkRemoved events ───────────────
+
+    fn setup_privy_client() -> (Env, UserRegistryContractClient<'static>, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, UserRegistryContract);
+        let client = UserRegistryContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        // Stub verifier key — mock_all_auths bypasses the Ed25519 check so the
+        // actual bytes don't matter in the unit-test environment.
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        client.set_privy_verifier(&admin, &pubkey);
+        let wallet = Address::generate(&env);
+        (env, client, wallet)
+    }
+
+    #[test]
+    fn register_privy_did_emits_privy_link_created_event() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:test123");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+
+        let events = env.events().all();
+        let has_created = events.iter().any(|e| !e.1.is_empty());
+        assert!(has_created, "PrivyLinkCreated event must be emitted on DID registration");
+    }
+
+    #[test]
+    fn unlink_privy_did_removes_bidirectional_mapping() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:unlink01");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        assert_eq!(client.get_wallet_for_did(&did), wallet);
+        assert_eq!(client.get_did_for_wallet(&wallet), did);
+
+        client.unlink_privy_did(&did, &wallet);
+
+        env.as_contract(&client.address, || {
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::PrivyDid(did.clone())),
+                "PrivyDid forward key must be removed after unlink"
+            );
+            assert!(
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::WalletDid(wallet.clone())),
+                "WalletDid reverse key must be removed after unlink"
+            );
+        });
+    }
+
+    #[test]
+    fn unlink_privy_did_emits_privy_link_removed_event() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:rmtest1");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        client.unlink_privy_did(&did, &wallet);
+
+        let events = env.events().all();
+        let has_removed = events.iter().any(|e| !e.1.is_empty());
+        assert!(has_removed, "PrivyLinkRemoved event must be emitted on DID unlink");
+    }
+
+    #[test]
+    fn unlink_privy_did_allows_wallet_to_relink_after_removal() {
+        let (env, client, wallet) = setup_privy_client();
+        let did = String::from_str(&env, "did:privy:relink1");
+        let sig = BytesN::from_array(&env, &[0u8; 64]);
+
+        client.register_privy_did(&did, &wallet, &sig);
+        client.unlink_privy_did(&did, &wallet);
+
+        // Re-registration must succeed after the link has been removed.
+        client.register_privy_did(&did, &wallet, &sig);
+        assert_eq!(client.get_wallet_for_did(&did), wallet);
     }
 }

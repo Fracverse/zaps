@@ -9,16 +9,18 @@ interface NavItem {
   href: string;
   icon: string;
   keywords?: string;
+  /** Second key of the `g` + key tab shortcut (#1041), e.g. "t" for `g t`. */
+  shortcut: string;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { label: "Overview", href: "/dashboard", icon: "⬛", keywords: "home summary stats" },
-  { label: "Transactions", href: "/dashboard/transactions", icon: "📋", keywords: "payments social feed" },
-  { label: "Payouts", href: "/dashboard/payouts", icon: "💸", keywords: "batch disburse withdraw" },
-  { label: "QR Codes", href: "/dashboard/qr", icon: "⬜", keywords: "scan generate merchant" },
-  { label: "Analytics", href: "/dashboard/analytics", icon: "📈", keywords: "charts reports graph" },
-  { label: "Contracts", href: "/dashboard/contracts", icon: "🔗", keywords: "soroban smart contract health" },
-  { label: "Yield Vault", href: "/dashboard/yield", icon: "🏦", keywords: "apy tvl deposit" },
+export const NAV_ITEMS: NavItem[] = [
+  { label: "Overview", href: "/dashboard", icon: "⬛", keywords: "home summary stats", shortcut: "o" },
+  { label: "Transactions", href: "/dashboard/transactions", icon: "📋", keywords: "payments social feed", shortcut: "t" },
+  { label: "Payouts", href: "/dashboard/payouts", icon: "💸", keywords: "batch disburse withdraw", shortcut: "p" },
+  { label: "QR Codes", href: "/dashboard/qr", icon: "⬜", keywords: "scan generate merchant", shortcut: "q" },
+  { label: "Analytics", href: "/dashboard/analytics", icon: "📈", keywords: "charts reports graph", shortcut: "a" },
+  { label: "Contracts", href: "/dashboard/contracts", icon: "🔗", keywords: "soroban smart contract health", shortcut: "c" },
+  { label: "Yield Vault", href: "/dashboard/yield", icon: "🏦", keywords: "apy tvl deposit", shortcut: "y" },
 ];
 
 interface CommandPaletteProps {
@@ -112,6 +114,9 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 >
                   <span aria-hidden="true">{item.icon}</span>
                   {item.label}
+                  <kbd className="ml-auto font-mono text-[10px] uppercase text-slate-400">
+                    g {item.shortcut}
+                  </kbd>
                 </Command.Item>
               ))}
             </Command.Group>

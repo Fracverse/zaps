@@ -211,6 +211,7 @@ fn create_test_app(pool: PgPool) -> Router {
         pool,
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
+        cache: None,
     };
     Router::new().nest(
         "/api/auth",
@@ -227,6 +228,7 @@ fn create_mock_auth_app() -> Router {
             .unwrap(),
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
+        cache: None,
     };
     Router::new().nest(
         "/api/auth",
@@ -245,6 +247,8 @@ fn create_protected_test_app(pool: PgPool) -> Router {
         Router::new().route("/protected", get(protected_identity)),
         pool,
         zaps_backend::api::AuthTokenCache::new(),
+        Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
+        TEST_APP_ID.to_string(),
     )
 }
 

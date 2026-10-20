@@ -165,6 +165,7 @@ fn create_test_app(pool: PgPool) -> Router {
         pool,
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
+        cache: None,
     };
     Router::new().nest(
         "/api/auth",
@@ -179,6 +180,7 @@ fn create_mock_auth_app() -> Router {
             .unwrap(),
         privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
         privy_app_id: TEST_APP_ID.to_string(),
+        cache: None,
     };
     Router::new().nest(
         "/api/auth",
@@ -630,5 +632,77 @@ mod privy_auth_integration_tests {
             .as_str()
             .unwrap()
             .contains("does not match any wallet"));
+    }
+
+    #[tokio::test]
+    async fn test_refresh_session_rejects_missing_token() {
+        let app = create_mock_auth_app();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/refresh")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_session_accepts_cached_session() {
+        let cache = zaps_backend::api::AuthTokenCache::new();
+        let user_id = Uuid::new_v4();
+        let address = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5".to_string();
+        let username = "testuser".to_string();
+        let session = zaps_backend::api::auth_middleware::CachedSession::new(
+            user_id,
+            address.clone(),
+            username.clone(),
+        );
+        cache.insert("my-cached-token".to_string(), session).await;
+
+        let state = AuthState {
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://localhost/dummy")
+                .unwrap(),
+            privy: Arc::new(PrivyJwksClient::new(mock_jwks_url().to_string())),
+            privy_app_id: TEST_APP_ID.to_string(),
+            cache: Some(cache),
+        };
+        let app = Router::new().nest(
+            "/api/auth",
+            zaps_backend::api::auth_routes_with_state(state),
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/refresh")
+            .header("Authorization", "Bearer my-cached-token")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["token"].as_str().is_some());
+        assert_eq!(json["username"].as_str().unwrap(), "testuser");
+        assert_eq!(json["address"].as_str().unwrap(), address);
+        assert_eq!(json["user_id"].as_str().unwrap(), user_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_session_rejects_invalid_token() {
+        let app = create_mock_auth_app();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/auth/refresh")
+            .header("Authorization", "Bearer invalid-garbage-token")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

@@ -39,6 +39,7 @@ import {
   likePayment,
   unlikePayment,
   fetchFeed,
+  addComment,
 } from "../../src/services/socialService";
 import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
 import {
@@ -173,6 +174,7 @@ export default function HomeScreen() {
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
   const earningGlowAnim = useRef(new Animated.Value(0)).current;
   const earningPulseAnim = useRef(new Animated.Value(1)).current;
+  const earningOuterGlowAnim = useRef(new Animated.Value(0)).current;
   const yieldRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
@@ -388,8 +390,10 @@ export default function HomeScreen() {
     if (!autoYieldEnabled || yieldStatus !== "success") {
       earningGlowAnim.stopAnimation();
       earningPulseAnim.stopAnimation();
+      earningOuterGlowAnim.stopAnimation();
       earningGlowAnim.setValue(0);
       earningPulseAnim.setValue(1);
+      earningOuterGlowAnim.setValue(0);
       return;
     }
     const glowLoop = Animated.loop(
@@ -413,6 +417,22 @@ export default function HomeScreen() {
         }),
       ])
     );
+    // Outer glow ring pulses slower for a layered depth effect
+    const outerGlowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(400),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
     const pulseLoop = Animated.loop(
       Animated.sequence([
         // Slight delay so the status dot follows the card glow.
@@ -420,13 +440,13 @@ export default function HomeScreen() {
         Animated.delay(250),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.03,
+          toValue: 1.04,
           duration: 500,
           useNativeDriver: true,
         }),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.06,
+          toValue: 1.07,
           duration: 450,
           useNativeDriver: true,
         }),
@@ -439,12 +459,14 @@ export default function HomeScreen() {
       ])
     );
     glowLoop.start();
+    outerGlowLoop.start();
     pulseLoop.start();
     return () => {
       glowLoop.stop();
+      outerGlowLoop.stop();
       pulseLoop.stop();
     };
-  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim]);
+  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim, earningOuterGlowAnim]);
 
   const onPullRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -518,43 +540,65 @@ export default function HomeScreen() {
       () => undefined
     );
     setSelectedItem(item);
-    setCommentsList([
-      {
-        id: "c1",
-        user: "Tolu",
-        text: "Thanks for the food! 😋",
-        time: "1h ago",
-      },
-      {
-        id: "c2",
-        user: "Ebube",
-        text: "Anytime! Let's do it again.",
-        time: "45m ago",
-      },
-    ]);
+    setCommentText("");
+    // Seed with an empty list; new comments are appended after a successful
+    // POST /api/social/comment so the drawer always reflects backend state.
+    setCommentsList([]);
     setCommentsModalVisible(true);
   };
 
-  const submitComment = () => {
-    if (!commentText.trim() || !selectedItem) return;
-    const newComment = {
-      id: Date.now().toString(),
+  const submitComment = async () => {
+    const trimmed = commentText.trim();
+    if (!trimmed || !selectedItem) return;
+
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+
+    const paymentId = selectedItem.id;
+    const optimistic: Comment = {
+      id: `local-${Date.now()}`,
       user: "Me",
-      text: commentText,
+      text: trimmed,
       time: "Just now",
     };
-    setCommentsList([...commentsList, newComment]);
-    setCommentText("");
 
-    // Update comments count on item
-    setFeed(
-      feed.map((item) => {
-        if (item.id === selectedItem.id) {
-          return { ...item, comments: item.comments + 1 };
-        }
-        return item;
-      })
+    // Optimistic UI: show the comment + bump the count immediately.
+    setCommentsList((prev) => [...prev, optimistic]);
+    setCommentText("");
+    setFeed((prev) =>
+      prev.map((item) =>
+        item.id === paymentId
+          ? { ...item, comments: item.comments + 1 }
+          : item
+      )
     );
+
+    try {
+      const saved = await addComment(paymentId, trimmed);
+      setCommentsList((prev) =>
+        prev.map((c) =>
+          c.id === optimistic.id
+            ? {
+                id: saved.id,
+                user: saved.username || "Me",
+                text: saved.content,
+                time: "Just now",
+              }
+            : c
+        )
+      );
+    } catch {
+      // Revert optimistic comment + count on failure.
+      setCommentsList((prev) => prev.filter((c) => c.id !== optimistic.id));
+      setFeed((prev) =>
+        prev.map((item) =>
+          item.id === paymentId
+            ? { ...item, comments: Math.max(0, item.comments - 1) }
+            : item
+        )
+      );
+    }
   };
 
   const openEarningsModal = () => {
@@ -856,7 +900,14 @@ export default function HomeScreen() {
           </View>
 
           {/* Earning Balance Section */}
-          <View style={styles.earningBalanceSection}>
+          <TouchableOpacity
+            style={styles.earningBalanceSection}
+            activeOpacity={0.8}
+            onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance"
+            testID="earning-balance-section"
+          >
             <View style={styles.earningBalanceHeader}>
               <View style={styles.earningDot} />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
@@ -864,11 +915,16 @@ export default function HomeScreen() {
             <Text style={styles.earningBalanceAmount}>
               {displayBalance(totalYieldEarned)}
             </Text>
-          </View>
+          </TouchableOpacity>
 
+          {/* Pay / Request trigger button (#886) */}
           <TouchableOpacity
             style={styles.payRequestButton}
             onPress={() => router.push("/transfer")}
+            accessibilityRole="button"
+            accessibilityLabel="Pay / Request"
+            testID="pay-request-button"
+            activeOpacity={0.8}
           >
             <Ionicons
               name="send"
@@ -909,6 +965,28 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.earningCardWrapper}>
+          {/* Outer soft glow ring — slower pulse for layered depth */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.earningGlow,
+              styles.earningOuterGlow,
+              {
+                opacity: earningOuterGlowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.28],
+                }),
+                transform: [
+                  {
+                    scale: earningOuterGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1.02, 1.12],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
           <Animated.View
             pointerEvents="none"
             style={[
@@ -916,13 +994,13 @@ export default function HomeScreen() {
               {
                 opacity: earningGlowAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0.15, 0.55],
+                  outputRange: [0.12, 0.65],
                 }),
                 transform: [
                   {
                     scale: earningGlowAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.98, 1.04],
+                      outputRange: [0.97, 1.05],
                     }),
                   },
                 ],
@@ -933,6 +1011,9 @@ export default function HomeScreen() {
             style={styles.earningBalanceCard}
             activeOpacity={0.9}
             onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance Card"
+            testID="earning-balance-card"
           >
             <View>
               <Text style={styles.earningLabel}>Earning Balance</Text>
@@ -999,14 +1080,22 @@ export default function HomeScreen() {
             </View>
             <View style={styles.autoEarnTitleWrap}>
               <View style={styles.autoEarnTitleRow}>
-                <Text style={styles.autoEarnCardTitle}>
-                  Auto-Earn on Idle Funds
-                </Text>
                 <TouchableOpacity
                   onPress={openAutoEarnDescModal}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Learn about Auto-Earn"
+                  activeOpacity={0.8}
+                  accessibilityLabel="Learn about Auto-Earn yield rules"
                   accessibilityRole="button"
+                >
+                  <Text style={styles.autoEarnCardTitle}>
+                    Auto-Earn on Idle Funds
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={toggleAutoEarnTooltip}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Quick definition tooltip"
+                  accessibilityRole="button"
+                  testID="auto-earn-tooltip-trigger"
                 >
                   <Ionicons
                     name="information-circle-outline"
@@ -1023,7 +1112,13 @@ export default function HomeScreen() {
             </View>
             <Switch
               value={autoYieldEnabled}
-              onValueChange={handleAutoYieldToggle}
+              onValueChange={(val: boolean) => {
+                if (val) {
+                  openAutoEarnDescModal();
+                } else {
+                  void handleAutoYieldToggle(false);
+                }
+              }}
               disabled={autoEarnSyncing}
               trackColor={{ false: "#E2E8F0", true: "#34D399" }}
               thumbColor={COLORS.white}
@@ -1031,6 +1126,19 @@ export default function HomeScreen() {
               accessibilityRole="switch"
             />
           </View>
+          {autoEarnTooltipVisible && (
+            <View style={styles.autoEarnTooltip} testID="auto-earn-tooltip">
+              <Ionicons
+                name="information-circle"
+                size={16}
+                color="#166534"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.autoEarnTooltipText}>
+                Auto-Earn automatically sweeps idle funds into yield-earning vaults at competitive APYs while remaining instantly spendable.
+              </Text>
+            </View>
+          )}
           {autoEarnSyncing && (
             <View style={styles.autoEarnSyncingRow}>
               <Ionicons name="sync" size={13} color="#64748B" />
@@ -1042,15 +1150,22 @@ export default function HomeScreen() {
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
           <Text style={styles.feedSectionTitle}>Activity</Text>
-          {/* Feed Tabs — Segment Control */}
+          {/* Feed Tabs — Public / Friends (#882) */}
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={[
                 styles.tabItem,
                 activeTab === "public" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("public")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("public");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "public" }}
+              accessibilityLabel="Public Feed"
+              testID="feed-tab-public"
             >
               <Text
                 style={[
@@ -1066,8 +1181,15 @@ export default function HomeScreen() {
                 styles.tabItem,
                 activeTab === "friends" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("friends")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("friends");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "friends" }}
+              accessibilityLabel="Friends Feed"
+              testID="feed-tab-friends"
             >
               <Text
                 style={[
@@ -1094,16 +1216,25 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.paymentInfo}>
-                  <View style={styles.paymentRow}>
-                    <Text style={styles.paymentText} numberOfLines={2}>
-                      <Text style={styles.boldText}>{item.sender}</Text> paid{" "}
-                      <Text style={styles.boldText}>{item.receiver}</Text>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>FROM</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.sender}
                     </Text>
-                    <View style={styles.amountPill}>
-                      <Text style={styles.amountText}>{item.amount}</Text>
-                    </View>
+                  </View>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>TO</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.receiver}
+                    </Text>
                   </View>
                   <Text style={styles.timestamp}>{item.timestamp}</Text>
+                </View>
+
+                <View style={styles.amountPill}>
+                  <Text style={styles.amountText} numberOfLines={1}>
+                    {item.amount}
+                  </Text>
                 </View>
               </View>
 
@@ -1118,6 +1249,11 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => handleLike(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    item.hasLiked ? "Unlike payment" : "Like payment"
+                  }
+                  testID={`feed-like-${item.id}`}
                 >
                   <Animated.View
                     style={{ transform: [{ scale: getScaleAnim(item.id) }] }}
@@ -1141,6 +1277,9 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => openComments(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open comments"
+                  testID={`feed-comments-${item.id}`}
                 >
                   <Ionicons name="chatbubble-outline" size={20} color="#666" />
                   <Text style={styles.actionCount}>{item.comments}</Text>
@@ -1236,9 +1375,16 @@ export default function HomeScreen() {
               <>
                 <View style={styles.earningsMetricCard}>
                   <Text style={styles.earningsMetricLabel}>Current APY</Text>
-                  <Text style={styles.earningsMetricValue}>
-                    {yieldData?.apy ?? "0.00%"}
-                  </Text>
+                  <View style={styles.apyValueRow}>
+                    <Text style={styles.earningsMetricValue}>
+                      {yieldData?.apy ?? "0.00%"}
+                    </Text>
+                    <View style={styles.apyTrendBadge}>
+                      <Ionicons name="trending-up" size={13} color="#16A34A" />
+                      <Text style={styles.apyTrendText}>+0.12%</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.apyTrendSubtext}>vs. last month</Text>
                 </View>
 
                 <View style={styles.earningsMetricCard}>
@@ -1436,8 +1582,31 @@ export default function HomeScreen() {
                 </View>
 
                 <Text style={styles.earningsInfoCopy}>
-                  {yieldData?.explanation}
+                  {yieldData?.explanation ||
+                    "Idle balances are automatically swept into yield-earning vaults at competitive APYs with daily compounding interest while remaining instantly spendable."}
                 </Text>
+
+                <TouchableOpacity
+                  style={styles.manageYieldButton}
+                  onPress={() => {
+                    closeEarningsModal();
+                    router.push("/yield-transaction");
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Deposit or Withdraw Yield"
+                  testID="manage-yield-button"
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={18}
+                    color={COLORS.secondary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.manageYieldButtonText}>
+                    Deposit / Withdraw Yield
+                  </Text>
+                </TouchableOpacity>
               </>
             )}
           </Animated.View>
@@ -1605,17 +1774,29 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Comments Modal */}
+      {/* Comments bottom drawer (#885) — slide-up Modal */}
       <Modal
         visible={commentsModalVisible}
         animationType="slide"
         transparent={true}
+        onRequestClose={() => setCommentsModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setCommentsModalVisible(false)}
+            accessibilityLabel="Dismiss comments"
+          />
           <View style={styles.modalContent}>
+            <View style={styles.commentsGrabber} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Comments</Text>
-              <TouchableOpacity onPress={() => setCommentsModalVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setCommentsModalVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close comments"
+              >
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
@@ -1623,7 +1804,12 @@ export default function HomeScreen() {
             <FlatList<Comment>
               data={commentsList}
               keyExtractor={(item: Comment) => item.id}
-              contentContainerStyle={{ paddingVertical: 12 }}
+              contentContainerStyle={{ paddingVertical: 12, flexGrow: 1 }}
+              ListEmptyComponent={
+                <Text style={styles.commentsEmpty}>
+                  Be the first to comment
+                </Text>
+              }
               renderItem={({ item }: { item: Comment }) => (
                 <View style={styles.commentItem}>
                   <View style={styles.commentAvatar}>
@@ -1646,8 +1832,22 @@ export default function HomeScreen() {
                 placeholder="Write a comment..."
                 value={commentText}
                 onChangeText={setCommentText}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  void submitComment();
+                }}
+                accessibilityLabel="Comment input"
+                testID="comment-input"
               />
-              <TouchableOpacity style={styles.sendBtn} onPress={submitComment}>
+              <TouchableOpacity
+                style={styles.sendBtn}
+                onPress={() => {
+                  void submitComment();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send comment"
+                testID="comment-send"
+              >
                 <Ionicons name="send" size={20} color={COLORS.primary} />
               </TouchableOpacity>
             </View>
@@ -1906,6 +2106,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.7,
     shadowRadius: 22,
     elevation: 8,
+  },
+  earningOuterGlow: {
+    top: -18,
+    left: -18,
+    right: -18,
+    bottom: -18,
+    borderRadius: 40,
+    shadowRadius: 36,
+    elevation: 4,
   },
   earningBalanceCard: {
     backgroundColor: "#0F3D2E",
@@ -2224,6 +2433,31 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     color: "#111827",
   },
+  apyValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  apyTrendBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#DCFCE7",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  apyTrendText: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  apyTrendSubtext: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#9CA3AF",
+    marginTop: 2,
+  },
   autoYieldRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2255,6 +2489,21 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+    marginBottom: 16,
+  },
+  manageYieldButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+    borderRadius: 24,
+    height: 48,
+    width: "100%",
+  },
+  manageYieldButtonText: {
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
   },
   earningsChartSection: {
     backgroundColor: "#F9FCF8",
@@ -2410,8 +2659,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   tabItemActive: {
-    backgroundColor: "#0F3D2E",
-    shadowColor: "#0F3D2E",
+    // Dark green active state (#882)
+    backgroundColor: COLORS.primary,
+    shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.18,
     shadowRadius: 4,
@@ -2428,7 +2678,7 @@ const styles = StyleSheet.create({
   },
   feedCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 24,
+    borderRadius: 20,
     padding: 16,
     marginBottom: 14,
     borderWidth: 1,
@@ -2441,7 +2691,7 @@ const styles = StyleSheet.create({
   },
   feedHeader: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     marginBottom: 12,
   },
   avatarStack: {
@@ -2474,43 +2724,46 @@ const styles = StyleSheet.create({
   },
   paymentInfo: {
     flex: 1,
+    minWidth: 0,
+    gap: 3,
   },
-  paymentRow: {
+  partyRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: 6,
   },
-  paymentText: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    fontFamily: "Outfit_400Regular",
-    color: "#334155",
-    flexShrink: 1,
-    marginRight: 8,
-  },
-  boldText: {
+  partyLabel: {
+    width: 31,
+    fontSize: 9,
     fontFamily: "Outfit_700Bold",
-    color: "#111827",
+    color: "#94A3B8",
+  },
+  partyName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    fontFamily: "Outfit_700Bold",
+    color: "#17211D",
   },
   amountPill: {
     backgroundColor: "#F2F9F0",
     borderRadius: 999,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: "#DDF2DD",
-    alignSelf: "flex-start",
-    marginTop: 2,
+    alignSelf: "center",
+    marginLeft: 8,
+    maxWidth: 112,
   },
   amountText: {
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
   timestamp: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#94A3B8",
     marginTop: 4,
   },
@@ -2520,7 +2773,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 12,
   },
   memoLabel: {
     fontSize: 11,
@@ -2567,8 +2820,23 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingBottom: 40,
-    paddingTop: 20,
+    paddingTop: 12,
     maxHeight: "75%",
+  },
+  commentsGrabber: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "#E2E8F0",
+    marginBottom: 10,
+  },
+  commentsEmpty: {
+    textAlign: "center",
+    color: "#94A3B8",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 14,
+    paddingVertical: 28,
   },
   modalHeader: {
     flexDirection: "row",

@@ -12,7 +12,6 @@ const FEE_COEFF_KEY: Symbol = symbol_short!("fee_coef");
 const NAIRA_TOKEN_KEY: Symbol = symbol_short!("ngn_tok");
 const USER_REG_KEY: Symbol = symbol_short!("user_reg");
 const PR_COUNT_KEY: Symbol = symbol_short!("pr_cnt");
-const NONCE_KEY_PREFIX: Symbol = symbol_short!("nonce");
 
 /// Number of ledgers a user must wait before liking the same transaction again.
 /// 5 ledgers ≈ 25 seconds on Stellar (5s per ledger).
@@ -32,6 +31,9 @@ pub enum Error {
     NonceAlreadyUsed = 2,
     /// The signature verification failed for the signed payment authorization.
     InvalidSignature = 3,
+    /// The caller is not the admin and is not on the authorized distributor whitelist.
+    /// Only admin and explicitly whitelisted distributors/relayers may submit mass payouts.
+    Unauthorized = 4,
 }
 
 // ── External contract interface ───────────────────────────────────────────────
@@ -59,6 +61,9 @@ pub enum Visibility {
 pub enum DataKey {
     PaymentRequest(u64),
     Nonce(Address),
+    /// #977: per-address distributor/relayer whitelist entry.
+    /// Stored as `bool` (always `true`); absence means not authorized.
+    Distributor(Address),
 }
 
 /// SC-041: Emitted for every executed payment. Carries both the raw
@@ -298,6 +303,14 @@ impl SocialPaymentContract {
             .expect("naira token not initialized")
     }
 
+    /// #1058: Admin-only entrypoint used by the dashboard system configuration
+    /// page to adjust the Naira stablecoin transaction fee coefficient.
+    ///
+    /// `fee_coef` is expressed in basis points (1 bps = 0.01%), so 10 = 0.1%.
+    /// Requires the stored admin's authorization, rejects values above 10000
+    /// (100%), persists the new coefficient under `FEE_COEFF_KEY`, and emits a
+    /// `FeeCoefficientUpdated` event carrying the old and new values so
+    /// off-chain indexers can track fee schedule changes.
     pub fn set_fee_coefficient(env: Env, fee_coef: u32) {
         let admin: Address = env
             .storage()
@@ -308,7 +321,16 @@ impl SocialPaymentContract {
         if fee_coef > 10000 {
             panic!("fee coefficient cannot exceed 10000 basis points");
         }
+        let old_fee_coef = env
+            .storage()
+            .instance()
+            .get(&FEE_COEFF_KEY)
+            .unwrap_or(10u32);
         env.storage().instance().set(&FEE_COEFF_KEY, &fee_coef);
+        env.events().publish(
+            (Symbol::new(&env, "FeeCoefficientUpdated"),),
+            (admin, old_fee_coef, fee_coef),
+        );
     }
 
     pub fn fee_coefficient(env: Env) -> u32 {
@@ -334,6 +356,50 @@ impl SocialPaymentContract {
             .instance()
             .get(&USER_REG_KEY)
             .expect("user registry not configured")
+    }
+
+    // ── Distributor / relayer whitelist (#977) ────────────────────────────────
+
+    /// Add `distributor` to the authorized distributor whitelist.
+    ///
+    /// Only admin may call this. Authorized distributors are the only addresses
+    /// (besides the admin itself) permitted to submit `batch_payout` calls.
+    pub fn add_distributor(env: Env, admin: Address, distributor: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        assert!(admin == stored_admin, "only admin can add distributors");
+        env.storage()
+            .persistent()
+            .set(&DataKey::Distributor(distributor), &true);
+    }
+
+    /// Remove `distributor` from the authorized distributor whitelist.
+    ///
+    /// Only admin may call this. Subsequent `batch_payout` calls from the removed
+    /// address will fail with `Error::Unauthorized`.
+    pub fn remove_distributor(env: Env, admin: Address, distributor: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        assert!(admin == stored_admin, "only admin can remove distributors");
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Distributor(distributor));
+    }
+
+    /// Return `true` if `distributor` is on the authorized whitelist.
+    pub fn is_authorized_distributor(env: Env, distributor: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Distributor(distributor))
+            .unwrap_or(false)
     }
 
     // ── Payment requests / invoices ───────────────────────────────────────────
@@ -410,25 +476,13 @@ impl SocialPaymentContract {
 
     // ── Payment methods ───────────────────────────────────────────────────────
 
-    /// SC-005: Execute a P2P social payment using the configured Naira token.
-    /// For Public payments a 0.1% platform fee is routed to the treasury.
-    /// For Friends/Private payments the full amount goes to the receiver.
+    /// SC-005 / Issue #965: Execute a P2P social payment using the configured
+    /// Naira token. The recipient is identified by their registered username,
+    /// which is resolved to an on-chain address via the configured UserRegistry
+    /// contract before routing the payment. For Public payments a 0.1% platform
+    /// fee is routed to the treasury. For Friends/Private payments the full
+    /// amount goes to the receiver.
     pub fn pay(
-        env: Env,
-        sender: Address,
-        receiver: Address,
-        token: Address,
-        amount: i128,
-        memo: String,
-        visibility: Visibility,
-    ) {
-        sender.require_auth();
-        execute_payment(env, sender, receiver, token, amount, memo, visibility);
-    }
-
-    /// Issue #519: Accept a recipient username, resolve the on-chain address via the
-    /// configured UserRegistry contract, then execute the standard payment flow.
-    pub fn pay_by_username(
         env: Env,
         sender: Address,
         recipient_username: String,
@@ -446,9 +500,33 @@ impl SocialPaymentContract {
             .expect("user registry not configured");
 
         let registry = UserRegistryClient::new(&env, &registry_id);
+        // Username resolution — panics with "username not found" if unregistered.
         let receiver = registry.get_address(&recipient_username);
 
         execute_payment(env, sender, receiver, token, amount, memo, visibility);
+    }
+
+    /// Issue #519: Backward-compatible alias for `pay` that accepts a recipient
+    /// username, resolves the on-chain address via the configured UserRegistry
+    /// contract, then executes the standard payment flow.
+    pub fn pay_by_username(
+        env: Env,
+        sender: Address,
+        recipient_username: String,
+        token: Address,
+        amount: i128,
+        memo: String,
+        visibility: Visibility,
+    ) {
+        Self::pay(
+            env,
+            sender,
+            recipient_username,
+            token,
+            amount,
+            memo,
+            visibility,
+        );
     }
 
     /// SC-037: Execute multiple payments in a single contract call.
@@ -491,7 +569,28 @@ impl SocialPaymentContract {
         // #531 — explicit sender auth
         sender.require_auth();
 
-        // #752 / #531 — enforce max batch size; return typed error on violation
+        // #977 — distributor/relayer authorization:
+        // Only the admin or an explicitly whitelisted distributor may submit
+        // mass payouts. Any other address is rejected immediately.
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        let is_admin = sender == admin;
+        let is_distributor = env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::Distributor(sender.clone()))
+            .unwrap_or(false);
+        if !is_admin && !is_distributor {
+            return Err(Error::Unauthorized);
+        }
+
+        // #991 / #752 / #531 — enforce max recipient count before the payout loop.
+        // Limits the `payouts` vector to MAX_BATCH_SIZE (100) elements per call,
+        // preventing CPU / gas exhaustion from unbounded iteration in Soroban.
+        // Returns the typed Error::BatchTooLarge so callers can inspect the failure.
         let batch_size = payouts.len();
         if batch_size > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
@@ -776,7 +875,7 @@ mod tests {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Events, Ledger},
-        vec, Address, Env, IntoVal, String, Symbol, TryIntoVal, Val,
+        vec, Address, BytesN, Env, IntoVal, String, Symbol, TryIntoVal, Val,
     };
 
     fn setup() -> (
@@ -852,14 +951,17 @@ mod tests {
     // ── Public payment: fee deducted, event emitted ──────────────────────────
     #[test]
     fn test_social_payment_public_visibility_deducts_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Public payment"),
@@ -899,14 +1001,17 @@ mod tests {
     #[test]
     fn test_public_payment_fee_rounding_preserves_funds_at_boundaries() {
         for amount in [1i128, 1_000, i128::MAX] {
-            let (env, client, admin, treasury, sender, receiver) = setup();
+            let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
             let token = mint_token(&env, &admin, &sender, amount);
             client.set_naira_token(&token);
             let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+            let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+            registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
             client.pay(
                 &sender,
-                &receiver,
+                &String::from_str(&env, "bob"),
                 &token,
                 &amount,
                 &String::from_str(&env, "Rounding boundary"),
@@ -923,14 +1028,17 @@ mod tests {
     // ── Private payment: no fee, full amount ─────────────────────────────────
     #[test]
     fn test_social_payment_private_visibility_no_fee() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Private"),
@@ -944,14 +1052,17 @@ mod tests {
     // ── Friends-only payment: no fee ─────────────────────────────────────────
     #[test]
     fn test_social_payment_friends_visibility_no_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 5_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "Friends"),
@@ -967,12 +1078,14 @@ mod tests {
     #[test]
     #[ignore]
     fn test_pay_rejects_zero_amount() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 1_000);
         client.set_naira_token(&token);
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &0,
             &String::from_str(&env, "bad"),
@@ -1184,15 +1297,18 @@ mod tests {
     #[test]
     #[ignore] // pre-existing: assert!(..) in Soroban v20 causes non-unwinding panic
     fn test_public_payment_rejects_non_naira_token_for_fee() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let naira_token = mint_token(&env, &admin, &sender, 10_000);
         let junk_token = mint_token(&env, &admin, &sender, 10_000);
         let junk_client = soroban_sdk::token::Client::new(&env, &junk_token);
         client.set_naira_token(&naira_token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &junk_token,
             &1000,
             &String::from_str(&env, "Junk public payment"),
@@ -1208,12 +1324,15 @@ mod tests {
     #[test]
     #[ignore] // pre-existing: .expect() in Soroban v20 causes non-unwinding panic
     fn test_pay_rejects_when_naira_token_not_configured() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 1_000);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         let res = client.try_pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &100,
             &String::from_str(&env, "Missing config"),
@@ -1226,10 +1345,13 @@ mod tests {
     // ── Adjust fee coefficient: updates value, affects payout calculation ─────
     #[test]
     fn test_adjust_fee_coefficient() {
-        let (env, client, admin, treasury, sender, receiver) = setup();
+        let (env, client, admin, treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         // Verify default is 10 (0.1%)
         assert_eq!(client.fee_coefficient(), 10);
@@ -1240,7 +1362,7 @@ mod tests {
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "Public payment"),
@@ -1262,6 +1384,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender as an authorized distributor
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1294,6 +1418,8 @@ mod tests {
         // Set fee to 50 bps (0.5%)
         client.set_fee_coefficient(&50);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender as an authorized distributor
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1322,6 +1448,8 @@ mod tests {
         let (env, client, admin, _treasury, sender, _receiver) = setup();
         let token = mint_token(&env, &admin, &sender, 1_000_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender — size check must fire even for authorized distributors
+        client.add_distributor(&admin, &sender);
 
         // Build a batch with 101 items (exceeds MAX_BATCH_SIZE = 100)
         let mut items = soroban_sdk::vec![&env];
@@ -1346,6 +1474,8 @@ mod tests {
         // Mint enough to cover 100 × 1 stroop + fee
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let mut items = soroban_sdk::vec![&env];
         for _ in 0..100u32 {
@@ -1360,14 +1490,17 @@ mod tests {
         client.batch_payout(&sender, &items);
     }
 
-    // ── #531: sender auth required ────────────────────────────────────────────
+    // ── #531 / #977: sender auth + distributor whitelist required ────────────
     #[test]
     fn test_batch_payout_requires_sender_auth() {
         let (env, client, admin, _treasury, sender, receiver1) = setup();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
+        // #977: whitelist sender so the distributor check passes
+        client.add_distributor(&admin, &sender);
 
-        // mock_all_auths is active in setup() so this call succeeds
+        // mock_all_auths is active in setup() so the Soroban auth check passes;
+        // the distributor whitelist check also passes because we added sender above.
         let payouts = vec![
             &env,
             PayoutItem {
@@ -1376,7 +1509,7 @@ mod tests {
             },
         ];
         client.batch_payout(&sender, &payouts);
-        // no panic = auth was enforced and satisfied by mock
+        // no panic = both auth and whitelist were enforced and satisfied
     }
 
     // ── #532 / #978: MassPayoutExecuted event for off-chain accounting ───────
@@ -1397,6 +1530,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 20_000);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1433,6 +1568,8 @@ mod tests {
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
         let treasury_before = token_client.balance(&treasury);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1476,6 +1613,8 @@ mod tests {
         client.set_naira_token(&token);
         client.set_fee_coefficient(&50); // 0.5%
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1506,6 +1645,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_010);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1533,6 +1674,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 5_005);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1561,6 +1704,8 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 1_001);
         client.set_naira_token(&token);
         let token_client = soroban_sdk::token::Client::new(&env, &token);
+        // #977: whitelist sender
+        client.add_distributor(&admin, &sender);
 
         let payouts = vec![
             &env,
@@ -1627,7 +1772,7 @@ mod tests {
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &1000,
             &String::from_str(&env, "hi"),
@@ -1651,14 +1796,18 @@ mod tests {
     // ── SC-042: no registry / unregistered participants never break a payment ─
     #[test]
     fn test_pay_event_username_defaults_to_empty_when_unregistered() {
-        // No registry configured at all — resolve_username must short-circuit.
-        let (env, client, admin, _treasury, sender, receiver) = setup();
+        // Registry configured but neither participant registered a username —
+        // resolve_username must fall back to empty strings.
+        let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
+        let registry_client = MockUserRegistryClient::new(&env, &registry_id);
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
+
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "hi"),
@@ -1679,7 +1828,7 @@ mod tests {
         assert!(found, "SocialPaymentEvent not emitted");
     }
 
-    // ── SC-042: registry configured but receiver never registered a username ──
+    // ── SC-042: registry configured but sender never registered a username ────
     #[test]
     fn test_pay_event_username_defaults_to_empty_for_unregistered_participant() {
         let (env, client, admin, _treasury, sender, receiver, registry_id) = setup_with_registry();
@@ -1687,12 +1836,12 @@ mod tests {
         client.set_naira_token(&token);
 
         let registry_client = MockUserRegistryClient::new(&env, &registry_id);
-        registry_client.register(&sender, &String::from_str(&env, "alice"));
-        // receiver intentionally left unregistered.
+        // sender intentionally left unregistered.
+        registry_client.register(&receiver, &String::from_str(&env, "bob"));
 
         client.pay(
             &sender,
-            &receiver,
+            &String::from_str(&env, "bob"),
             &token,
             &500,
             &String::from_str(&env, "hi"),
@@ -1705,8 +1854,8 @@ mod tests {
         for item in events.iter() {
             if item.1.contains(topic) {
                 let ev: SocialPaymentEvent = item.2.try_into_val(&env).unwrap();
-                assert_eq!(ev.sender_username, String::from_str(&env, "alice"));
-                assert_eq!(ev.receiver_username, String::from_str(&env, ""));
+                assert_eq!(ev.sender_username, String::from_str(&env, ""));
+                assert_eq!(ev.receiver_username, String::from_str(&env, "bob"));
                 found = true;
             }
         }
@@ -1806,31 +1955,14 @@ mod tests {
         assert!(res.is_err(), "self payment requests must be rejected");
     }
 
-    // ── Nonce-based signed payment authorization tests ────────────────────────
+    // ── Nonce-based signed payment authorization tests (#996) ─────────────────
 
     #[test]
     fn test_get_nonce_returns_zero_for_new_user() {
         let (env, client, _admin, _treasury, _sender, _receiver) = setup();
         let new_user = Address::generate(&env);
-        
+
         assert_eq!(client.get_nonce(&new_user), 0);
-    }
-
-    #[test]
-    fn test_nonce_increments_after_successful_signed_payment() {
-        let (env, client, admin, _treasury, sender, receiver) = setup();
-        let token = mint_token(&env, &admin, &sender, 10_000);
-        client.set_naira_token(&token);
-
-        // Initial nonce should be 0
-        assert_eq!(client.get_nonce(&sender), 0);
-
-        // Note: In a real scenario, we would generate a proper Ed25519 signature.
-        // For this test structure, we're documenting the expected behavior.
-        // Actual signature generation would require the sender's private key.
-        
-        // The nonce should increment to 1 after successful payment
-        // (Implementation note: full signature test would require key generation)
     }
 
     #[test]
@@ -1839,23 +1971,34 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
-        // First payment with nonce 0 would succeed (with valid signature)
-        // Second payment attempting to reuse nonce 0 should fail with NonceAlreadyUsed
-        
-        // Create auth payload with nonce 0
+        // Simulate a prior successful signed payment by advancing the on-chain nonce.
+        env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Nonce(sender.clone()), &1u64);
+        });
+        assert_eq!(client.get_nonce(&sender), 1);
+
+        // Reusing nonce 0 (or any nonce != current) must be rejected before signature checks.
         let auth = SignedPaymentAuth {
             sender: sender.clone(),
             receiver: receiver.clone(),
             token: token.clone(),
             amount: 1000,
-            memo: String::from_str(&env, "test"),
+            memo: String::from_str(&env, "replay"),
             visibility: Visibility::Private,
             nonce: 0,
         };
+        let pubkey = BytesN::from_array(&env, &[0u8; 32]);
+        let signature = BytesN::from_array(&env, &[0u8; 64]);
 
-        // After a successful payment, nonce would be 1
-        // Attempting to use nonce 0 again should fail
-        // (Full test requires signature generation infrastructure)
+        assert_eq!(
+            client.try_pay_with_signature(&auth, &pubkey, &signature),
+            Err(Ok(Error::NonceAlreadyUsed)),
+            "reused nonce must be rejected"
+        );
+        // Nonce must remain unchanged after rejection.
+        assert_eq!(client.get_nonce(&sender), 1);
     }
 
     #[test]
@@ -1864,33 +2007,200 @@ mod tests {
         let token = mint_token(&env, &admin, &sender, 10_000);
         client.set_naira_token(&token);
 
-        // Attempting to use nonce 5 when current nonce is 0 should fail
+        assert_eq!(client.get_nonce(&sender), 0);
+
         let auth = SignedPaymentAuth {
             sender: sender.clone(),
             receiver: receiver.clone(),
             token: token.clone(),
             amount: 1000,
-            memo: String::from_str(&env, "test"),
+            memo: String::from_str(&env, "future"),
             visibility: Visibility::Private,
-            nonce: 5, // Future nonce
+            nonce: 5,
         };
+        let pubkey = BytesN::from_array(&env, &[1u8; 32]);
+        let signature = BytesN::from_array(&env, &[1u8; 64]);
 
-        // This should be rejected with NonceAlreadyUsed error
-        // (The name is a bit misleading but the check catches both past and future nonces)
+        assert_eq!(
+            client.try_pay_with_signature(&auth, &pubkey, &signature),
+            Err(Ok(Error::NonceAlreadyUsed)),
+            "future nonce must be rejected"
+        );
+        assert_eq!(client.get_nonce(&sender), 0);
     }
 
     #[test]
     fn test_signed_payment_different_users_independent_nonces() {
-        let (env, client, _admin, _treasury, sender, _receiver) = setup();
+        let (env, client, _admin, _treasury, _sender, _receiver) = setup();
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
 
-        // Each user maintains their own nonce counter
         assert_eq!(client.get_nonce(&user1), 0);
         assert_eq!(client.get_nonce(&user2), 0);
 
-        // After user1 makes a payment, only their nonce should increment
-        // user2's nonce should remain at 0
+        env.as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Nonce(user1.clone()), &3u64);
+        });
+
+        assert_eq!(client.get_nonce(&user1), 3);
+        assert_eq!(client.get_nonce(&user2), 0);
+    }
+
+    // ── #977: Distributor / relayer whitelist ─────────────────────────────────
+
+    /// Unauthorized address (not admin, not whitelisted) must be rejected with
+    /// Error::Unauthorized — regardless of Soroban-level auth being satisfied.
+    #[test]
+    fn test_batch_payout_unauthorized_caller_rejected() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let random_caller = Address::generate(&env);
+        // Give the random caller some tokens
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&random_caller, &10_000);
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient,
+                amount: 100,
+            },
+        ];
+
+        // mock_all_auths means the Soroban auth check passes — but the
+        // distributor whitelist check must still reject a non-admin, non-whitelisted caller.
+        assert_eq!(
+            client.try_batch_payout(&random_caller, &payouts),
+            Err(Ok(Error::Unauthorized)),
+            "non-whitelisted, non-admin caller must be rejected with Unauthorized"
+        );
+    }
+
+    /// Once whitelisted, a distributor must be able to submit batch_payout.
+    #[test]
+    fn test_batch_payout_authorized_distributor_accepted() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+        let token = mint_token(&env, &admin, &distributor, 10_000);
+        client.set_naira_token(&token);
+
+        // Whitelist the distributor
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor));
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: recipient.clone(),
+                amount: 1_000,
+            },
+        ];
+
+        // Should succeed — distributor is whitelisted
+        client.batch_payout(&distributor, &payouts);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&recipient), 1_000);
+    }
+
+    /// Admin can always call batch_payout without being explicitly whitelisted.
+    #[test]
+    fn test_batch_payout_admin_can_submit_directly() {
+        let (env, client, admin, treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem {
+                recipient: recipient.clone(),
+                amount: 5_000,
+            },
+        ];
+
+        // Admin is not in the distributor whitelist, but must pass the check anyway.
+        client.batch_payout(&admin, &payouts);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        assert_eq!(token_client.balance(&recipient), 5_000);
+        // fee = 5_000 * 10 / 10000 = 5 (minimum 1)
+        assert_eq!(token_client.balance(&treasury), 5);
+    }
+
+    /// Admin can add a distributor; is_authorized_distributor reflects the change.
+    #[test]
+    fn test_admin_can_add_distributor() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+
+        assert!(!client.is_authorized_distributor(&distributor), "not yet whitelisted");
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor), "should be whitelisted after add");
+    }
+
+    /// Admin can remove a distributor; subsequent calls must be rejected.
+    #[test]
+    fn test_admin_can_remove_distributor() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let token = mint_token(&env, &admin, &admin, 10_000);
+        client.set_naira_token(&token);
+
+        let distributor = Address::generate(&env);
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&distributor, &10_000);
+
+        // Add then remove
+        client.add_distributor(&admin, &distributor);
+        assert!(client.is_authorized_distributor(&distributor));
+        client.remove_distributor(&admin, &distributor);
+        assert!(!client.is_authorized_distributor(&distributor), "should no longer be whitelisted");
+
+        let recipient = Address::generate(&env);
+        let payouts = vec![
+            &env,
+            PayoutItem { recipient, amount: 100 },
+        ];
+
+        // After removal, call must fail
+        assert_eq!(
+            client.try_batch_payout(&distributor, &payouts),
+            Err(Ok(Error::Unauthorized)),
+            "removed distributor must be rejected"
+        );
+    }
+
+    /// Batch size limit is still enforced even for an authorized distributor.
+    #[test]
+    fn test_batch_payout_distributor_still_enforces_batch_limit() {
+        let (env, client, admin, _treasury, _sender, _receiver) = setup();
+        let distributor = Address::generate(&env);
+        let token = mint_token(&env, &admin, &admin, 1_000_000);
+        client.set_naira_token(&token);
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+        token_admin.mint(&distributor, &1_000_000);
+
+        client.add_distributor(&admin, &distributor);
+
+        let mut items = soroban_sdk::vec![&env];
+        for _ in 0..101u32 {
+            items.push_back(PayoutItem {
+                recipient: Address::generate(&env),
+                amount: 1,
+            });
+        }
+
+        assert_eq!(
+            client.try_batch_payout(&distributor, &items),
+            Err(Ok(Error::BatchTooLarge)),
+            "MAX_BATCH_SIZE must still apply for whitelisted distributors"
+        );
     }
 }
 

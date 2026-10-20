@@ -2,7 +2,11 @@
 
 use super::*;
 use ed25519_dalek::{Signer, SigningKey};
-use soroban_sdk::{testutils::Address as _, xdr::ToXdr, BytesN, Env, String};
+use soroban_sdk::{
+    testutils::{Address as _, Events as _},
+    xdr::ToXdr,
+    BytesN, Env, String,
+};
 
 /// Deterministic test-only signing key standing in for Privy's verifier key.
 fn verifier_key() -> SigningKey {
@@ -146,6 +150,65 @@ fn test_update_privy_did_success() {
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
 }
 
+/// Verify that `update_privy_did` publishes an event recording the rotation,
+/// so an off-chain indexer can pick it up the same way it does for
+/// `register_privy_did`'s `did_reg` event.
+#[test]
+fn test_update_privy_did_publishes_event() {
+    let (env, client, signing_key) = setup();
+    let old_wallet = Address::generate(&env);
+    let new_wallet = Address::generate(&env);
+    let did = String::from_str(&env, "did:privy:eventuser");
+    let signature = sign_did_link(&env, &signing_key, &did, &old_wallet);
+    client.register_privy_did(&did, &old_wallet, &signature);
+
+    client.update_privy_did(&did, &old_wallet, &new_wallet);
+
+    let events = env.events().all();
+    assert!(
+        events.iter().any(|e| e.1.first().is_some()),
+        "update_privy_did must publish an event so off-chain systems can sync the rotation"
+    );
+}
+
+/// Verify that `update_privy_did` refuses to move a DID onto a wallet that
+/// already has a *different* DID linked, so it never silently overwrites
+/// that other DID's `WalletDid` reverse mapping.
+#[test]
+#[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
+fn test_update_privy_did_rejects_wallet_with_different_did_linked() {
+    let (env, client, signing_key) = setup();
+    let wallet_a = Address::generate(&env);
+    let wallet_b = Address::generate(&env);
+
+    let did_a = String::from_str(&env, "did:privy:rotate_a");
+    let sig_a = sign_did_link(&env, &signing_key, &did_a, &wallet_a);
+    client.register_privy_did(&did_a, &wallet_a, &sig_a);
+
+    let did_b = String::from_str(&env, "did:privy:rotate_b");
+    let sig_b = sign_did_link(&env, &signing_key, &did_b, &wallet_b);
+    client.register_privy_did(&did_b, &wallet_b, &sig_b);
+
+    // Attempt to rotate did_a onto wallet_b, which already has did_b linked.
+    let result = client.try_update_privy_did(&did_a, &wallet_a, &wallet_b);
+    assert!(
+        result.is_err(),
+        "moving a DID onto a wallet that already has a different DID linked must be rejected"
+    );
+
+    // Both original mappings must be untouched.
+    assert_eq!(
+        client.get_wallet_for_did(&did_a),
+        wallet_a,
+        "did_a's forward mapping must be unchanged after the rejected update"
+    );
+    assert_eq!(
+        client.get_did_for_wallet(&wallet_b),
+        did_b,
+        "wallet_b's reverse mapping must still point to did_b, not have been overwritten"
+    );
+}
+
 /// Verify that updating a DID mapping with the wrong old wallet is rejected.
 #[test]
 #[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
@@ -175,6 +238,54 @@ fn test_recover_privy_did_as_admin() {
     client.register_privy_did(&did, &old_wallet, &signature);
     client.recover_privy_did(&did, &new_wallet);
     assert_eq!(client.get_wallet_for_did(&did), new_wallet);
+}
+
+/// Verify that `recover_privy_did` publishes an event recording the
+/// admin-initiated recovery.
+#[test]
+fn test_recover_privy_did_publishes_event() {
+    let (env, client, signing_key) = setup();
+    let old_wallet = Address::generate(&env);
+    let new_wallet = Address::generate(&env);
+    let did = String::from_str(&env, "did:privy:recovereventuser");
+    let signature = sign_did_link(&env, &signing_key, &did, &old_wallet);
+    client.register_privy_did(&did, &old_wallet, &signature);
+
+    client.recover_privy_did(&did, &new_wallet);
+
+    let events = env.events().all();
+    assert!(
+        events.iter().any(|e| e.1.first().is_some()),
+        "recover_privy_did must publish an event so off-chain systems can sync the recovery"
+    );
+}
+
+/// Verify that `recover_privy_did` refuses to move a DID onto a wallet that
+/// already has a *different* DID linked — the same guard as
+/// `update_privy_did`, but exercised through the admin-recovery path.
+#[test]
+#[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
+fn test_recover_privy_did_rejects_wallet_with_different_did_linked() {
+    let (env, client, signing_key) = setup();
+    let wallet_a = Address::generate(&env);
+    let wallet_b = Address::generate(&env);
+
+    let did_a = String::from_str(&env, "did:privy:recover_a");
+    let sig_a = sign_did_link(&env, &signing_key, &did_a, &wallet_a);
+    client.register_privy_did(&did_a, &wallet_a, &sig_a);
+
+    let did_b = String::from_str(&env, "did:privy:recover_b");
+    let sig_b = sign_did_link(&env, &signing_key, &did_b, &wallet_b);
+    client.register_privy_did(&did_b, &wallet_b, &sig_b);
+
+    let result = client.try_recover_privy_did(&did_a, &wallet_b);
+    assert!(
+        result.is_err(),
+        "admin recovery must not move a DID onto a wallet that already has a different DID linked"
+    );
+
+    assert_eq!(client.get_wallet_for_did(&did_a), wallet_a);
+    assert_eq!(client.get_did_for_wallet(&wallet_b), did_b);
 }
 
 /// Verify that querying an unregistered DID returns an error.
@@ -286,7 +397,7 @@ fn test_get_did_for_wallet_unlinked_fails() {
     );
 }
 
-// ── Issue #776: 2-step admin ownership transfer ─────────────────────────────
+// ── Issue #989: 2-step admin ownership transfer ─────────────────────────────
 
 /// Build a freshly initialized contract along with the old (current) admin and
 /// a distinct proposed successor admin.
@@ -321,7 +432,7 @@ fn stored_admin(env: &Env, client: &UserRegistryContractClient<'static>) -> Addr
 fn test_2step_transfer_old_admin_keeps_ownership_until_claim() {
     let (env, client, old_admin, new_admin) = admin_setup();
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
 
     // Ownership has not moved yet.
     assert_eq!(stored_admin(&env, &client), old_admin);
@@ -336,7 +447,7 @@ fn test_2step_transfer_old_admin_keeps_ownership_until_claim() {
 fn test_2step_transfer_claim_admin_moves_ownership() {
     let (env, client, old_admin, new_admin) = admin_setup();
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
     let claimed = client.try_claim_admin(&new_admin);
     assert!(claimed.is_ok(), "proposed admin must be able to claim: {claimed:?}");
 
@@ -360,7 +471,7 @@ fn test_claim_admin_rejects_unauthorized_caller() {
     let (env, client, old_admin, new_admin) = admin_setup();
     let evil = Address::generate(&env);
 
-    client.propose_admin(&old_admin, &new_admin);
+    client.propose_new_admin(&old_admin, &new_admin);
     // Neither an unrelated address nor the old admin can claim.
     client.claim_admin(&evil);
 }
@@ -374,7 +485,7 @@ fn test_propose_admin_rejects_non_admin() {
     let imposter = Address::generate(&env);
     let target = Address::generate(&env);
 
-    client.propose_admin(&imposter, &target);
+    client.propose_new_admin(&imposter, &target);
 }
 
 /// Claiming with no active proposal panics.

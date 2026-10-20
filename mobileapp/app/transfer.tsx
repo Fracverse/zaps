@@ -44,7 +44,11 @@ import {
   StellarWalletState,
   type TransactionFeeEstimate,
 } from "../src/services/stellarWallet";
-import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+import {
+  getCachedRecentRecipientsSync,
+  getRecentRecipients,
+  saveRecentRecipient,
+} from "../src/services/api";
 import { isFederatedAddress } from "../src/utils/sep0007";
 // #580 — Biometric Verification Overlay
 import { authenticateWithBiometrics } from "./biometric";
@@ -316,7 +320,9 @@ function TransferScreen() {
 
   // Recipient search state
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
-  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>(() =>
+    getCachedRecentRecipientsSync()
+  );
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
@@ -343,8 +349,10 @@ function TransferScreen() {
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [contactsLoaded, setContactsLoaded] = useState(false);
 
+  // #887 — Search recipients dynamically by Zaps ID
   const searchUsers = useCallback(async (query: string) => {
-    if (!query || query.length < 2) {
+    const cleanQuery = query.trim().replace(/^@/, "");
+    if (!cleanQuery || cleanQuery.length < 2) {
       setSearchResults([]);
       setShowDropdown(false);
       return;
@@ -352,7 +360,7 @@ function TransferScreen() {
     setSearching(true);
     try {
       const res = await fetch(
-        `${API_BASE}/api/users/search?q=${encodeURIComponent(query)}&limit=6`
+        `${API_BASE}/api/users/search?q=${encodeURIComponent(cleanQuery)}&limit=6`
       );
       if (!res.ok) throw new Error("Search failed");
       const data: ZapsUser[] = await res.json();
@@ -397,12 +405,27 @@ function TransferScreen() {
         setUsernameStatus("idle");
         return;
       }
-      const body: { username: string; address: string; is_blacklisted?: boolean } =
-        await res.json();
+      const body: {
+        username: string;
+        address: string;
+        is_blacklisted?: boolean;
+        display_name?: string;
+        name?: string;
+        avatar_url?: string;
+        is_verified?: boolean;
+      } = await res.json();
       if (body.is_blacklisted) {
         setUsernameStatus("blacklisted");
       } else {
         setUsernameStatus("registered");
+        setSelectedUser((prev: ZapsUser | null) => ({
+          username: body.username,
+          address: body.address,
+          avatar_url: body.avatar_url ?? prev?.avatar_url ?? null,
+          name: body.display_name ?? body.name ?? prev?.name ?? null,
+          display_name: body.display_name ?? prev?.display_name ?? null,
+          isVerified: body.is_verified ?? prev?.isVerified ?? false,
+        }));
       }
     } catch {
       // Network error — don't block the user from proceeding
@@ -501,7 +524,7 @@ function TransferScreen() {
       } else {
         setUsernameStatus("idle");
       }
-    }, 350);
+    }, 300);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
       if (federationTimer.current) clearTimeout(federationTimer.current);
@@ -522,6 +545,8 @@ function TransferScreen() {
     setRecipient(contact.username);
     setSelectedUser({
       username: contact.username,
+      name: contact.contactName,
+      display_name: contact.contactName,
       address: contact.address,
       avatar_url: contact.avatarUrl ?? null,
       isVerified: false,
@@ -656,6 +681,63 @@ function TransferScreen() {
     []
   );
 
+  const processConfirmedTransfer = async () => {
+    // Biometric Verification Overlay
+    // Gate the payment submission behind biometric / passcode authentication.
+    // The transfer is blocked unless the user successfully authenticates.
+    const biometricResult = await authenticateWithBiometrics(
+      "Verify your identity to confirm the transfer"
+    );
+
+    if (!biometricResult.success) {
+      if (biometricResult.reason === "cancelled") {
+        return;
+      }
+      Alert.alert(
+        "Authentication Required",
+        "You must verify your identity before sending a payment. Please try again.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const assetIssuer =
+        token.symbol !== "XLM"
+          ? STELLAR_ASSET_ISSUERS[token.symbol]
+          : undefined;
+      const result = await submitPayment(
+        recipient,
+        amount,
+        walletState!.source!,
+        walletState!.publicKey,
+        token.symbol,
+        assetIssuer,
+        description || undefined
+      );
+      const stored = await AsyncStorage.getItem("pending_transfers");
+      const list = stored ? JSON.parse(stored) : [];
+      list.unshift({
+        recipient,
+        amount,
+        description: description || "Sent money",
+        visibility,
+        token: token.symbol,
+        hash: result.hash,
+      });
+      await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
+      await saveRecentRecipient(recipient);
+    } catch (e) {
+      Alert.alert("Transfer Failed", (e as Error).message);
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setStep(4);
+  };
+
   const handleNext = async () => {
     if (step === 0 && transferType === "BATCH") {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -674,61 +756,27 @@ function TransferScreen() {
     }
 
     if (step === 3) {
-      // #580 — Biometric Verification Overlay
-      // Gate the payment submission behind biometric / passcode authentication.
-      // The transfer is blocked unless the user successfully authenticates.
-      const biometricResult = await authenticateWithBiometrics(
-        "Verify your identity to confirm the transfer"
+      const recipientDisplayName =
+        selectedUser?.name ||
+        selectedUser?.display_name ||
+        selectedUser?.real_name;
+      const recipientLabel = recipientDisplayName
+        ? `${recipientDisplayName} (@${recipient})`
+        : recipient;
+
+      Alert.alert(
+        "Confirm Transfer",
+        `Are you sure you want to send ${amount} ${token.symbol} to ${recipientLabel}?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Confirm",
+            onPress: () => {
+              void processConfirmedTransfer();
+            },
+          },
+        ]
       );
-
-      if (!biometricResult.success) {
-        if (biometricResult.reason === "cancelled") {
-          // User deliberately dismissed the prompt — do nothing, stay on step 3.
-          return;
-        }
-        Alert.alert(
-          "Authentication Required",
-          "You must verify your identity before sending a payment. Please try again.",
-          [{ text: "OK" }]
-        );
-        return;
-      }
-
-      setSubmitting(true);
-      try {
-        const assetIssuer =
-          token.symbol !== "XLM"
-            ? STELLAR_ASSET_ISSUERS[token.symbol]
-            : undefined;
-        const result = await submitPayment(
-          recipient,
-          amount,
-          walletState!.source!,
-          walletState!.publicKey,
-          token.symbol,
-          assetIssuer,
-          description || undefined
-        );
-        const stored = await AsyncStorage.getItem("pending_transfers");
-        const list = stored ? JSON.parse(stored) : [];
-        list.unshift({
-          recipient,
-          amount,
-          description: description || "Sent money",
-          visibility,
-          token: token.symbol,
-          hash: result.hash,
-        });
-        await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
-        await saveRecentRecipient(recipient);
-      } catch (e) {
-        Alert.alert("Transfer Failed", (e as Error).message);
-        setSubmitting(false);
-        return;
-      }
-      setSubmitting(false);
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setStep(4);
       return;
     }
 
@@ -810,30 +858,38 @@ function TransferScreen() {
       <View style={styles.inputsSection}>
         {/* Recipient input + live-search dropdown (ZAPS mode only) */}
         <View style={styles.recipientSearchWrapper}>
-          <Input
-            placeholder={
-              transferType === "ZAPS"
-                ? "Recipient ZAPS ID (e.g. tolu.zaps)"
-                : "Wallet Address"
-            }
-            value={recipient}
-            onChangeText={(text: string) => {
-              setRecipient(text);
-              setSelectedUser(null);
-              // Reset registry warning when user edits the field
-              setUsernameStatus("idle");
-              // #686 — Reset federation status when user edits the field
-              setFederationStatus("idle");
-              setFederationError(null);
-              if (transferType !== "ZAPS") return;
-              if (text.length < 2) {
-                setShowDropdown(false);
-                setSearchResults([]);
+          <View style={styles.searchInputRow}>
+            <Ionicons
+              name="search"
+              size={18}
+              color="#9CA3AF"
+              style={styles.searchInputIcon}
+            />
+            <Input
+              placeholder={
+                transferType === "ZAPS"
+                  ? "Recipient ZAPS ID (e.g. tolu.zaps)"
+                  : "Wallet Address"
               }
-            }}
-            autoCapitalize="none"
-            style={styles.transferInput}
-          />
+              value={recipient}
+              onChangeText={(text: string) => {
+                setRecipient(text);
+                setSelectedUser(null);
+                // Reset registry warning when user edits the field
+                setUsernameStatus("idle");
+                // #686 — Reset federation status when user edits the field
+                setFederationStatus("idle");
+                setFederationError(null);
+                if (transferType !== "ZAPS") return;
+                if (text.length < 2) {
+                  setShowDropdown(false);
+                  setSearchResults([]);
+                }
+              }}
+              autoCapitalize="none"
+              style={[styles.transferInput, styles.searchInputWithIcon]}
+            />
+          </View>
           {/* Searching indicator */}
           {transferType === "ZAPS" && searching && (
             <ActivityIndicator
@@ -873,17 +929,20 @@ function TransferScreen() {
               </Text>
             </View>
           )}
-          {/* Dropdown results */}
+          {/* Dropdown results (#887) */}
           {transferType === "ZAPS" &&
             showDropdown &&
             searchResults.length > 0 && (
-              <View style={styles.dropdownContainer}>
+              <View style={styles.dropdownContainer} testID="search-results-dropdown">
                 {searchResults.map((user) => (
                   <TouchableOpacity
                     key={user.address}
                     style={styles.dropdownItem}
                     onPress={() => handleSelectUser(user)}
                     activeOpacity={0.75}
+                    testID={`search-result-${user.username}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Select recipient ${user.username}`}
                   >
                     <View style={styles.dropdownAvatar}>
                       <Text style={styles.dropdownAvatarText}>
@@ -1112,17 +1171,20 @@ function TransferScreen() {
           </View>
         </View>
 
+        {/* #888 — Note / Description input field */}
         <Input
           placeholder="What is this for? (e.g. Lunch 🍕)"
           value={description}
           onChangeText={setDescription}
           maxLength={100}
           style={styles.transferInput}
+          testID="transfer-note-input"
+          accessibilityLabel="Payment note"
         />
       </View>
 
-      {/* Visibility Selector */}
-      <View style={styles.visibilitySection}>
+      {/* #889 — Visibility Selector */}
+      <View style={styles.visibilitySection} testID="visibility-selector-section">
         <Text style={styles.sectionLabel}>Who can see this payment?</Text>
         <View style={styles.visibilityOptions}>
           <TouchableOpacity
@@ -1131,6 +1193,9 @@ function TransferScreen() {
               visibility === "PUBLIC" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("PUBLIC")}
+            testID="visibility-public-button"
+            accessibilityRole="button"
+            accessibilityLabel="Public visibility"
           >
             <Ionicons
               name="globe-outline"
@@ -1153,6 +1218,9 @@ function TransferScreen() {
               visibility === "FRIENDS" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("FRIENDS")}
+            testID="visibility-friends-button"
+            accessibilityRole="button"
+            accessibilityLabel="Friends visibility"
           >
             <Ionicons
               name="people-outline"
@@ -1175,6 +1243,9 @@ function TransferScreen() {
               visibility === "PRIVATE" && styles.visibilityBtnActive,
             ]}
             onPress={() => setVisibility("PRIVATE")}
+            testID="visibility-private-button"
+            accessibilityRole="button"
+            accessibilityLabel="Private visibility"
           >
             <Ionicons
               name="lock-closed-outline"
@@ -1237,23 +1308,37 @@ function TransferScreen() {
           </View>
         </View>
 
-        <View style={[styles.infoRow, { marginTop: 16 }]}>
+        <View style={[styles.infoRow, { marginTop: 16 }]} testID="summary-note-row">
           <View style={styles.recipientBadge}>
             <Ionicons name="chatbubble-outline" size={16} color="#777" />
           </View>
           <View style={styles.infoCol}>
             <Text style={styles.infoLabel}>Note</Text>
-            <Text style={styles.infoValue}>{description || "No note"}</Text>
+            <Text style={styles.infoValue} testID="summary-note-value">
+              {description || "No note"}
+            </Text>
           </View>
         </View>
 
-        <View style={[styles.infoRow, { marginTop: 16 }]}>
+        <View style={[styles.infoRow, { marginTop: 16 }]} testID="summary-privacy-row">
           <View style={styles.recipientBadge}>
-            <Ionicons name="eye-outline" size={16} color="#777" />
+            <Ionicons
+              name={
+                visibility === "PUBLIC"
+                  ? "globe-outline"
+                  : visibility === "FRIENDS"
+                  ? "people-outline"
+                  : "lock-closed-outline"
+              }
+              size={16}
+              color="#777"
+            />
           </View>
           <View style={styles.infoCol}>
             <Text style={styles.infoLabel}>Privacy</Text>
-            <Text style={styles.infoValue}>{visibility}</Text>
+            <Text style={styles.infoValue} testID="summary-privacy-value">
+              {visibility}
+            </Text>
           </View>
         </View>
       </View>
@@ -1279,6 +1364,7 @@ function TransferScreen() {
           amount={amount}
           tokenSymbol={token.symbol}
           description={description}
+          visibility={visibility}
           feeEstimate={transactionFeeEstimate}
         />
 
@@ -2050,6 +2136,19 @@ const styles = StyleSheet.create({
   recipientSearchWrapper: {
     position: "relative",
     zIndex: 10,
+  },
+  searchInputRow: {
+    position: "relative",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputIcon: {
+    position: "absolute",
+    left: 14,
+    zIndex: 1,
+  },
+  searchInputWithIcon: {
+    paddingLeft: 40,
   },
   searchingIndicator: {
     position: "absolute",

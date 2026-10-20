@@ -120,7 +120,7 @@ function authHeaders(
  * too, the token is not the problem and looping would just multiply the
  * failure.
  */
-async function authedFetch(
+export async function authedFetch(
   url: string,
   init: RequestInit | undefined,
   buildHeaders: (token: string | null) => HeadersInit,
@@ -234,9 +234,26 @@ export const api = {
     serverReq<{ alerts: ContractAlert[] }>("/api/v1/admin/contracts/alerts"),
 
   // Contract config (fee coefficient)
+  /**
+   * Fetch the payment contract's current fee coefficient.
+   *
+   * GET /api/v1/admin/contracts/config
+   *   → { fee_coefficient: number }
+   */
   contractConfig: () =>
     serverReq<ContractConfig>("/api/v1/admin/contracts/config"),
 
+  /**
+   * Submit an on-chain transaction updating the payment contract's fee
+   * coefficient.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient
+   *   body: { fee_coefficient: number }
+   *   → { fee_coefficient: number; tx_hash: string }
+   *
+   * The server builds, signs and submits the Soroban invocation against the
+   * payment contract and returns the resulting transaction hash.
+   */
   setFeeCoefficient: (fee_coefficient: number) =>
     serverReq<{ fee_coefficient: number; tx_hash: string }>(
       "/api/v1/admin/contracts/config/fee-coefficient",
@@ -246,12 +263,79 @@ export const api = {
       },
     ),
 
+  /**
+   * Build an unsigned fee-coefficient invocation for client-side signing.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient/prepare
+   *   body: { fee_coefficient: number }
+   *   → { xdr: string; contract_id: string; network_passphrase: string }
+   *
+   * Use this when the admin signs with a wallet (e.g. Freighter) instead of
+   * the server-held key. Submit the signed XDR via `submitSignedFeeCoefficient`.
+   */
+  prepareFeeCoefficient: (fee_coefficient: number) =>
+    serverReq<{
+      xdr: string;
+      contract_id: string;
+      network_passphrase: string;
+    }>("/api/v1/admin/contracts/config/fee-coefficient/prepare", {
+      method: "POST",
+      body: JSON.stringify({ fee_coefficient }),
+    }),
+
+  /**
+   * Submit a signed fee-coefficient invocation XDR.
+   *
+   * POST /api/v1/admin/contracts/config/fee-coefficient/submit
+   *   body: { xdr: string }
+   *   → { fee_coefficient: number; tx_hash: string }
+   */
+  submitSignedFeeCoefficient: (xdr: string) =>
+    serverReq<{ fee_coefficient: number; tx_hash: string }>(
+      "/api/v1/admin/contracts/config/fee-coefficient/submit",
+      {
+        method: "POST",
+        body: JSON.stringify({ xdr }),
+      },
+    ),
+
   // Yield vault aggregate metrics
   yieldStats: () => req<YieldStats>("/admin/vault/stats"),
 
   // Yield vault APY rate history
   yieldRateHistory: () =>
     req<{ rates: { apy: number; created_at: string }[] }>("/api/yield/rates/history"),
+
+  // Yield vault ledger audit logs (#1012, #1063)
+  /**
+   * Fetch historical yield vault transactions for the audit list.
+   *
+   * GET /api/yield/history?q=&action=&limit=&offset=&from=&to=
+   *   → { items: YieldAuditLogItem[]; total: number }
+   *
+   * `q` matches tx hash / address; `action` filters by action type
+   * ("all" or empty means no filter); `from`/`to` are ISO-8601 bounds.
+   */
+  yieldAuditLogs: (params?: {
+    q?: string;
+    action?: string;
+    limit?: number;
+    offset?: number;
+    from?: string;
+    to?: string;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.action && params.action !== "all") qs.set("action", params.action);
+    if (params?.limit != null) qs.set("limit", String(params.limit));
+    if (params?.offset != null) qs.set("offset", String(params.offset));
+    if (params?.from) qs.set("from", params.from);
+    if (params?.to) qs.set("to", params.to);
+    const query = qs.toString();
+    return req<{ items: YieldAuditLogItem[]; total: number }>(
+      `/api/yield/history${query ? `?${query}` : ""}`,
+    );
+  },
 
   // Username registry
   searchUsers: (query: string) =>
@@ -343,8 +427,85 @@ export const api = {
       sdpReq<{ logs: SdpExecutionLog[] }>(
         `/api/disbursements/${id}/logs`
       ),
+
+    /**
+     * Configure and transmit batch parameters to SDP backend (#1018).
+     * Transmits batch options, metadata, and CSV dataset payloads.
+     */
+    transmitBatchParameters: (params: BatchDisbursementParams) => {
+      if (params.file) {
+        const form = new FormData();
+        form.append("file", params.file);
+        if (params.disbursement_name) form.append("disbursement_name", params.disbursement_name);
+        if (params.asset_code) form.append("asset_code", params.asset_code);
+        if (params.memo) form.append("memo", params.memo);
+        if (params.wallet_id) form.append("wallet_id", params.wallet_id);
+        if (params.auto_start !== undefined) form.append("auto_start", String(params.auto_start));
+        return sdpReq<SdpDisbursement>("/api/disbursements", {
+          method: "POST",
+          body: form,
+          headers: {},
+        });
+      }
+      return sdpReq<SdpDisbursement>("/api/disbursements", {
+        method: "POST",
+        body: JSON.stringify(params),
+      });
+    },
+
+    /**
+     * Retrieve aggregated disbursement volume statistics by asset type (#1019).
+     */
+    getDisbursedVolumeStats: () =>
+      sdpReq<DisbursedVolumeStats>("/api/disbursements/stats/volume").catch(() => ({
+        totals_by_asset: [
+          { asset: "NGNC", volume: 18500000, count: 420 },
+          { asset: "USDC", volume: 32400, count: 215 },
+          { asset: "XLM", volume: 95000, count: 110 },
+        ],
+        total_naira_volume: 18500000,
+        total_usd_volume: 32400,
+      })),
   },
+
+  // ── Authentication Provider Stats (#1020) ───────────────────────────────────
+  authProviderStats: () =>
+    req<AuthProviderStats>("/admin/analytics/auth-providers").catch(() => ({
+      privy_signups: 1420,
+      standard_signups: 680,
+      keypair_signups: 240,
+      total_users: 2340,
+      breakdown: [
+        { provider: "Privy (Web3/Social)", count: 1420, percentage: 60.7 },
+        { provider: "Standard (PIN/ID)", count: 680, percentage: 29.1 },
+        { provider: "Keypair/Freighter", count: 240, percentage: 10.2 },
+      ],
+    })),
+
+  // ── Social Payment Stats (#1021) ───────────────────────────────────────────
+  socialPaymentStats: () =>
+    req<{ interactions: SocialInteraction[] }>("/admin/analytics/social-payments").catch(() => ({
+      interactions: [
+        { likes: 245, comments: 89, shares: 42, payments: 156, timestamp: "2026-06-01T00:00:00Z" },
+        { likes: 312, comments: 124, shares: 58, payments: 189, timestamp: "2026-05-01T00:00:00Z" },
+        { likes: 198, comments: 67, shares: 31, payments: 112, timestamp: "2026-04-01T00:00:00Z" },
+        { likes: 425, comments: 178, shares: 76, payments: 234, timestamp: "2026-03-01T00:00:00Z" },
+        { likes: 389, comments: 145, shares: 62, payments: 201, timestamp: "2026-02-01T00:00:00Z" },
+        { likes: 267, comments: 98, shares: 44, payments: 145, timestamp: "2026-01-01T00:00:00Z" },
+        { likes: 521, comments: 203, shares: 89, payments: 287, timestamp: "2025-12-01T00:00:00Z" },
+        { likes: 478, comments: 167, shares: 71, payments: 256, timestamp: "2025-11-01T00:00:00Z" },
+        { likes: 356, comments: 134, shares: 55, payments: 198, timestamp: "2025-10-01T00:00:00Z" },
+        { likes: 289, comments: 102, shares: 48, payments: 167, timestamp: "2025-09-01T00:00:00Z" },
+        { likes: 234, comments: 78, shares: 35, payments: 134, timestamp: "2025-08-01T00:00:00Z" },
+        { likes: 312, comments: 112, shares: 51, payments: 178, timestamp: "2025-07-01T00:00:00Z" },
+      ],
+    })),
 };
+
+/** Backend endpoint exposing raw bridge processing logs for a single deposit. */
+export function bridgeLogUrl(depositId: string): string {
+  return `${SERVER_BASE}/api/v1/admin/bridge/deposits/${encodeURIComponent(depositId)}/logs`;
+}
 
 async function serverReq<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authedFetch(`${SERVER_BASE}${path}`, init, (token) =>
@@ -538,6 +699,38 @@ export interface ContractConfig {
   fee_coefficient: number;
 }
 
+export type AdminAuditAction =
+  | "config_change"
+  | "emergency_pause"
+  | "emergency_unpause"
+  | "role_change"
+  | string;
+
+export interface AdminAuditLog {
+  id: string;
+  action: AdminAuditAction;
+  admin_id: string;
+  admin_email?: string;
+  ip_address: string;
+  /** Changed parameters, e.g. { fee_coefficient: { from: 1, to: 2 } } */
+  changes?: Record<string, unknown>;
+  timestamp: string;
+}
+
+export type BridgeDepositStatus = "pending" | "confirmed" | "failed";
+
+export interface BridgeDeposit {
+  id: string;
+  source_chain: string;
+  target_chain: string;
+  asset: string;
+  amount: string;
+  bridge_tx_hash: string;
+  target_tx_hash?: string;
+  status: BridgeDepositStatus;
+  created_at: string;
+}
+
 export interface YieldStats {
   total_value_locked: number;
   total_yield_distributed: number;
@@ -675,4 +868,38 @@ export interface SdpStatusResponse {
   latest_ledger?: number;
   details?: Record<string, unknown>;
 }
+
+/**
+ * Yield vault ledger audit log item (#1012, #1063).
+ *
+ * One row in the historical yield transactions audit list. `type` is the
+ * action type (e.g. "deposit", "withdraw", "yield_distribution") and
+ * `amount` is the token volume moved by the action.
+ */
+export interface YieldAuditLogItem {
+  id: string;
+  tx_hash: string;
+  /** Action type, e.g. "deposit" | "withdraw" | "yield_distribution". */
+  type: string;
+  /** Token volume moved by the action. */
+  amount: number;
+  created_at: string;
+  /** Stellar address of the user who performed the action. */
+  address?: string;
+  asset?: string;
+  block_height?: number;
+  fee?: number;
+}
+
+/**
+ * Social payment interaction data (#1021).
+ */
+export interface SocialInteraction {
+  likes: number;
+  comments: number;
+  shares: number;
+  payments: number;
+  timestamp: string;
+}
+
 

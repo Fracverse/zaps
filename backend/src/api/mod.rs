@@ -14,6 +14,7 @@ pub mod payouts;
 pub mod privy_jwks;
 pub mod social;
 pub mod user;
+pub use user as users;
 pub mod r#yield;
 
 // Re-export the middleware types used in main.rs so callers can import them
@@ -33,12 +34,13 @@ pub fn auth_routes_with_state(state: auth::AuthState) -> Router {
 }
 
 /// #949: Auth router rate-limited by `limiter` (e.g. the Redis sliding
-/// window from `AuthRateLimiter::from_redis_url`).
+/// window from `AuthRateLimiter::from_redis_url`), with session refresh (#943).
 pub fn auth_routes_with_limiter(state: auth::AuthState, limiter: auth::AuthRateLimiter) -> Router {
     Router::new()
         .route("/challenge", get(auth::get_challenge))
         .route("/verify", post(auth::verify_signature))
         .route("/privy", post(auth::privy_auth))
+        .route("/refresh", post(auth::refresh_session))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             limiter,
@@ -56,6 +58,7 @@ pub fn auth_routes(pool: sqlx::PgPool) -> Router {
             pool,
             privy: std::sync::Arc::new(privy_jwks::PrivyJwksClient::new(config.privy_jwks_url)),
             privy_app_id: config.privy_app_id,
+            cache: None,
         },
         auth::AuthRateLimiter::from_redis_url(config.redis_url.as_deref()),
     )
@@ -115,7 +118,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
     Router::new()
         .route(
             "/profile",
-            get(user::get_profile).post(user::update_profile),
+            get(user::get_profile).post(user::update_profile).put(user::update_profile),
         )
         .route("/profile/avatar", post(user::upload_avatar))
         .route("/search", get(user::search_users))
@@ -145,19 +148,28 @@ pub fn registry_routes(pool: sqlx::PgPool) -> Router {
         .with_state(pool)
 }
 
-/// #543
-pub fn payout_routes(pool: sqlx::PgPool) -> Router {
+/// #543 / #935
+///
+/// Takes `BridgeState` (rather than a bare pool) so the batch-upload handlers
+/// — which need the shared bridge state — can live on the same router as the
+/// rest of the payout endpoints; `payouts::*` handlers keep extracting a
+/// plain `State<PgPool>` via the `FromRef<BridgeState> for PgPool` impl in
+/// `bridge.rs`.
+pub fn payout_routes(state: bridge::BridgeState) -> Router {
     Router::new()
         .route("/username", post(feed::payout_by_username))
         .route("/batches", get(payouts::list_batches))
-        .route("/batch", post(payouts::create_batch))
+        // #935: POST /api/payouts/batch accepts a JSON array of payouts;
+        // /batch/csv accepts the same data as a multipart CSV upload.
+        .route("/batch", post(bridge::batch_upload))
+        .route("/batch/csv", post(bridge::batch_upload_csv))
         .route("/batch/:id", get(payouts::get_batch_detail))
         .route("/batch/:id/export", get(payouts::export_batch))
         // #728 — block transfers to sanctioned addresses before processing.
         .layer(middleware::from_fn(
             auth_middleware::compliance_sanitize_middleware,
         ))
-        .with_state(pool)
+        .with_state(state)
 }
 
 /// #957 — Public SDP webhook receiver route (authenticated via HMAC signature, not user JWT)
@@ -181,17 +193,6 @@ pub fn bridge_routes(state: bridge::BridgeState) -> Router {
         .route("/quote", post(bridge::get_quote))
         .route("/tx", post(bridge::submit_bridge_tx))
         .route("/status/:id", get(bridge::get_bridge_status))
-        .with_state(state)
-}
-
-/// #553 — Batch payout upload routes (JSON body + CSV multipart).
-///
-/// - POST `/api/payouts/batch-upload`      → JSON `{ "payouts": [...] }`
-/// - POST `/api/payouts/batch-upload/csv`  → multipart/form-data with `file` field
-pub fn batch_upload_routes(state: bridge::BridgeState) -> Router {
-    Router::new()
-        .route("/batch-upload", post(bridge::batch_upload))
-        .route("/batch-upload/csv", post(bridge::batch_upload_csv))
         .with_state(state)
 }
 

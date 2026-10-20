@@ -7,12 +7,14 @@ import Sidebar from "@/components/Sidebar";
 import SearchBar from "@/components/SearchBar";
 import ThemeSelector from "@/components/ThemeSelector";
 import NotificationBell from "@/components/NotificationBell";
-import CommandPalette from "@/components/CommandPalette";
+import CommandPalette, { NAV_ITEMS } from "@/components/CommandPalette";
 import MobileNavDrawer from "@/components/MobileNavDrawer";
 import { NotificationsProvider } from "@/lib/notifications-context";
 import HealthStatusIndicator from "@/components/HealthStatusIndicator";
+import { useTabShortcuts } from "@/lib/use-tab-shortcuts";
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [paletteOpen, setPaletteOpen] = useState(false);
   // #808 — mobile drawer, only reachable below the md breakpoint
   const [navOpen, setNavOpen] = useState(false);
@@ -24,6 +26,10 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
       setPaletteOpen((prev) => !prev);
     }
   }, []);
+
+  // #1041 — `g` then a tab key (see NAV_ITEMS) jumps between dashboard tabs
+  const navigate = useCallback((href: string) => router.push(href), [router]);
+  useTabShortcuts(NAV_ITEMS, navigate, paletteOpen);
 
   useEffect(() => {
     document.addEventListener("keydown", handleKeyDown);

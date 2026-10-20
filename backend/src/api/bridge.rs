@@ -1,8 +1,9 @@
+use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::allbridge::{
     AllbridgeClient, AllbridgeQuoteRequest, BridgeStatusKind, BridgeTransferStatus,
 };
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Extension, FromRef, Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -25,6 +26,16 @@ impl BridgeState {
             pool,
             allbridge: Arc::new(AllbridgeClient::new(allbridge_api_url)),
         }
+    }
+}
+
+/// Lets handlers written against `State<PgPool>` (e.g. `api::payouts::*`) run
+/// on the same router as `State<BridgeState>` handlers, so `/api/payouts` can
+/// mix both without every payout handler being rewritten to take the wider
+/// bridge state.
+impl FromRef<BridgeState> for sqlx::PgPool {
+    fn from_ref(state: &BridgeState) -> Self {
+        state.pool.clone()
     }
 }
 
@@ -345,7 +356,7 @@ pub async fn run_status_poller(state: BridgeState) {
     }
 }
 
-// ── #553 Batch Payout Upload ──────────────────────────────────────────────────
+// ── #553 / #935 Batch Payout Upload ────────────────────────────────────────────
 
 /// A single disbursement record accepted in both JSON-array and CSV upload modes.
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -454,8 +465,14 @@ fn split_valid(records: Vec<PayoutRecord>) -> (Vec<PayoutRecord>, Vec<String>) {
 }
 
 /// Persist accepted payouts as a new batch and return the generated batch ID.
+///
+/// `created_by` is the authenticated caller submitting the batch (required by
+/// the `payout_batches.created_by` foreign key). The idempotency key is
+/// generated per upload since the batch-upload endpoints don't take a
+/// caller-supplied one; a retried HTTP request is simply a second batch.
 async fn persist_batch(
     pool: &sqlx::PgPool,
+    created_by: uuid::Uuid,
     records: &[PayoutRecord],
 ) -> Result<String, sqlx::Error> {
     let total_amount: f64 = records
@@ -469,15 +486,18 @@ async fn persist_batch(
         })
         .sum();
     let total_amount_i64 = (total_amount * 1_000_000.0).round() as i64;
+    let idempotency_key = format!("batch-upload-{}", uuid::Uuid::new_v4());
 
     let batch_row = sqlx::query(
         r#"
         INSERT INTO payout_batches
-            (currency, total_recipients, total_amount, status)
-        VALUES ('XLM', $1, $2, 'PENDING')
+            (idempotency_key, created_by, currency, total_recipients, total_amount, status)
+        VALUES ($1, $2, 'XLM', $3, $4, 'PENDING')
         RETURNING id
         "#,
     )
+    .bind(&idempotency_key)
+    .bind(created_by)
     .bind(records.len() as i32)
     .bind(total_amount_i64)
     .fetch_one(pool)
@@ -511,17 +531,18 @@ async fn persist_batch(
     Ok(batch_id.to_string())
 }
 
-/// POST `/api/payouts/batch-upload`
+/// POST `/api/payouts/batch` (#935)
 ///
-/// Accepts disbursement parameters via:
-/// - **JSON body**: `{ "payouts": [{ "destination": "...", "amount": "...", "memo": "..." }] }`
-/// - **Multipart form**: field named `file` containing a CSV with columns `destination,amount,memo`
+/// Accepts a JSON body of mass payouts: `{ "payouts": [{ "destination": "...",
+/// "amount": "...", "memo": "..." }] }`. For CSV file uploads, see
+/// `batch_upload_csv` at `/api/payouts/batch/csv`.
 ///
 /// Validates every record. Rejects the entire batch if the format is wrong. If individual
 /// records are invalid, they are reported in the `errors` array while valid ones proceed.
 /// Returns 422 if the payload is empty after validation.
 pub async fn batch_upload(
     State(state): State<BridgeState>,
+    Extension(user): Extension<AuthenticatedUser>,
     content_type: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
@@ -532,10 +553,9 @@ pub async fn batch_upload(
         .unwrap_or("");
 
     let raw_records: Result<Vec<PayoutRecord>, String> = if ct.contains("multipart/form-data") {
-        // Re-build a Multipart from raw bytes is non-trivial without the extractor.
-        // Instead, we handle this via the dedicated multipart handler below.
-        // This branch should not be reached when using `batch_upload_multipart`.
-        Err("Use the multipart endpoint for CSV uploads".to_string())
+        // Re-building a Multipart extractor from raw bytes isn't practical here;
+        // CSV uploads go through the dedicated `/batch/csv` handler instead.
+        Err("Use POST /api/payouts/batch/csv for CSV file uploads".to_string())
     } else {
         // Assume JSON body
         match serde_json::from_slice::<BatchJsonPayload>(&body) {
@@ -576,7 +596,7 @@ pub async fn batch_upload(
             .into_response();
     }
 
-    match persist_batch(&state.pool, &accepted).await {
+    match persist_batch(&state.pool, user.id, &accepted).await {
         Ok(batch_id) => Json(BatchUploadResponse {
             accepted: accepted.len(),
             rejected: errors.len(),
@@ -595,12 +615,13 @@ pub async fn batch_upload(
     }
 }
 
-/// POST `/api/payouts/batch-upload/csv`
+/// POST `/api/payouts/batch/csv` (#935)
 ///
 /// Multipart form upload variant accepting a CSV file in a field named `file`.
 /// Columns required: `destination`, `amount`. Column `memo` is optional.
 pub async fn batch_upload_csv(
     State(state): State<BridgeState>,
+    Extension(user): Extension<AuthenticatedUser>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let mut csv_bytes: Option<Vec<u8>> = None;
@@ -669,7 +690,7 @@ pub async fn batch_upload_csv(
             .into_response();
     }
 
-    match persist_batch(&state.pool, &accepted).await {
+    match persist_batch(&state.pool, user.id, &accepted).await {
         Ok(batch_id) => Json(BatchUploadResponse {
             accepted: accepted.len(),
             rejected: errors.len(),
@@ -685,5 +706,84 @@ pub async fn batch_upload_csv(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod batch_upload_tests {
+    use super::*;
+
+    fn record(destination: &str, amount: &str) -> PayoutRecord {
+        PayoutRecord {
+            destination: destination.to_string(),
+            amount: amount.to_string(),
+            memo: None,
+        }
+    }
+
+    #[test]
+    fn validate_record_accepts_positive_amount() {
+        assert!(validate_record(0, &record("GABC...", "12.5")).is_none());
+    }
+
+    #[test]
+    fn validate_record_rejects_empty_destination() {
+        let err = validate_record(0, &record("  ", "10")).unwrap();
+        assert!(err.contains("destination is required"));
+    }
+
+    #[test]
+    fn validate_record_rejects_zero_or_negative_amount() {
+        assert!(validate_record(0, &record("GABC...", "0")).is_some());
+        assert!(validate_record(0, &record("GABC...", "-5")).is_some());
+    }
+
+    #[test]
+    fn validate_record_rejects_non_numeric_amount() {
+        let err = validate_record(2, &record("GABC...", "abc")).unwrap();
+        assert!(err.contains("row 3"));
+        assert!(err.contains("not a valid number"));
+    }
+
+    #[test]
+    fn split_valid_separates_good_rows_from_bad() {
+        let records = vec![
+            record("GABC...", "10"),
+            record("", "10"),
+            record("GDEF...", "not-a-number"),
+        ];
+        let (accepted, errors) = split_valid(records);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn parse_csv_reads_header_and_rows_in_any_column_order() {
+        let csv = b"amount,destination,memo\n10.5,GABC...,payroll\n3,GDEF...,\n";
+        let records = parse_csv(csv).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].destination, "GABC...");
+        assert_eq!(records[0].amount, "10.5");
+        assert_eq!(records[0].memo.as_deref(), Some("payroll"));
+        assert_eq!(records[1].memo, None);
+    }
+
+    #[test]
+    fn parse_csv_skips_blank_lines() {
+        let csv = b"destination,amount\nGABC...,1\n\nGDEF...,2\n";
+        let records = parse_csv(csv).unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn parse_csv_rejects_missing_required_column() {
+        let csv = b"addr,amount\nGABC...,1\n";
+        let err = parse_csv(csv).unwrap_err();
+        assert!(err.contains("destination"));
+    }
+
+    #[test]
+    fn parse_csv_rejects_empty_file() {
+        assert!(parse_csv(b"").is_err());
     }
 }

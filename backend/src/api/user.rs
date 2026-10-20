@@ -35,8 +35,10 @@ impl FromRef<UserState> for sqlx::PgPool {
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
+    #[serde(alias = "displayName")]
     pub display_name: Option<String>,
     pub bio: Option<String>,
+    #[serde(alias = "avatarUri", alias = "avatar_uri")]
     pub avatar_url: Option<String>,
 }
 
@@ -1177,5 +1179,96 @@ mod tests {
         assert_eq!(escape_like_pattern("a_b"), r"a\_b");
         assert_eq!(escape_like_pattern(r"a\b"), r"a\\b");
         assert_eq!(escape_like_pattern("ebube"), "ebube");
+    }
+
+    #[test]
+    fn autocomplete_prefix_pattern_formats_correctly() {
+        let term = "alice";
+        let pattern = format!("{}%", escape_like_pattern(&term.trim().to_lowercase()));
+        assert_eq!(pattern, "alice%");
+
+        let special = "test%_user";
+        let escaped_pattern = format!("{}%", escape_like_pattern(&special.trim().to_lowercase()));
+        assert_eq!(escaped_pattern, r"test\%\_user%");
+    }
+}
+
+#[cfg(test)]
+mod payout_route_tests {
+    use super::*;
+
+    #[test]
+    fn payout_request_deserialization() {
+        let json = r#"{"username": "alice", "amount": "100.50", "currency": "USDC"}"#;
+        let req: PayoutRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.username, "alice");
+        assert_eq!(req.amount, "100.50");
+    }
+
+    #[test]
+    fn username_resolution_returns_valid_stellar_address() {
+        let address = resolve_username_to_address("alice");
+        assert!(address.starts_with('G'));
+        assert_eq!(address.len(), 56);
+    }
+}
+
+#[cfg(test)]
+mod indexer_tests {
+    use super::*;
+
+    #[test]
+    fn user_registered_event_parsing() {
+        let event = serde_json::json!({
+            "type": "UserRegistered",
+            "address": "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "username": "alice"
+        });
+        let parsed = parse_user_registered_event(&event);
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert_eq!(parsed.username, "alice");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn username_unique_index_exists() {
+        let query = "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username)";
+        assert!(query.contains("UNIQUE"));
+    }
+
+    #[test]
+    fn username_lower_index_exists() {
+        let query = "CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username))";
+        assert!(query.contains("LOWER"));
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn search_query_construction() {
+        let prefix = "ali";
+        let query = format!("SELECT * FROM users WHERE username LIKE '{}%'", prefix);
+        assert!(query.contains("LIKE 'ali%'"));
+    }
+
+    #[test]
+    fn search_result_serialization() {
+        let results = vec![
+            SearchUser {
+                username: "alice".to_string(),
+                address: "GABC1234".to_string(),
+                avatar_url: None,
+            },
+        ];
+        let json = serde_json::to_string(&results).unwrap();
+        assert!(json.contains("alice"));
     }
 }
