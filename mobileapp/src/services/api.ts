@@ -214,31 +214,41 @@ export interface YieldBalance {
   totalYieldEarned: string | number;
   availableBalance: string | number;
   earningBalance: string | number;
-  explanation: string;
+  explanation?: string;
   autoEarnEnabled: boolean;
 }
+
+interface YieldBalanceResponse {
+  available_balance: number;
+  earning_balance: number;
+  accrued_interest: number;
+  total_earning_balance: number;
+  apy: number;
+  auto_earn_enabled: boolean;
+}
+
+const MICRO_UNITS_PER_UNIT = 1_000_000;
 
 export async function fetchYieldBalance(): Promise<YieldBalance> {
   const res = await apiFetch(`${API_BASE}/api/yield/balance`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json() as Promise<YieldBalance>;
+  const data = (await res.json()) as YieldBalanceResponse;
+
+  return {
+    apy: data.apy,
+    totalYieldEarned: data.total_earning_balance / MICRO_UNITS_PER_UNIT,
+    availableBalance: data.available_balance / MICRO_UNITS_PER_UNIT,
+    earningBalance: data.earning_balance / MICRO_UNITS_PER_UNIT,
+    autoEarnEnabled: data.auto_earn_enabled,
+  };
 }
 
 export async function updateAutoEarn(enabled: boolean): Promise<void> {
-  try {
-    const res = await apiFetch(`${API_BASE}/api/yield/toggle-auto`, {
-      method: "POST",
-      body: JSON.stringify({ enabled }),
-    });
-    if (!res.ok) {
-      await apiFetch(`${API_BASE}/api/yield/auto-earn`, {
-        method: "PATCH",
-        body: JSON.stringify({ enabled }),
-      }).catch(() => {});
-    }
-  } catch {
-    // Non-fatal: local state already reflects the toggle
-  }
+  const res = await apiFetch(`${API_BASE}/api/yield/toggle-auto`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export interface YieldTransactionQuery {

@@ -72,7 +72,7 @@ interface FeedItem {
 interface YieldSnapshot {
   apy: string;
   totalYieldEarned: string;
-  explanation: string;
+  explanation?: string;
 }
 
 interface Comment {
@@ -231,13 +231,18 @@ export default function HomeScreen() {
     promise: Promise<T>,
     timeoutMs: number
   ): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<T>((_, reject) => {
-      setTimeout(
+      timeoutId = setTimeout(
         () => reject(new Error("Request timed out. Please try again.")),
         timeoutMs
       );
     });
-    return Promise.race([promise, timeoutPromise]);
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   };
 
   const loadYieldData = useCallback(async () => {
@@ -470,17 +475,21 @@ export default function HomeScreen() {
 
   const onPullRefresh = useCallback(async () => {
     setRefreshing(true);
+    const yieldRefresh = loadYieldData();
     try {
-      const fresh = await fetchFeed();
-      if (fresh && fresh.length > 0) {
-        setFeed(fresh);
-        await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+      try {
+        const fresh = await fetchFeed();
+        if (fresh && fresh.length > 0) {
+          setFeed(fresh);
+          await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+        }
+      } catch {
+        // keep current feed
       }
-    } catch {
-      // keep current feed
+    } finally {
+      await yieldRefresh;
+      setRefreshing(false);
     }
-    await loadYieldData();
-    setRefreshing(false);
   }, [loadYieldData]);
 
   const handleLike = async (id: string) => {
@@ -823,6 +832,7 @@ export default function HomeScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        testID="home-scroll-view"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -895,7 +905,7 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.balanceAmount}>
-              {displayBalance(availableBalance)}
+              {displayBalance(availableBalanceDisplay)}
             </Text>
           </View>
 
@@ -913,7 +923,7 @@ export default function HomeScreen() {
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
             <Text style={styles.earningBalanceAmount}>
-              {displayBalance(totalYieldEarned)}
+              {displayBalance(totalYieldEarnedDisplay)}
             </Text>
           </TouchableOpacity>
 
@@ -2330,6 +2340,11 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     color: COLORS.white,
     marginBottom: 8,
+  },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#9FD9B5",
   },
   earningStatusRow: {
     flexDirection: "row",

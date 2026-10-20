@@ -7,9 +7,10 @@
  */
 
 // AsyncStorage mock must be registered before any module imports.
-jest.mock("@react-native-async-storage/async-storage", () =>
-  require("@react-native-async-storage/async-storage/jest/async-storage-mock")
-);
+jest.mock("@react-native-async-storage/async-storage", () => ({
+  __esModule: true,
+  default: require("@react-native-async-storage/async-storage/jest/async-storage-mock"),
+}));
 
 import React from "react";
 import { render, waitFor, act } from "@testing-library/react-native";
@@ -63,7 +64,7 @@ const mockLikePayment = jest.fn();
 const mockUnlikePayment = jest.fn();
 const mockAddComment = jest.fn();
 
-jest.mock("../../src/services/socialService", () => ({
+jest.mock("../src/services/socialService", () => ({
   fetchFeed: (...args: unknown[]) => mockFetchFeed(...args),
   likePayment: (...args: unknown[]) => mockLikePayment(...args),
   unlikePayment: (...args: unknown[]) => mockUnlikePayment(...args),
@@ -73,12 +74,12 @@ jest.mock("../../src/services/socialService", () => ({
 const mockFetchYieldBalance = jest.fn();
 const mockUpdateAutoEarn = jest.fn();
 
-jest.mock("../../src/services/api", () => ({
+jest.mock("../src/services/api", () => ({
   fetchYieldBalance: (...args: unknown[]) => mockFetchYieldBalance(...args),
   updateAutoEarn: (...args: unknown[]) => mockUpdateAutoEarn(...args),
 }));
 
-jest.mock("../../src/services/notificationService", () => ({
+jest.mock("../src/services/notificationService", () => ({
   shouldShowNotificationConsentPrompt: jest.fn(() => Promise.resolve(false)),
   markNotificationPromptDismissed: jest.fn(() => Promise.resolve()),
   registerForPushNotificationsAsync: jest.fn(() => Promise.resolve()),
@@ -86,13 +87,13 @@ jest.mock("../../src/services/notificationService", () => ({
   saveNotificationPreference: jest.fn(() => Promise.resolve()),
 }));
 
-jest.mock("../../src/utils/balanceDisplay", () => ({
+jest.mock("../src/utils/balanceDisplay", () => ({
   formatBalance: (_val: number, _cur: string) => "₦0.00",
   formatFiatBalance: (_val: number) => "₦0.00",
   fiatFromTokens: (_val: number) => 0,
 }));
 
-jest.mock("../../src/constants/colors", () => ({
+jest.mock("../src/constants/colors", () => ({
   COLORS: { primary: "#000", secondary: "#fff" },
 }));
 
@@ -274,5 +275,39 @@ describe("HomeScreen – AsyncStorage feed cache (#895)", () => {
 
     const stored = await AsyncStorage.getItem(FEED_CACHE_KEY);
     expect(JSON.parse(stored!)[0].id).toBe("keep-me");
+  });
+
+  it("fetches the latest yield balance when pulled to refresh", async () => {
+    mockFetchYieldBalance.mockResolvedValue(defaultYield);
+    mockFetchFeed.mockResolvedValue([]);
+
+    const { getByTestId } = render(<HomeScreen />);
+    await waitFor(() => expect(mockFetchYieldBalance).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await getByTestId("home-scroll-view").props.refreshControl.props
+        .onRefresh();
+    });
+
+    expect(mockFetchYieldBalance).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it("refreshes yield and clears the spinner when feed refresh fails", async () => {
+    mockFetchYieldBalance.mockResolvedValue(defaultYield);
+    mockFetchFeed.mockResolvedValue([]);
+
+    const { getByTestId } = render(<HomeScreen />);
+    await waitFor(() => expect(mockFetchYieldBalance).toHaveBeenCalledTimes(1));
+    mockFetchFeed.mockRejectedValueOnce(new Error("Feed unavailable"));
+
+    await act(async () => {
+      await getByTestId("home-scroll-view").props.refreshControl.props
+        .onRefresh();
+    });
+
+    expect(mockFetchYieldBalance).toHaveBeenCalledTimes(2);
+    expect(
+      getByTestId("home-scroll-view").props.refreshControl.props.refreshing
+    ).toBe(false);
   });
 });
