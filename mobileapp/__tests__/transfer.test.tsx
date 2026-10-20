@@ -1,11 +1,23 @@
 jest.mock("@react-native-async-storage/async-storage", () =>
   require("@react-native-async-storage/async-storage/jest/async-storage-mock")
 );
+jest.mock("expo-haptics", () => ({
+  notificationAsync: jest.fn(() => Promise.resolve()),
+  NotificationFeedbackType: { Success: "success" },
+  impactAsync: jest.fn(() => Promise.resolve()),
+  ImpactFeedbackStyle: { Light: "light" },
+}));
+jest.mock("@expo/vector-icons", () => ({
+  Ionicons: () => null,
+}));
 
 import React from "react";
 import { render, waitFor, act, fireEvent } from "@testing-library/react-native";
-import TransferScreenWithBoundary from "../app/transfer";
+import TransferScreenWithBoundary, {
+  SuccessAnimation,
+} from "../app/transfer";
 import { fetchMatchedContacts } from "../src/services/contacts";
+import * as Haptics from "expo-haptics";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
@@ -112,6 +124,47 @@ describe("TransferScreen – Registry Warning Banners", () => {
     jest.clearAllMocks();
     // Default: search returns empty, resolve returns 404 (not registered)
     mockFetch.mockReset();
+  });
+
+  describe("Transfer success receipt", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it("highlights the recipient username and completed transaction status", () => {
+      const renderResult = render(
+        <SuccessAnimation
+          amount="25"
+          recipient="receiptuser"
+          selectedUser={{
+            username: "receiptuser",
+            address: "GABCDEF1234567890XYZ",
+            avatar_url: null,
+            isVerified: true,
+          }}
+          description="Thanks!"
+        />
+      );
+
+      expect(renderResult.getByText("@receiptuser")).toBeTruthy();
+      expect(renderResult.getByTestId("success-transaction-status")).toBeTruthy();
+      expect(renderResult.getByText("Completed")).toBeTruthy();
+    });
+
+    it("triggers success haptics when the receipt is shown", () => {
+      render(
+        <SuccessAnimation
+          amount="25"
+          recipient="receiptuser"
+          selectedUser={null}
+          description=""
+        />
+      );
+
+      expect(Haptics.notificationAsync).toHaveBeenCalledWith(
+        Haptics.NotificationFeedbackType.Success
+      );
+    });
   });
 
   // ── 1. "Not registered" warning ────────────────────────────────────────────

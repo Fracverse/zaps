@@ -204,7 +204,19 @@ const API_BASE =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
-const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any) => {
+interface SuccessAnimationProps {
+  amount: string;
+  recipient: string;
+  selectedUser: ZapsUser | null;
+  description: string;
+}
+
+export const SuccessAnimation = ({
+  amount,
+  recipient,
+  selectedUser,
+  description,
+}: SuccessAnimationProps) => {
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideRecipient = useRef(new Animated.Value(60)).current;
@@ -225,7 +237,7 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         duration: 300,
         useNativeDriver: true,
       }),
-      Animated.parallel([
+      Animated.stagger(120, [
         Animated.timing(slideRecipient, {
           toValue: 0,
           duration: 400,
@@ -238,7 +250,7 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         }),
       ]),
     ]).start();
-  }, []);
+  }, [fadeAnim, scaleAnim, slideDetails, slideRecipient]);
 
   const displayUser = selectedUser || {
     username: recipient,
@@ -264,7 +276,13 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         </View>
       </Animated.View>
 
-      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideRecipient }], opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.detailsCard,
+          { transform: [{ translateY: slideRecipient }], opacity: fadeAnim },
+        ]}
+        testID="success-recipient-card"
+      >
         <View style={styles.detailsRow}>
           <View style={styles.detailsAvatar}>
             <Text style={styles.detailsAvatarText}>
@@ -273,7 +291,12 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
           </View>
           <View style={styles.detailsInfo}>
             <Text style={styles.detailsLabel}>Recipient</Text>
-            <Text style={styles.detailsValue}>{displayUser.username}</Text>
+            <Text
+              style={[styles.detailsValue, styles.successUsername]}
+              testID="success-recipient-username"
+            >
+              @{displayUser.username}
+            </Text>
           </View>
           {displayUser.isVerified && (
             <Ionicons name="checkmark-circle" size={20} color="#1A4B4A" />
@@ -281,14 +304,20 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         </View>
       </Animated.View>
 
-      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideDetails }], opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.detailsCard,
+          { transform: [{ translateY: slideDetails }], opacity: fadeAnim },
+        ]}
+        testID="success-transaction-card"
+      >
         <View style={styles.detailsRow}>
           <Ionicons name="information-circle-outline" size={20} color="#777" />
           <View style={styles.detailsInfo}>
             <Text style={styles.detailsLabel}>Note</Text>
             <Text style={styles.detailsValue}>{description || "Sent money"}</Text>
           </View>
-          <View style={styles.statusBadge}>
+          <View style={styles.statusBadge} testID="success-transaction-status">
             <Text style={styles.statusBadgeText}>Completed</Text>
           </View>
         </View>
@@ -2394,6 +2423,10 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
     marginTop: 2,
+  },
+  successUsername: {
+    fontSize: 17,
+    color: "#1A4B4A",
   },
   statusBadge: {
     backgroundColor: "#E8F5E9",
