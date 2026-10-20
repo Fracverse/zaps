@@ -777,6 +777,41 @@ export default function YieldPage() {
 
   const hasValidationErrors = Object.keys(formErrors).length > 0;
 
+  // ── #1038: TVL Metric Counter ─────────────────────────────────────────────────
+  const [tvl, setTvl] = useState<number | null>(null);
+  const [tvlLoading, setTvlLoading] = useState(true);
+  const [tvlError, setTvlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTvlLoading(true);
+    setTvlError(null);
+    api
+      .yieldStats()
+      .then((res) => {
+        if (!cancelled) setTvl(res.total_value_locked);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setTvlError(err instanceof Error ? err.message : "Failed to load TVL");
+      })
+      .finally(() => {
+        if (!cancelled) setTvlLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Format a numeric vault balance as a USD currency string, e.g. $1,234.56 */
+  const formatTvl = (value: number): string =>
+    new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+
   return (
     <div>
       <div className="flex items-start justify-between mb-1">
@@ -787,6 +822,49 @@ export default function YieldPage() {
           </p>
         </div>
         <WalletBadge wallet={wallet} />
+      </div>
+
+      {/* ── #1038: TVL Metric Counter Card ──────────────────────────────────────── */}
+      <div
+        data-testid="tvl-counter-card"
+        className="mt-4 mb-2 bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex items-center justify-between"
+      >
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Total Value Locked (TVL)
+          </p>
+          {tvlLoading ? (
+            <div className="h-8 w-40 animate-pulse rounded bg-slate-100 mt-1" />
+          ) : tvlError ? (
+            <p className="text-sm text-red-500 mt-1">{tvlError}</p>
+          ) : (
+            <p
+              data-testid="tvl-value"
+              className="text-3xl font-bold text-indigo-600 mt-1 tabular-nums"
+            >
+              {formatTvl(tvl ?? 0)}
+            </p>
+          )}
+          <p className="text-xs text-slate-400 mt-1">Live vault balance across all depositors</p>
+        </div>
+        <div className="hidden sm:flex items-center justify-center w-12 h-12 rounded-full bg-indigo-50 text-indigo-600">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+            <path d="M2 17l10 5 10-5" />
+            <path d="M2 12l10 5 10-5" />
+          </svg>
+        </div>
       </div>
 
       {/* Tab Bar */}
