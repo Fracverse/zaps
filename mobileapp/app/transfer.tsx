@@ -21,6 +21,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, Stack } from "expo-router";
+import * as StellarSdk from "@stellar/stellar-sdk";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
@@ -678,7 +679,12 @@ function TransferScreen() {
       recipient === federationResolvedRecipient.current);
 
   useEffect(() => {
-    if (step !== 3 || !walletState?.isConnected || !recipient || !amount) {
+    if (
+      step !== 3 ||
+      !walletState?.isConnected ||
+      !paymentDestination ||
+      !amount
+    ) {
       setTransactionFeeEstimate(null);
       return;
     }
@@ -691,7 +697,7 @@ function TransferScreen() {
           token.symbol !== "XLM" ? STELLAR_ASSET_ISSUERS[token.symbol] : undefined;
         const txXdr = await buildPaymentEnvelope(
           walletState.publicKey,
-          recipient,
+          paymentDestination,
           amount,
           token.symbol,
           assetIssuer,
@@ -711,7 +717,7 @@ function TransferScreen() {
     return () => {
       isMounted = false;
     };
-  }, [step, walletState, recipient, amount, token.symbol, description]);
+  }, [step, walletState, paymentDestination, amount, token.symbol, description]);
 
   useEffect(() => {
     (async () => {
@@ -769,6 +775,14 @@ function TransferScreen() {
   );
 
   const processConfirmedTransfer = async () => {
+    if (!paymentDestination) {
+      Alert.alert(
+        "Recipient Not Resolved",
+        "Select a Zaps recipient or enter a valid Stellar public key before sending."
+      );
+      return;
+    }
+
     // Biometric Verification Overlay
     // Gate the payment submission behind biometric / passcode authentication.
     // The transfer is blocked unless the user successfully authenticates.
@@ -795,7 +809,7 @@ function TransferScreen() {
           ? STELLAR_ASSET_ISSUERS[token.symbol]
           : undefined;
       const result = await submitPayment(
-        recipient,
+        paymentDestination,
         amount,
         walletState!.source!,
         walletState!.publicKey,
@@ -907,9 +921,19 @@ function TransferScreen() {
 
   const handleKeypadPress = (value: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setAmount((prev: string) =>
-      value === "backspace" ? prev.slice(0, -1) : prev + value
-    );
+    setAmount((prev: string) => {
+      if (value === "backspace") return prev.slice(0, -1);
+
+      if (value === ".") {
+        if (prev.includes(".")) return prev;
+        return prev ? `${prev}.` : "0.";
+      }
+
+      const decimalIndex = prev.indexOf(".");
+      if (decimalIndex >= 0 && prev.length - decimalIndex > 7) return prev;
+      if (prev === "0") return value;
+      return `${prev}${value}`;
+    });
   };
 
   const renderStep0 = () => (
@@ -1225,9 +1249,14 @@ function TransferScreen() {
         <TouchableOpacity
           activeOpacity={1}
           style={[styles.transferInput, styles.amountDisplayContainer]}
+          testID="transfer-amount-display"
         >
-          <Text style={styles.nairaSymbol}>₦</Text>
-          <Text style={styles.amountText}>{amount || "0"}</Text>
+          <Text style={styles.nairaSymbol} testID="transfer-amount-currency">
+            ₦
+          </Text>
+          <Text style={styles.amountText} testID="transfer-amount-value">
+            {amount || "0"}
+          </Text>
         </TouchableOpacity>
 
         {/* Custom Numeric Keypad */}
@@ -1238,6 +1267,7 @@ function TransferScreen() {
                 key={num}
                 style={styles.keypadButton}
                 onPress={() => handleKeypadPress(num)}
+                testID={`keypad-key-${num}`}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -1269,18 +1299,21 @@ function TransferScreen() {
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress(".")}
+              testID="keypad-decimal"
             >
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress("0")}
+              testID="keypad-key-0"
             >
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress("backspace")}
+              testID="keypad-backspace"
             >
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>

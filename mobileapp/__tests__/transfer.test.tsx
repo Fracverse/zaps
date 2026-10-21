@@ -34,6 +34,10 @@ jest.mock("expo-router", () => ({
   },
 }));
 
+jest.mock("@stellar/stellar-sdk", () => ({
+  FederationServer: undefined,
+}));
+
 jest.mock("../src/services/stellarWallet", () => ({
   getLocalKeypair: jest.fn(() => null),
   checkFreighter: jest.fn(),
@@ -774,5 +778,42 @@ describe("TransferScreen – Registry Warning Banners", () => {
       expect(renderResult.getByTestId("summary-privacy-value")).toBeTruthy();
     });
     expect(renderResult.getByTestId("summary-privacy-value").props.children).toBe("FRIENDS");
+  });
+
+  it("uses the Naira keypad and prevents malformed decimal amounts", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    });
+
+    const renderResult = render(<TransferScreenWithBoundary />);
+    await advanceToStep1(renderResult);
+
+    expect(
+      renderResult.getByTestId("transfer-amount-currency").props.children
+    ).toBe("₦");
+    expect(
+      renderResult.getByTestId("transfer-amount-value").props.children
+    ).toBe("0");
+
+    await act(async () => {
+      fireEvent.press(renderResult.getByTestId("keypad-decimal"));
+      fireEvent.press(renderResult.getByTestId("keypad-key-1"));
+      fireEvent.press(renderResult.getByTestId("keypad-key-2"));
+      fireEvent.press(renderResult.getByTestId("keypad-decimal"));
+      fireEvent.press(renderResult.getByTestId("keypad-key-3"));
+    });
+
+    expect(
+      renderResult.getByTestId("transfer-amount-value").props.children
+    ).toBe("0.123");
+
+    await act(async () => {
+      fireEvent.press(renderResult.getByTestId("keypad-backspace"));
+    });
+    expect(
+      renderResult.getByTestId("transfer-amount-value").props.children
+    ).toBe("0.12");
   });
 });
