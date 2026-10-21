@@ -1817,6 +1817,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#EAEAEA",
     marginBottom: 20,
+    gap: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.03,
@@ -1884,7 +1885,7 @@ const styles = StyleSheet.create({
     color: COLORS.secondary,
   },
   balanceSection: {
-    marginBottom: 16,
+    marginBottom: 0,
   },
   balanceLabelRow: {
     flexDirection: "row",
@@ -1898,17 +1899,19 @@ const styles = StyleSheet.create({
     color: "#777",
   },
   balanceAmount: {
-    fontSize: 34,
+    fontSize: 32,
+    lineHeight: 38,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
+    flexShrink: 1,
   },
   earningBalanceSection: {
-    backgroundColor: "#F2F9F0",
+    backgroundColor: "#F3FBF4",
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 0,
     borderWidth: 1,
-    borderColor: "#E8F5E9",
+    borderColor: "#DDEFE1",
   },
   earningBalanceHeader: {
     flexDirection: "row",
@@ -1928,13 +1931,16 @@ const styles = StyleSheet.create({
     color: "#456047",
   },
   earningBalanceAmount: {
-    fontSize: 28,
+    fontSize: 26,
+    lineHeight: 32,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
+    flexShrink: 1,
   },
   quickActions: {
     flexDirection: "row",
     gap: 10,
+    marginTop: 2,
   },
   payRequestButton: {
     backgroundColor: COLORS.primary,
