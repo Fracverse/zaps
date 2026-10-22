@@ -1972,6 +1972,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#EAEAEA",
     marginBottom: 20,
+    gap: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.03,
@@ -2038,6 +2039,9 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
     color: COLORS.secondary,
   },
+  balanceSection: {
+    marginBottom: 0,
+  },
   balanceSplit: {
     flexDirection: "row",
     gap: 10,
@@ -2069,19 +2073,20 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     color: "#A9D8CF",
   },
-  availableAmount: {
-    fontSize: 24,
+  balanceAmount: {
+    fontSize: 32,
+    lineHeight: 38,
     fontFamily: "Outfit_700Bold",
-    color: COLORS.secondary,
+    color: COLORS.primary,
+    flexShrink: 1,
   },
   earningBalanceSection: {
-    position: "relative",
-    backgroundColor: "#F2F9F0",
+    backgroundColor: "#F3FBF4",
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 0,
     borderWidth: 1,
-    borderColor: "#E8F5E9",
+    borderColor: "#DDEFE1",
   },
   earningBalanceGlow: {
     ...StyleSheet.absoluteFillObject,
@@ -2111,9 +2116,17 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     color: "#456047",
   },
+  earningBalanceAmount: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontFamily: "Outfit_700Bold",
+    color: "#2E7D32",
+    flexShrink: 1,
+  },
   quickActions: {
     flexDirection: "row",
     gap: 10,
+    marginTop: 2,
   },
   payRequestButton: {
     backgroundColor: COLORS.primary,
