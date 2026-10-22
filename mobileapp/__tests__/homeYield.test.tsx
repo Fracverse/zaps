@@ -61,6 +61,7 @@ jest.mock("@expo/vector-icons", () => ({
 }));
 
 const mockFetchYieldBalance = jest.fn();
+const mockFetchYieldEarningsHistory = jest.fn();
 const mockUpdateAutoEarn = jest.fn();
 
 jest.mock("../src/services/socialService", () => ({
@@ -72,6 +73,8 @@ jest.mock("../src/services/socialService", () => ({
 
 jest.mock("../src/services/api", () => ({
   fetchYieldBalance: (...args: unknown[]) => mockFetchYieldBalance(...args),
+  fetchYieldEarningsHistory: (...args: unknown[]) =>
+    mockFetchYieldEarningsHistory(...args),
   updateAutoEarn: (...args: unknown[]) => mockUpdateAutoEarn(...args),
 }));
 
@@ -209,6 +212,7 @@ describe("HomeScreen auto-earn haptics (#907)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUpdateAutoEarn.mockResolvedValue(undefined);
+    mockFetchYieldEarningsHistory.mockResolvedValue([]);
   });
 
   it("fires a light haptic when auto-earn is switched off", async () => {
@@ -272,5 +276,65 @@ describe("HomeScreen auto-earn haptics (#907)", () => {
     });
 
     expect(impactAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates the Auto-Earn widget after saving the preference", async () => {
+    mockFetchYieldBalance.mockResolvedValue(loadedYield);
+    const { getByLabelText, findByText } = render(<HomeScreen />);
+    await findByText("Your money is working");
+
+    await act(async () => {
+      fireEvent(
+        getByLabelText("Toggle Auto-Earn on Idle Funds"),
+        "valueChange",
+        false
+      );
+    });
+
+    expect(mockUpdateAutoEarn).toHaveBeenCalledWith(false);
+    expect(await findByText("Enable to sweep idle balance into yield")).toBeTruthy();
+  });
+
+  it("rolls back the Auto-Earn widget when the update request fails", async () => {
+    mockFetchYieldBalance.mockResolvedValue(loadedYield);
+    mockUpdateAutoEarn.mockRejectedValue(new Error("Unavailable"));
+    const { getByLabelText, findByText } = render(<HomeScreen />);
+    await findByText("Your money is working");
+
+    await act(async () => {
+      fireEvent(
+        getByLabelText("Toggle Auto-Earn on Idle Funds"),
+        "valueChange",
+        false
+      );
+    });
+
+    expect(await findByText("Idle balance is actively earning yield")).toBeTruthy();
+  });
+
+  it("plots monthly earned and reward history from the API", async () => {
+    const currentPeriod = new Date().toISOString().slice(0, 7);
+    mockFetchYieldBalance.mockResolvedValue(loadedYield);
+    mockFetchYieldEarningsHistory.mockResolvedValue([
+      {
+        type: "EARNED",
+        amount: 500_000,
+        asset: "XLM",
+        created_at: `${currentPeriod}-10 12:00:00`,
+      },
+      {
+        type: "REWARD",
+        amount: 250_000,
+        asset: "XLM",
+        created_at: `${currentPeriod}-12 12:00:00`,
+      },
+    ]);
+    const { getByTestId, getByText, findByText } = render(<HomeScreen />);
+    await findByText("Your money is working");
+    fireEvent.press(getByTestId("earning-balance-card"));
+
+    await findByText(/₦1,200\.00/);
+    expect(mockFetchYieldEarningsHistory).toHaveBeenCalled();
+    expect(getByText("Monthly earnings")).toBeTruthy();
   });
 });
