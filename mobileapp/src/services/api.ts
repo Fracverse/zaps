@@ -243,6 +243,56 @@ export async function fetchYieldBalance(): Promise<YieldBalance> {
   };
 }
 
+export interface YieldEarningHistoryRecord {
+  type: string;
+  amount: number;
+  asset: string;
+  created_at: string;
+}
+
+interface YieldHistoryResponse {
+  items: YieldEarningHistoryRecord[];
+  total: number;
+}
+
+export async function fetchYieldEarningsHistory(
+  from: string,
+  to: string
+): Promise<YieldEarningHistoryRecord[]> {
+  const actions = ["EARNED", "REWARD"];
+  const historyPages = await Promise.all(
+    actions.map(async (action) => {
+      const items: YieldEarningHistoryRecord[] = [];
+      let offset = 0;
+      let total = Number.POSITIVE_INFINITY;
+
+      while (offset < total) {
+        const params = new URLSearchParams({
+          action,
+          from,
+          to,
+          limit: "100",
+          offset: String(offset),
+        });
+        const res = await apiFetch(
+          `${API_BASE}/api/yield/history?${params.toString()}`
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const page = (await res.json()) as YieldHistoryResponse;
+        items.push(...page.items);
+        total = page.total;
+        if (page.items.length === 0) break;
+        offset += page.items.length;
+      }
+
+      return items;
+    })
+  );
+
+  return historyPages.flat();
+}
+
 export async function updateAutoEarn(enabled: boolean): Promise<void> {
   const res = await apiFetch(`${API_BASE}/api/yield/toggle-auto`, {
     method: "POST",

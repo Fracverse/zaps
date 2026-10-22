@@ -1,5 +1,9 @@
 import * as SecureStore from "expo-secure-store";
-import { fetchYieldBalance, updateAutoEarn } from "../src/services/api";
+import {
+  fetchYieldBalance,
+  fetchYieldEarningsHistory,
+  updateAutoEarn,
+} from "../src/services/api";
 
 jest.mock("expo-secure-store", () => ({
   getItemAsync: jest.fn().mockResolvedValue(null),
@@ -72,6 +76,40 @@ describe("yield API", () => {
         method: "POST",
         body: JSON.stringify({ enabled: false }),
       })
+    );
+  });
+
+  it("loads all pages of earned and reward history", async () => {
+    mockFetch
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            { type: "EARNED", amount: 1_000_000, asset: "XLM", created_at: "2026-10-01 00:00:00" },
+          ],
+          total: 101,
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [
+            { type: "REWARD", amount: 500_000, asset: "XLM", created_at: "2026-10-02 00:00:00" },
+          ],
+          total: 1,
+        })
+      )
+      .mockResolvedValueOnce(jsonResponse({ items: [], total: 101 }));
+
+    const history = await fetchYieldEarningsHistory("2025-11-01", "2026-10-22");
+
+    expect(history).toHaveLength(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    const requestUrls = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requestUrls).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("action=EARNED"),
+        expect.stringContaining("action=REWARD"),
+        expect.stringContaining("offset=1"),
+      ])
     );
   });
 

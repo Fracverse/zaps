@@ -41,7 +41,11 @@ import {
   fetchFeed,
   addComment,
 } from "../../src/services/socialService";
-import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
+import {
+  fetchYieldBalance,
+  fetchYieldEarningsHistory,
+  updateAutoEarn,
+} from "../../src/services/api";
 import {
   BalanceCurrency,
   formatBalance,
@@ -89,23 +93,25 @@ interface Comment {
 
 interface MonthlyEarningPoint {
   month: string;
+  period: string;
   amount: number;
 }
 
-const MONTHLY_EARNINGS: MonthlyEarningPoint[] = [
-  { month: "Jan", amount: 140 },
-  { month: "Feb", amount: 172 },
-  { month: "Mar", amount: 205 },
-  { month: "Apr", amount: 238 },
-  { month: "May", amount: 261 },
-  { month: "Jun", amount: 296 },
-  { month: "Jul", amount: 317 },
-  { month: "Aug", amount: 334 },
-  { month: "Sep", amount: 352 },
-  { month: "Oct", amount: 365 },
-  { month: "Nov", amount: 388 },
-  { month: "Dec", amount: 412 },
-];
+const createRecentMonthlyEarnings = (): MonthlyEarningPoint[] => {
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + index, 1)
+    );
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    return {
+      month: date.toLocaleString("en-US", { month: "short", timeZone: "UTC" }),
+      period: `${year}-${String(month + 1).padStart(2, "0")}`,
+      amount: 0,
+    };
+  });
+};
 
 const INITIAL_FEED: FeedItem[] = [
   {
@@ -161,9 +167,13 @@ export default function HomeScreen() {
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [chartWidth, setChartWidth] = useState(0);
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(
-    MONTHLY_EARNINGS.length - 1
+  const [monthlyEarnings, setMonthlyEarnings] = useState(
+    createRecentMonthlyEarnings
   );
+  const [earningsHistoryStatus, setEarningsHistoryStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(11);
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const [autoEarnSyncing, setAutoEarnSyncing] = useState(false);
@@ -182,6 +192,7 @@ export default function HomeScreen() {
   const earningPulseAnim = useRef(new Animated.Value(1)).current;
   const earningOuterGlowAnim = useRef(new Animated.Value(0)).current;
   const yieldRequestRef = useRef(0);
+  const earningsHistoryRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -231,6 +242,43 @@ export default function HomeScreen() {
       explanation: data.explanation,
     };
   };
+
+  const loadEarningsHistory = useCallback(async () => {
+    const requestId = ++earningsHistoryRequestRef.current;
+    const months = createRecentMonthlyEarnings();
+    const from = `${months[0].period}-01`;
+    const to = new Date().toISOString().slice(0, 10);
+    setEarningsHistoryStatus("loading");
+
+    try {
+      const history = await fetchYieldEarningsHistory(from, to);
+      if (requestId !== earningsHistoryRequestRef.current) return;
+
+      const totalsByMonth = new Map<string, number>();
+      history.forEach((item) => {
+        if (item.asset.toUpperCase() !== "XLM") return;
+        const amount = Number(item.amount);
+        const period = item.created_at.slice(0, 7);
+        if (!Number.isFinite(amount)) return;
+        totalsByMonth.set(
+          period,
+          (totalsByMonth.get(period) ?? 0) + fiatFromTokens(amount / 1_000_000)
+        );
+      });
+
+      setMonthlyEarnings(
+        months.map((month) => ({
+          ...month,
+          amount: Number((totalsByMonth.get(month.period) ?? 0).toFixed(2)),
+        }))
+      );
+      setSelectedMonthIndex(months.length - 1);
+      setEarningsHistoryStatus("success");
+    } catch {
+      if (requestId !== earningsHistoryRequestRef.current) return;
+      setEarningsHistoryStatus("error");
+    }
+  }, []);
 
   const withTimeout = async <T,>(
     promise: Promise<T>,
@@ -616,6 +664,7 @@ export default function HomeScreen() {
       () => undefined
     );
     setEarningsModalVisible(true);
+    void loadEarningsHistory();
     earningsSheetTranslateY.setValue(48);
     earningsBackdropOpacity.setValue(0);
     Animated.parallel([
@@ -720,22 +769,6 @@ export default function HomeScreen() {
 
   const displayBalance = (amount: string) =>
     balanceMasked ? MASKED_BALANCE : amount;
-
-  const monthlyEarnings = useMemo(() => {
-    const baseTotal = MONTHLY_EARNINGS.reduce(
-      (sum, item) => sum + item.amount,
-      0
-    );
-    const targetTotal = parseCurrencyAmount(
-      yieldData?.totalYieldEarned ?? "₦3,280.45"
-    );
-    const scale =
-      targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
-    return MONTHLY_EARNINGS.map((item) => ({
-      ...item,
-      amount: Number((item.amount * scale).toFixed(2)),
-    }));
-  }, [yieldData]);
 
   useEffect(() => {
     if (selectedMonthIndex > monthlyEarnings.length - 1) {
@@ -1487,7 +1520,20 @@ export default function HomeScreen() {
                   </View>
 
                   <View style={styles.earningsChartCanvas}>
-                    {chartGeometry && (
+                    {earningsHistoryStatus === "loading" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Loading earnings history...
+                      </Text>
+                    ) : earningsHistoryStatus === "error" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Earnings history is unavailable.
+                      </Text>
+                    ) : earningsHistoryStatus === "success" &&
+                      monthlyEarnings.every((item) => item.amount === 0) ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        No yield earnings recorded in the last 12 months.
+                      </Text>
+                    ) : chartGeometry ? (
                       <>
                         <Svg width={chartWidth} height={chartHeight}>
                           <Defs>
@@ -1548,7 +1594,7 @@ export default function HomeScreen() {
                           ))}
                         </View>
                       </>
-                    )}
+                    ) : null}
                   </View>
 
                   <View style={styles.earningsMonthRow}>
@@ -2671,6 +2717,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
     backgroundColor: "#F2F9F0",
+  },
+  earningsHistoryMessage: {
+    alignSelf: "center",
+    color: "#64748B",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    textAlign: "center",
   },
   chartTouchOverlay: {
     ...StyleSheet.absoluteFillObject,
