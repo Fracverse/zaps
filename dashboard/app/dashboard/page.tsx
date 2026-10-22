@@ -150,6 +150,8 @@ function UsernameSearchBar() {
   );
 }
 
+const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+
 function fmtUsdc(value: number): string {
   return (
     value.toLocaleString(undefined, {
@@ -269,6 +271,50 @@ export default function OverviewPage() {
   const tvl = yieldData?.total_value_locked ?? 0;
   const yieldDistributed = yieldData?.total_yield_distributed ?? 0;
   const apy = yieldData?.apy ?? 0;
+
+  // ── #1037: Typed confirmation before dispatching contract pause call ────────
+  const [pauseConfirmText, setPauseConfirmText] = useState("");
+  const [pausing, setPausing] = useState(false);
+  const [pauseMsg, setPauseMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // The dispatch button stays disabled until the typed text is an exact,
+  // case-sensitive match for "PAUSE" — this prevents accidental invocation.
+  const canDispatchPause = pauseConfirmText === "PAUSE";
+
+  const handleDispatchPause = useCallback(async () => {
+    if (!canDispatchPause || pausing) return;
+    if (!isSuperAdmin) {
+      setPauseMsg({ type: "err", text: "Superadmin access required to pause the contract." });
+      return;
+    }
+    if (!wallet.connected || !wallet.publicKey) {
+      setPauseMsg({ type: "err", text: "Connect Freighter before dispatching the pause call." });
+      return;
+    }
+    setPausing(true);
+    setPauseMsg(null);
+    try {
+      const payload = {
+        fn: "emergency_pause",
+        paused: true,
+        admin: wallet.publicKey,
+      };
+      const placeholderXdr = btoa(JSON.stringify(payload));
+      const result = await wallet.signTransaction(placeholderXdr, NETWORK_PASSPHRASE);
+      setPauseMsg({
+        type: "ok",
+        text: `Contract pause dispatched. Signed XDR: ${result.signedTxXdr.slice(0, 24)}…`,
+      });
+      setPauseConfirmText("");
+    } catch (err) {
+      setPauseMsg({
+        type: "err",
+        text: err instanceof Error ? err.message : "Failed to dispatch pause call",
+      });
+    } finally {
+      setPausing(false);
+    }
+  }, [canDispatchPause, pausing, isSuperAdmin, wallet]);
 
   const handleExportUsers = useCallback(async () => {
     try {
@@ -541,9 +587,9 @@ export default function OverviewPage() {
       </div>
 
       <AuditLogTable
-        logs={auditData?.logs ?? null}
-        loading={auditLoading}
-        error={auditError}
+        logs={logsData?.logs ?? null}
+        loading={logsLoading}
+        error={logsError}
       />
 
       <p className="mt-4 text-xs text-slate-400">
@@ -698,6 +744,90 @@ export default function OverviewPage() {
         {!isSuperAdmin && (
           <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
             &#128274; Superadmin access required to authorize on-chain vault operations.
+          </p>
+        )}
+      </div>
+
+      {/* ── #1037: Emergency Pause Confirmation ────────────────────────────── */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold text-slate-900">Emergency Pause</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Require typing <span className="font-mono font-semibold text-red-600">PAUSE</span> before
+          dispatching the contract pause call.
+        </p>
+      </div>
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+          <div className="flex-1">
+            <label
+              htmlFor="pause-confirm-input"
+              className="block text-xs font-semibold text-slate-600 mb-1"
+            >
+              Type <span className="font-mono font-bold text-red-600">PAUSE</span> to confirm
+            </label>
+            <input
+              id="pause-confirm-input"
+              type="text"
+              value={pauseConfirmText}
+              onChange={(e) => {
+                setPauseConfirmText(e.target.value);
+                setPauseMsg(null);
+              }}
+              placeholder="PAUSE"
+              autoComplete="off"
+              data-testid="pause-confirm-input"
+              className="w-full max-w-xs px-3 py-2 text-sm font-mono border rounded-lg border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleDispatchPause}
+            disabled={!canDispatchPause || pausing || !isSuperAdmin || !wallet.connected}
+            aria-disabled={!canDispatchPause || pausing || !isSuperAdmin || !wallet.connected}
+            data-testid="pause-dispatch-btn"
+            title={
+              !canDispatchPause
+                ? 'Type "PAUSE" exactly to enable'
+                : !isSuperAdmin
+                ? "Superadmin access required"
+                : !wallet.connected
+                ? "Connect Freighter first"
+                : undefined
+            }
+            className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white text-sm font-semibold rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {pausing ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Dispatching&hellip;
+              </>
+            ) : (
+              "Dispatch Contract Pause"
+            )}
+          </button>
+        </div>
+
+        {!canDispatchPause && (
+          <p className="mt-3 text-xs text-slate-500" data-testid="pause-hint-text">
+            The confirmation button remains disabled until the typed text exactly matches
+            &ldquo;PAUSE&rdquo;.
+          </p>
+        )}
+        {!isSuperAdmin && (
+          <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            &#128274; Superadmin access required to dispatch the contract pause call.
+          </p>
+        )}
+        {pauseMsg && (
+          <p
+            role="status"
+            className={`mt-3 text-xs rounded-lg border px-3 py-2 ${
+              pauseMsg.type === "ok"
+                ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                : "text-red-700 bg-red-50 border-red-200"
+            }`}
+          >
+            {pauseMsg.text}
           </p>
         )}
       </div>

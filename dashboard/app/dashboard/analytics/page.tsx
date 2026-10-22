@@ -1,5 +1,5 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { usePolling } from "@/lib/use-polling";
 import { api } from "@/lib/api";
 import {
@@ -11,12 +11,23 @@ import { format, parseISO, startOfDay, startOfMonth } from "date-fns";
 
 const COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6"];
 
+// Social payment interaction types
+export interface SocialInteraction {
+  likes: number;
+  comments: number;
+  shares: number;
+  payments: number;
+  timestamp: string;
+}
+
 export default function AnalyticsPage() {
   const { data: txs, loading } = usePolling(() => api.transactions(), 30000);
   const { data: authStats } = usePolling(() => api.authProviderStats(), 30000);
+  const { data: socialStats } = usePolling(() => api.socialPaymentStats(), 60000);
+  const [yieldGranularity, setYieldGranularity] = useState<"daily" | "monthly">("monthly");
 
-  const { dailyVolume, statusDist, assetDist, monthlyYield } = useMemo(() => {
-    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [], monthlyYield: [] };
+  const { dailyVolume, statusDist, assetDist, monthlyYield, dailyYield, socialGrowth } = useMemo(() => {
+    if (!txs) return { dailyVolume: [], statusDist: [], assetDist: [], monthlyYield: [], dailyYield: [], socialGrowth: [] };
 
     const byDay: Record<string, number> = {};
     txs.forEach((t) => {
@@ -43,8 +54,36 @@ export default function AnalyticsPage() {
     });
     const monthlyYield = Object.entries(byMonth).map(([month, yield_]) => ({ month, yield: Number(yield_.toFixed(2)) }));
 
-    return { dailyVolume, statusDist, assetDist, monthlyYield };
-  }, [txs]);
+    // Daily yield payment volume from completed transactions
+    const byYieldDay: Record<string, number> = {};
+    completed.forEach((t) => {
+      const day = format(startOfDay(parseISO(t.created_at)), "MMM d");
+      byYieldDay[day] = (byYieldDay[day] ?? 0) + t.send_amount / 1_000_000;
+    });
+    const dailyYield = Object.entries(byYieldDay)
+      .slice(-30)
+      .map(([date, yield_]) => ({ date, yield: Number(yield_.toFixed(2)) }));
+
+    // Social payment growth - monthly interactions
+    const socialGrowth: { month: string; interactions: number; likes: number; comments: number }[] = [];
+    if (socialStats) {
+      const bySocialMonth: Record<string, { interactions: number; likes: number; comments: number }> = {};
+      socialStats.interactions?.forEach((s: SocialInteraction) => {
+        const month = format(startOfMonth(parseISO(s.timestamp)), "MMM yyyy");
+        if (!bySocialMonth[month]) {
+          bySocialMonth[month] = { interactions: 0, likes: 0, comments: 0 };
+        }
+        bySocialMonth[month].interactions += s.likes + s.comments + s.shares + s.payments;
+        bySocialMonth[month].likes += s.likes;
+        bySocialMonth[month].comments += s.comments;
+      });
+      Object.entries(bySocialMonth).forEach(([month, data]) => {
+        socialGrowth.push({ month, ...data });
+      });
+    }
+
+    return { dailyVolume, statusDist, assetDist, monthlyYield, dailyYield, socialGrowth };
+  }, [txs, socialStats]);
 
   if (loading && !txs) {
     return (
@@ -113,18 +152,111 @@ export default function AnalyticsPage() {
           </ResponsiveContainer>
         </div>
 
-        {/* Yield Distribution over Time */}
+        {/* #1021: Social Payment Growth Trends */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm lg:col-span-2">
-          <h2 className="font-semibold text-slate-800 mb-4">Yield Distribution Over Time (Monthly)</h2>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={monthlyYield}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => [Number(v).toLocaleString(), "Yield"]} />
-              <Line type="monotone" dataKey="yield" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} activeDot={{ r: 6 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-slate-800">Social Payment Growth Trends</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Monthly likes, comments, and interaction growth</p>
+            </div>
+          </div>
+          {socialGrowth.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={socialGrowth} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="socialLikes" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0.3} />
+                  </linearGradient>
+                  <linearGradient id="socialComments" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.8} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0.3} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip 
+                  formatter={(value: number, name: string) => [value.toLocaleString(), name === "likes" ? "Likes" : name === "comments" ? "Comments" : "Total Interactions"]}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+                />
+                <Bar dataKey="likes" name="likes" fill="url(#socialLikes)" stackId="a" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="comments" name="comments" fill="url(#socialComments)" stackId="a" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-60 flex items-center justify-center text-slate-400 text-sm">
+              No social interaction data available
+            </div>
+          )}
+          {socialGrowth.length > 0 && (
+            <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
+              <span>Showing {socialGrowth.length} month{socialGrowth.length !== 1 ? "s" : ""}</span>
+              <span>Total Interactions: {socialGrowth.reduce((sum, m) => sum + m.interactions, 0).toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+
+        {/* #1060: Yield Distribution over Time */}
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm lg:col-span-2">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
+            <div>
+              <h2 className="font-semibold text-slate-800">Yield Distribution Over Time</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Yield payment volume trends from completed transactions</p>
+            </div>
+            <div className="mt-3 sm:mt-0 inline-flex rounded-lg border border-slate-200 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setYieldGranularity("daily")}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  yieldGranularity === "daily"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Daily
+              </button>
+              <button
+                type="button"
+                onClick={() => setYieldGranularity("monthly")}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  yieldGranularity === "monthly"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Monthly
+              </button>
+            </div>
+          </div>
+          {(yieldGranularity === "monthly" ? monthlyYield : dailyYield).length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart
+                data={yieldGranularity === "monthly" ? monthlyYield : dailyYield}
+                margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey={yieldGranularity === "monthly" ? "month" : "date"} tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip
+                  formatter={(v) => [Number(v).toLocaleString(), "Yield"]}
+                  contentStyle={{ borderRadius: 8, border: "1px solid #e2e8f0" }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="yield"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={{ r: 4 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-60 flex items-center justify-center text-slate-400 text-sm">
+              No yield data available
+            </div>
+          )}
         </div>
 
         {/* ── #1020: Authentication Provider Stats (Privy vs Standard Signups) ── */}

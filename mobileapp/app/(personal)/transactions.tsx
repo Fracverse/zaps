@@ -18,6 +18,11 @@ import { TransactionFilterSheet } from "../../src/components/TransactionFilterSh
 import { Transaction, TransactionFilters } from "../../src/types/transaction";
 import { formatDate } from "../../src/utils/formatting";
 import {
+  YIELD_FILTER_TAGS,
+  activeYieldTag,
+  toggleYieldTag,
+} from "../../src/utils/yieldFilter";
+import {
   speedUpTransaction,
   getLocalKeypair,
   checkFreighter,
@@ -121,6 +126,7 @@ function hasActiveFilters(f: TransactionFilters): boolean {
     Boolean(f.amountMin) ||
     Boolean(f.amountMax) ||
     Boolean(f.yieldOnly) ||
+    Boolean(f.yieldType) ||
     Boolean(f.asset)
   );
 }
@@ -469,6 +475,7 @@ export default function TransactionsScreen() {
   );
 
   const filtersActive = hasActiveFilters(filters);
+  const yieldTag = activeYieldTag(filters);
 
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
@@ -625,6 +632,43 @@ export default function TransactionsScreen() {
             Transfers
           </Text>
         </TouchableOpacity>
+      </View>
+
+      {/* Yield Filter Tags */}
+      <View style={styles.yieldTagsRow} testID="yield-filter-tags">
+        <Ionicons
+          name="trending-up"
+          size={14}
+          color="#16A34A"
+          style={styles.yieldTagsIcon}
+        />
+        {YIELD_FILTER_TAGS.map(({ tag, label }) => {
+          const active = yieldTag === tag;
+          return (
+            <TouchableOpacity
+              key={tag}
+              style={[styles.yieldTagBtn, active && styles.yieldTagBtnActive]}
+              onPress={() =>
+                setFilters((prev: TransactionFilters) =>
+                  toggleYieldTag(prev, tag)
+                )
+              }
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`Filter by ${label}`}
+              testID={`yield-tag-${tag}`}
+            >
+              <Text
+                style={[
+                  styles.yieldTagBtnText,
+                  active && styles.yieldTagBtnTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Date Presets Row */}
@@ -790,6 +834,37 @@ const styles = StyleSheet.create({
   },
   sectionTabTextActive: {
     color: COLORS.secondary,
+    fontFamily: "Outfit_600SemiBold",
+  },
+  yieldTagsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+    backgroundColor: COLORS.white,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+  },
+  yieldTagsIcon: {
+    marginRight: 2,
+  },
+  yieldTagBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 16,
+    backgroundColor: "#F0FDF4",
+  },
+  yieldTagBtnActive: {
+    backgroundColor: "#16A34A",
+  },
+  yieldTagBtnText: {
+    fontSize: 12,
+    fontFamily: "Outfit_500Medium",
+    color: "#16A34A",
+  },
+  yieldTagBtnTextActive: {
+    color: COLORS.white,
     fontFamily: "Outfit_600SemiBold",
   },
   presetsRow: {

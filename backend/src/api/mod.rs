@@ -118,7 +118,7 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
     Router::new()
         .route(
             "/profile",
-            get(user::get_profile).post(user::update_profile),
+            get(user::get_profile).post(user::update_profile).put(user::update_profile),
         )
         .route("/profile/avatar", post(user::upload_avatar))
         .route("/search", get(user::search_users))

@@ -161,7 +161,13 @@ export function TransactionFilterSheet({
                   chipStyles.chip,
                   local.yieldOnly && chipStyles.chipActive,
                 ]}
-                onPress={() => update("yieldOnly", !local.yieldOnly)}
+                onPress={() =>
+                  setLocal((prev) => ({
+                    ...prev,
+                    yieldOnly: !prev.yieldOnly,
+                    yieldType: undefined,
+                  }))
+                }
                 activeOpacity={0.8}
                 accessibilityRole="switch"
                 accessibilityState={{ checked: !!local.yieldOnly }}

@@ -312,6 +312,41 @@ test.describe("Yield Vault: APY parameter updates", () => {
     );
   });
 
+  test("admin updates APY config and submits a Freighter signature", async ({
+    page,
+  }) => {
+    await visitVaultWithWallet(page, { isSuperadmin: true });
+
+    // Fill the APY input field.
+    await page.getByLabel("APY (%)").fill("9.75");
+
+    // Tick the confirmation checkbox before the update can be submitted.
+    await page.locator("#vault-confirm").check();
+
+    // Click update; the mocked wallet signs the transaction.
+    await page
+      .getByRole("button", { name: /sign & submit via freighter/i })
+      .click();
+
+    // Success toast is visible with the expected message.
+    const success = page.getByTestId("vault-success");
+    await expect(success).toBeVisible({ timeout: 8_000 });
+    await expect(success).toContainText(/transaction signed and submitted/i);
+
+    // The signed payload carries the entered APY and the connected wallet
+    // address as the admin.
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>)
+        .__freighterSignCalls as { xdr: string }[] | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload).not.toBeNull();
+    expect(payload.fn).toBe("set_vault_params");
+    expect(payload.apy).toBe("9.75");
+    expect(payload.admin).toBe(MOCK_PUBLIC_KEY);
+  });
+
   test("the APY value entered is what gets signed", async ({ page }) => {
     await visitVaultWithWallet(page, { isSuperadmin: true });
 

@@ -120,7 +120,7 @@ function authHeaders(
  * too, the token is not the problem and looping would just multiply the
  * failure.
  */
-async function authedFetch(
+export async function authedFetch(
   url: string,
   init: RequestInit | undefined,
   buildHeaders: (token: string | null) => HeadersInit,
@@ -479,6 +479,25 @@ export const api = {
         { provider: "Privy (Web3/Social)", count: 1420, percentage: 60.7 },
         { provider: "Standard (PIN/ID)", count: 680, percentage: 29.1 },
         { provider: "Keypair/Freighter", count: 240, percentage: 10.2 },
+      ],
+    })),
+
+  // ── Social Payment Stats (#1021) ───────────────────────────────────────────
+  socialPaymentStats: () =>
+    req<{ interactions: SocialInteraction[] }>("/admin/analytics/social-payments").catch(() => ({
+      interactions: [
+        { likes: 245, comments: 89, shares: 42, payments: 156, timestamp: "2026-06-01T00:00:00Z" },
+        { likes: 312, comments: 124, shares: 58, payments: 189, timestamp: "2026-05-01T00:00:00Z" },
+        { likes: 198, comments: 67, shares: 31, payments: 112, timestamp: "2026-04-01T00:00:00Z" },
+        { likes: 425, comments: 178, shares: 76, payments: 234, timestamp: "2026-03-01T00:00:00Z" },
+        { likes: 389, comments: 145, shares: 62, payments: 201, timestamp: "2026-02-01T00:00:00Z" },
+        { likes: 267, comments: 98, shares: 44, payments: 145, timestamp: "2026-01-01T00:00:00Z" },
+        { likes: 521, comments: 203, shares: 89, payments: 287, timestamp: "2025-12-01T00:00:00Z" },
+        { likes: 478, comments: 167, shares: 71, payments: 256, timestamp: "2025-11-01T00:00:00Z" },
+        { likes: 356, comments: 134, shares: 55, payments: 198, timestamp: "2025-10-01T00:00:00Z" },
+        { likes: 289, comments: 102, shares: 48, payments: 167, timestamp: "2025-09-01T00:00:00Z" },
+        { likes: 234, comments: 78, shares: 35, payments: 134, timestamp: "2025-08-01T00:00:00Z" },
+        { likes: 312, comments: 112, shares: 51, payments: 178, timestamp: "2025-07-01T00:00:00Z" },
       ],
     })),
 };
@@ -870,6 +889,17 @@ export interface YieldAuditLogItem {
   asset?: string;
   block_height?: number;
   fee?: number;
+}
+
+/**
+ * Social payment interaction data (#1021).
+ */
+export interface SocialInteraction {
+  likes: number;
+  comments: number;
+  shares: number;
+  payments: number;
+  timestamp: string;
 }
 
 

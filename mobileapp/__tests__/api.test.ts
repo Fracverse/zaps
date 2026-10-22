@@ -3,10 +3,11 @@ import {
   completePrivySignup,
   linkPrivyAddress,
   stellarAddressFromPrivyPublicKey,
-  getRecentRecipients,
-  saveRecentRecipient,
-  getCachedRecentRecipientsSync,
-  clearRecentRecipientsCache,
+  resolveUsername,
+  safeResolveUsername,
+  batchResolveUsernames,
+  resolveUsernameAsZapsUser,
+  fetchReceiverForTransaction,
 } from "../src/services/api";
 
 jest.mock("@react-native-async-storage/async-storage", () => ({
@@ -35,7 +36,327 @@ function jsonResponse(body: unknown, status = 200): Response {
   } as unknown as Response;
 }
 
-describe("Privy signup API service", () => {
+// ── Username Resolution Tests (#911) ──────────────────────────────────────────
+
+// Mock expo-secure-store so apiFetch can call getSessionToken() without crashing.
+jest.mock("expo-secure-store", () => ({
+  getItemAsync: jest.fn().mockResolvedValue(null),
+  setItemAsync: jest.fn().mockResolvedValue(undefined),
+  deleteItemAsync: jest.fn().mockResolvedValue(undefined),
+}));
+
+// A valid Stellar public key for test fixtures.
+const TEST_ADDRESS = "GA2C5RFPE6GCKMY3US5FAB5A6T6E7Q3ABYH5O4ZN7LF3K4SKNQQQ7HZB";
+
+describe("resolveUsername (#911)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  it("resolves a valid username to its Stellar address", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+
+    const result = await resolveUsername("tolu");
+    expect(result.username).toBe("tolu");
+    expect(result.address).toBe(TEST_ADDRESS);
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/users/resolve/tolu"),
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+  });
+
+  it("trims and lowercases the username before resolving", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+
+    await resolveUsername("  TOLU  ");
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/users/resolve/tolu"),
+      expect.any(Object)
+    );
+  });
+
+  it("throws INVALID_USERNAME for an empty string", async () => {
+    await expect(resolveUsername("")).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("throws INVALID_USERNAME for a whitespace-only string", async () => {
+    await expect(resolveUsername("   ")).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+    });
+  });
+
+  it("throws INVALID_USERNAME for null/undefined input", async () => {
+    await expect(resolveUsername(null as unknown as string)).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+    });
+    await expect(resolveUsername(undefined as unknown as string)).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+    });
+  });
+
+  it("throws NOT_FOUND when the server returns 404", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "User not found" }, 404)
+    );
+    await expect(resolveUsername("nonexistent")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      statusCode: 404,
+    });
+  });
+
+  it("throws INVALID_USERNAME when the server returns 400", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "Invalid username format" }, 400)
+    );
+    await expect(resolveUsername("x")).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+      statusCode: 400,
+    });
+  });
+
+  it("throws NETWORK_ERROR for a 500 response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "Internal server error" }, 500)
+    );
+    await expect(resolveUsername("tolu")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      statusCode: 500,
+    });
+  });
+
+  it("throws NETWORK_ERROR when fetch fails entirely", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Network request failed"));
+    await expect(resolveUsername("tolu")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+    });
+  });
+
+  it("throws UNKNOWN_ERROR when response has no address field", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu" }) // missing 'address'
+    );
+    await expect(resolveUsername("tolu")).rejects.toMatchObject({
+      code: "UNKNOWN_ERROR",
+    });
+  });
+
+  it("throws UNKNOWN_ERROR when response has no username field", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ address: TEST_ADDRESS }) // missing 'username'
+    );
+    await expect(resolveUsername("tolu")).rejects.toMatchObject({
+      code: "UNKNOWN_ERROR",
+    });
+  });
+
+  it("saves the resolved username to recent recipients on success", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+    await resolveUsername("tolu");
+    expect(mockAsyncStorage.setItem).toHaveBeenCalledWith(
+      "recent_recipient_usernames",
+      expect.stringContaining("tolu")
+    );
+  });
+});
+
+describe("safeResolveUsername (#911)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  it("returns ReceiverDetails on success", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+    const result = await safeResolveUsername("tolu");
+    expect(result).toEqual({ username: "tolu", address: TEST_ADDRESS });
+  });
+
+  it("returns null on NOT_FOUND error", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "User not found" }, 404)
+    );
+    const result = await safeResolveUsername("nonexistent");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on INVALID_USERNAME error", async () => {
+    const result = await safeResolveUsername("");
+    expect(result).toBeNull();
+  });
+
+  it("returns null on network error", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Network request failed"));
+    const result = await safeResolveUsername("tolu");
+    expect(result).toBeNull();
+  });
+});
+
+describe("batchResolveUsernames (#911)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  it("returns empty object for an empty array", async () => {
+    const result = await batchResolveUsernames([]);
+    expect(result).toEqual({});
+  });
+
+  it("returns empty object for a non-array input", async () => {
+    const result = await batchResolveUsernames(null as unknown as string[]);
+    expect(result).toEqual({});
+  });
+
+  it("resolves all usernames successfully", async () => {
+    const addr1 = "GA2C5RFPE6GCKMY3US5FAB5A6T6E7Q3ABYH5O4ZN7LF3K4SKNQQQ7HZB";
+    const addr2 = "GBXGQZUP5Y4YF5E5XVFG2YP2O5A6T6E7Q3ABYH5O4ZN7LF3K4SKNQQQ7";
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ username: "alice", address: addr1 }))
+      .mockResolvedValueOnce(jsonResponse({ username: "bob", address: addr2 }));
+
+    const result = await batchResolveUsernames(["alice", "bob"]);
+    expect(Object.keys(result)).toHaveLength(2);
+    expect(result.alice).toEqual({ username: "alice", address: addr1 });
+    expect(result.bob).toEqual({ username: "bob", address: addr2 });
+  });
+
+  it("handles partial failures gracefully — includes only successful lookups", async () => {
+    const addr1 = "GA2C5RFPE6GCKMY3US5FAB5A6T6E7Q3ABYH5O4ZN7LF3K4SKNQQQ7HZB";
+
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ username: "alice", address: addr1 }))
+      .mockResolvedValueOnce(jsonResponse({ error: "User not found" }, 404));
+
+    const result = await batchResolveUsernames(["alice", "ghost"]);
+    expect(Object.keys(result)).toHaveLength(1);
+    expect(result.alice).toEqual({ username: "alice", address: addr1 });
+    expect(result.ghost).toBeUndefined();
+  });
+
+  it("lowercases all usernames in the returned map", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "alice", address: TEST_ADDRESS })
+    );
+    const result = await batchResolveUsernames(["ALICE"]);
+    expect(result.alice).toBeDefined();
+  });
+});
+
+describe("resolveUsernameAsZapsUser (#911)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  it("returns a ZapsUser-compatible object with username and address", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+    const result = await resolveUsernameAsZapsUser("tolu");
+    expect(result.username).toBe("tolu");
+    expect(result.address).toBe(TEST_ADDRESS);
+    expect(result.avatar_url).toBeNull();
+    expect(result.isVerified).toBe(false);
+  });
+
+  it("propagates UsernameLookupError on failure", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "User not found" }, 404)
+    );
+    await expect(resolveUsernameAsZapsUser("ghost")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});
+
+describe("fetchReceiverForTransaction (#911)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockFetch.mockReset();
+  });
+
+  it("returns a validated ReceiverLookupResult on success", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ username: "tolu", address: TEST_ADDRESS })
+    );
+
+    const result = await fetchReceiverForTransaction("tolu");
+    expect(result.username).toBe("tolu");
+    expect(result.address).toBe(TEST_ADDRESS);
+    expect(result.resolvedAt).toBeGreaterThan(0);
+    expect(typeof result.resolvedAt).toBe("number");
+  });
+
+  it("validates that the resolved address is a Stellar public key", async () => {
+    mockFetch.mockResolvedValueOnce(
+      // Invalid address — doesn't match G[A-Z2-7]{55}
+      jsonResponse({ username: "tolu", address: "NOT_A_STELLAR_KEY" })
+    );
+
+    await expect(fetchReceiverForTransaction("tolu")).rejects.toMatchObject({
+      code: "UNKNOWN_ERROR",
+    });
+  });
+
+  it("validates that the resolved address starts with G", async () => {
+    mockFetch.mockResolvedValueOnce(
+      // Address starts with X instead of G
+      jsonResponse({ username: "tolu", address: "X" + "A".repeat(55) })
+    );
+
+    await expect(fetchReceiverForTransaction("tolu")).rejects.toMatchObject({
+      code: "UNKNOWN_ERROR",
+    });
+  });
+
+  it("validates that the resolved address is exactly 56 characters", async () => {
+    mockFetch.mockResolvedValueOnce(
+      // 55 chars instead of 56
+      jsonResponse({ username: "tolu", address: "G" + "A".repeat(54) })
+    );
+
+    await expect(fetchReceiverForTransaction("tolu")).rejects.toMatchObject({
+      code: "UNKNOWN_ERROR",
+    });
+  });
+
+  it("propagates NOT_FOUND when username doesn't exist", async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ error: "User not found" }, 404)
+    );
+
+    await expect(fetchReceiverForTransaction("ghost")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("propagates INVALID_USERNAME for empty input", async () => {
+    await expect(fetchReceiverForTransaction("")).rejects.toMatchObject({
+      code: "INVALID_USERNAME",
+    });
+  });
+
+  it("propagates NETWORK_ERROR on fetch failure", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Network request failed"));
+
+    await expect(fetchReceiverForTransaction("tolu")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+    });
+  });
+});
   beforeEach(() => {
     jest.clearAllMocks();
     mockFetch.mockReset();
