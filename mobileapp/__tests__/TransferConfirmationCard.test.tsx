@@ -148,4 +148,38 @@ describe("TransferConfirmationCard", () => {
     expect(getByText("Privacy")).toBeTruthy();
     expect(getByText("FRIENDS")).toBeTruthy();
   });
+
+  it("renders real name and username parameters when real name is provided", () => {
+    const { getByText, getByTestId } = render(
+      <TransferConfirmationCard
+        recipient={{
+          ...mockRecipient,
+          name: "Tolu Adebayo",
+          isVerified: true,
+        }}
+        amount="500"
+        tokenSymbol="XLM"
+      />
+    );
+
+    expect(getByTestId("confirmation-real-name")).toBeTruthy();
+    expect(getByText("Tolu Adebayo")).toBeTruthy();
+    expect(getByText("tolu.zaps")).toBeTruthy();
+  });
+
+  it("displays verification badge for trusted profiles", () => {
+    const { getByLabelText } = render(
+      <TransferConfirmationCard
+        recipient={{
+          ...mockRecipient,
+          display_name: "Trusted User",
+          isVerified: true,
+        }}
+        amount="250"
+        tokenSymbol="USDC"
+      />
+    );
+
+    expect(getByLabelText("Verified recipient")).toBeTruthy();
+  });
 });

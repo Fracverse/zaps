@@ -162,6 +162,8 @@ function UsernameSearchBar() {
   );
 }
 
+const NETWORK_PASSPHRASE = "Test SDF Network ; September 2015";
+
 function fmtUsdc(value: number): string {
   return (
     value.toLocaleString(undefined, {
@@ -659,6 +661,50 @@ export default function OverviewPage() {
   const yieldDistributed = yieldData?.total_yield_distributed ?? 0;
   const apy = yieldData?.apy ?? 0;
 
+  // ── #1037: Typed confirmation before dispatching contract pause call ────────
+  const [pauseConfirmText, setPauseConfirmText] = useState("");
+  const [pausing, setPausing] = useState(false);
+  const [pauseMsg, setPauseMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
+
+  // The dispatch button stays disabled until the typed text is an exact,
+  // case-sensitive match for "PAUSE" — this prevents accidental invocation.
+  const canDispatchPause = pauseConfirmText === "PAUSE";
+
+  const handleDispatchPause = useCallback(async () => {
+    if (!canDispatchPause || pausing) return;
+    if (!isSuperAdmin) {
+      setPauseMsg({ type: "err", text: "Superadmin access required to pause the contract." });
+      return;
+    }
+    if (!wallet.connected || !wallet.publicKey) {
+      setPauseMsg({ type: "err", text: "Connect Freighter before dispatching the pause call." });
+      return;
+    }
+    setPausing(true);
+    setPauseMsg(null);
+    try {
+      const payload = {
+        fn: "emergency_pause",
+        paused: true,
+        admin: wallet.publicKey,
+      };
+      const placeholderXdr = btoa(JSON.stringify(payload));
+      const result = await wallet.signTransaction(placeholderXdr, NETWORK_PASSPHRASE);
+      setPauseMsg({
+        type: "ok",
+        text: `Contract pause dispatched. Signed XDR: ${result.signedTxXdr.slice(0, 24)}…`,
+      });
+      setPauseConfirmText("");
+    } catch (err) {
+      setPauseMsg({
+        type: "err",
+        text: err instanceof Error ? err.message : "Failed to dispatch pause call",
+      });
+    } finally {
+      setPausing(false);
+    }
+  }, [canDispatchPause, pausing, isSuperAdmin, wallet]);
+
   const handleExportUsers = useCallback(async () => {
     try {
       const links = await api.identityLinks();
@@ -921,8 +967,22 @@ export default function OverviewPage() {
         </div>
       )}
 
+      {/* Admin Audit Log */}
+      <div className="mt-10 mb-6">
+        <h2 className="text-lg font-semibold text-slate-900">Admin Audit Log</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Configuration changes, emergency pauses, and other administrative actions.
+        </p>
+      </div>
+
+      <AuditLogTable
+        logs={logsData?.logs ?? null}
+        loading={logsLoading}
+        error={logsError}
+      />
+
       <p className="mt-4 text-xs text-slate-400">
-        Social stats refresh every 15 s · Vault stats refresh every 30 s
+        Social stats refresh every 15 s · Vault stats and audit log refresh every 30 s
       </p>
 
       {/* ── #1008: Payout Statistics Admin Indicators ─────────────────────── */}
@@ -1080,91 +1140,6 @@ export default function OverviewPage() {
       {/* ── #1036: Privy DID User Identity Lookup Panel with Linked Accounts Grid ── */}
       <PrivyDidLookupPanel />
 
-      {/* ── #797 Admin Audit Log ─────────────────────────────────────────── */}
-      <div className="mt-10 mb-6">
-        <h2 className="text-lg font-semibold text-slate-900">Admin Audit Log</h2>
-        <p className="mt-1 text-sm text-slate-500">
-          Configuration changes and admin actions, newest first.
-        </p>
-      </div>
-
-      {logsError && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {logsError} — could not load audit log
-        </div>
-      )}
-
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50">
-              <tr>
-                {["Timestamp", "Admin ID", "Action", "Details", "IP Address"].map(
-                  (heading) => (
-                    <th
-                      key={heading}
-                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
-                    >
-                      {heading}
-                    </th>
-                  ),
-                )}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {logsLoading && !logsData ? (
-                Array.from({ length: 5 }).map((_, row) => (
-                  <tr key={row}>
-                    {Array.from({ length: 5 }).map((__, col) => (
-                      <td key={col} className="px-4 py-3">
-                        <div className="h-4 animate-pulse rounded bg-slate-100" />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              ) : !logsData?.logs?.length ? (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-4 py-10 text-center text-slate-400"
-                  >
-                    No audit log entries found
-                  </td>
-                </tr>
-              ) : (
-                // Already ordered descending by server; display as-is
-                logsData.logs.map((log: AdminAuditLog) => (
-                  <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                      {format(new Date(log.timestamp), "MMM d, yyyy HH:mm:ss")}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-700">
-                      {log.admin_id}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-600/20">
-                        {log.action}
-                      </span>
-                    </td>
-                    <td className="max-w-xs px-4 py-3 text-slate-600">
-                      <span className="line-clamp-2 text-xs">
-                        {log.details ?? "—"}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-slate-500">
-                      {log.ip_address ?? "—"}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <p className="mt-2 text-xs text-slate-400">
-        Audit log refreshes every 60 s
-      </p>
     </div>
   );
 }

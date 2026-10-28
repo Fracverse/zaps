@@ -37,13 +37,35 @@ export const TransferConfirmationCard = React.memo(
       return `${Number.isFinite(numeric) ? numeric.toLocaleString() : "0"} stroops`;
     };
 
+    const realName =
+      recipient.name || recipient.display_name || recipient.real_name;
+
     return (
       <View style={styles.card}>
-        <Avatar uri={recipient.avatar_url} name={recipient.username} size={80} />
+        <Avatar
+          uri={recipient.avatar_url}
+          name={realName || recipient.username}
+          size={80}
+        />
 
-        <View style={styles.nameRow}>
-          <Text style={styles.username}>{recipient.username}</Text>
-          {recipient.isVerified && <VerificationBadge />}
+        <View style={styles.recipientHeader}>
+          {Boolean(realName) && (
+            <Text style={styles.realName} testID="confirmation-real-name">
+              {realName}
+            </Text>
+          )}
+
+          <View style={styles.nameRow}>
+            <Text
+              style={[
+                styles.username,
+                Boolean(realName) && styles.usernameSubtitle,
+              ]}
+            >
+              {recipient.username}
+            </Text>
+            {recipient.isVerified && <VerificationBadge />}
+          </View>
         </View>
 
         {recipient.address && (
@@ -155,15 +177,30 @@ const styles = StyleSheet.create({
     borderColor: "#F0F0F0",
     alignItems: "center",
   },
+  recipientHeader: {
+    alignItems: "center",
+    marginTop: 14,
+  },
+  realName: {
+    fontSize: 20,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+    textAlign: "center",
+  },
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 16,
+    marginTop: 4,
   },
   username: {
     fontSize: 20,
     fontFamily: "Outfit_700Bold",
     color: COLORS.black,
+  },
+  usernameSubtitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: "#666",
   },
   address: {
     fontSize: 13,

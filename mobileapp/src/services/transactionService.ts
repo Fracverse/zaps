@@ -310,8 +310,11 @@ export async function fetchTransactions(
   const params = new URLSearchParams();
   if (cursor) params.set("cursor", cursor);
   const effectiveType =
-    filters.yieldOnly && filters.type === "all" ? "yield" : filters.type;
+    (filters.yieldOnly || filters.yieldType) && filters.type === "all"
+      ? "yield"
+      : filters.type;
   if (effectiveType !== "all") params.set("type", effectiveType);
+  if (filters.yieldType) params.set("yield_type", filters.yieldType);
   if (filters.status !== "all") params.set("status", filters.status);
   if (filters.asset) params.set("asset", filters.asset);
   if (filters.dateFrom) params.set("date_from", filters.dateFrom);
@@ -340,6 +343,7 @@ export async function fetchTransactions(
   // Apply filters
   let filtered = all.filter((tx) => {
     if (filters.yieldOnly && tx.type !== "yield") return false;
+    if (filters.yieldType && tx.yieldType !== filters.yieldType) return false;
     if (filters.type !== "all" && tx.type !== filters.type) return false;
     if (filters.status !== "all" && tx.status !== filters.status) return false;
     if (filters.asset && tx.asset.toUpperCase() !== filters.asset.toUpperCase())

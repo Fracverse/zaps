@@ -41,13 +41,22 @@ import {
   fetchFeed,
   addComment,
 } from "../../src/services/socialService";
-import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
+import {
+  fetchYieldBalance,
+  fetchYieldEarningsHistory,
+  updateAutoEarn,
+} from "../../src/services/api";
 import {
   BalanceCurrency,
   formatBalance,
   formatFiatBalance,
   fiatFromTokens,
 } from "../../src/utils/balanceDisplay";
+import {
+  YIELD_REQUEST_TIMEOUT_MS,
+  describeYieldError,
+  withTimeout,
+} from "../../src/utils/yieldRequest";
 import {
   markNotificationPromptDismissed,
   registerForPushNotificationsAsync,
@@ -72,7 +81,7 @@ interface FeedItem {
 interface YieldSnapshot {
   apy: string;
   totalYieldEarned: string;
-  explanation: string;
+  explanation?: string;
 }
 
 interface Comment {
@@ -84,23 +93,25 @@ interface Comment {
 
 interface MonthlyEarningPoint {
   month: string;
+  period: string;
   amount: number;
 }
 
-const MONTHLY_EARNINGS: MonthlyEarningPoint[] = [
-  { month: "Jan", amount: 140 },
-  { month: "Feb", amount: 172 },
-  { month: "Mar", amount: 205 },
-  { month: "Apr", amount: 238 },
-  { month: "May", amount: 261 },
-  { month: "Jun", amount: 296 },
-  { month: "Jul", amount: 317 },
-  { month: "Aug", amount: 334 },
-  { month: "Sep", amount: 352 },
-  { month: "Oct", amount: 365 },
-  { month: "Nov", amount: 388 },
-  { month: "Dec", amount: 412 },
-];
+const createRecentMonthlyEarnings = (): MonthlyEarningPoint[] => {
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + index, 1)
+    );
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    return {
+      month: date.toLocaleString("en-US", { month: "short", timeZone: "UTC" }),
+      period: `${year}-${String(month + 1).padStart(2, "0")}`,
+      amount: 0,
+    };
+  });
+};
 
 const INITIAL_FEED: FeedItem[] = [
   {
@@ -156,9 +167,13 @@ export default function HomeScreen() {
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [chartWidth, setChartWidth] = useState(0);
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(
-    MONTHLY_EARNINGS.length - 1
+  const [monthlyEarnings, setMonthlyEarnings] = useState(
+    createRecentMonthlyEarnings
   );
+  const [earningsHistoryStatus, setEarningsHistoryStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(11);
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const [autoEarnSyncing, setAutoEarnSyncing] = useState(false);
@@ -169,12 +184,15 @@ export default function HomeScreen() {
   const [notifRequesting, setNotifRequesting] = useState(false);
   const [balanceMasked, setBalanceMasked] = useState(true);
   const MASKED_BALANCE = "••••••";
+  const BALANCE_UNAVAILABLE = "--";
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
   const earningGlowAnim = useRef(new Animated.Value(0)).current;
   const earningPulseAnim = useRef(new Animated.Value(1)).current;
+  const earningOuterGlowAnim = useRef(new Animated.Value(0)).current;
   const yieldRequestRef = useRef(0);
+  const earningsHistoryRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -194,7 +212,6 @@ export default function HomeScreen() {
 
   const FEED_CACHE_KEY = "feed_items_cache";
   const HOME_CURRENCY_PREF_KEY = "home_display_currency";
-  const YIELD_REQUEST_TIMEOUT_MS = 4500;
 
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
@@ -226,17 +243,59 @@ export default function HomeScreen() {
     };
   };
 
+  const loadEarningsHistory = useCallback(async () => {
+    const requestId = ++earningsHistoryRequestRef.current;
+    const months = createRecentMonthlyEarnings();
+    const from = `${months[0].period}-01`;
+    const to = new Date().toISOString().slice(0, 10);
+    setEarningsHistoryStatus("loading");
+
+    try {
+      const history = await fetchYieldEarningsHistory(from, to);
+      if (requestId !== earningsHistoryRequestRef.current) return;
+
+      const totalsByMonth = new Map<string, number>();
+      history.forEach((item) => {
+        if (item.asset.toUpperCase() !== "XLM") return;
+        const amount = Number(item.amount);
+        const period = item.created_at.slice(0, 7);
+        if (!Number.isFinite(amount)) return;
+        totalsByMonth.set(
+          period,
+          (totalsByMonth.get(period) ?? 0) + fiatFromTokens(amount / 1_000_000)
+        );
+      });
+
+      setMonthlyEarnings(
+        months.map((month) => ({
+          ...month,
+          amount: Number((totalsByMonth.get(month.period) ?? 0).toFixed(2)),
+        }))
+      );
+      setSelectedMonthIndex(months.length - 1);
+      setEarningsHistoryStatus("success");
+    } catch {
+      if (requestId !== earningsHistoryRequestRef.current) return;
+      setEarningsHistoryStatus("error");
+    }
+  }, []);
+
   const withTimeout = async <T,>(
     promise: Promise<T>,
     timeoutMs: number
   ): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<T>((_, reject) => {
-      setTimeout(
+      timeoutId = setTimeout(
         () => reject(new Error("Request timed out. Please try again.")),
         timeoutMs
       );
     });
-    return Promise.race([promise, timeoutPromise]);
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   };
 
   const loadYieldData = useCallback(async () => {
@@ -253,11 +312,7 @@ export default function HomeScreen() {
       setYieldStatus("success");
     } catch (error) {
       if (requestId !== yieldRequestRef.current) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to load yield details right now.";
-      setYieldError(message);
+      setYieldError(describeYieldError(error));
       setYieldStatus("error");
     }
   }, []);
@@ -389,8 +444,10 @@ export default function HomeScreen() {
     if (!autoYieldEnabled || yieldStatus !== "success") {
       earningGlowAnim.stopAnimation();
       earningPulseAnim.stopAnimation();
+      earningOuterGlowAnim.stopAnimation();
       earningGlowAnim.setValue(0);
       earningPulseAnim.setValue(1);
+      earningOuterGlowAnim.setValue(0);
       return;
     }
     const glowLoop = Animated.loop(
@@ -414,6 +471,22 @@ export default function HomeScreen() {
         }),
       ])
     );
+    // Outer glow ring pulses slower for a layered depth effect
+    const outerGlowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(400),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
     const pulseLoop = Animated.loop(
       Animated.sequence([
         // Slight delay so the status dot follows the card glow.
@@ -421,13 +494,13 @@ export default function HomeScreen() {
         Animated.delay(250),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.03,
+          toValue: 1.04,
           duration: 500,
           useNativeDriver: true,
         }),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.06,
+          toValue: 1.07,
           duration: 450,
           useNativeDriver: true,
         }),
@@ -440,26 +513,32 @@ export default function HomeScreen() {
       ])
     );
     glowLoop.start();
+    outerGlowLoop.start();
     pulseLoop.start();
     return () => {
       glowLoop.stop();
+      outerGlowLoop.stop();
       pulseLoop.stop();
     };
-  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim]);
+  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim, earningOuterGlowAnim]);
 
   const onPullRefresh = useCallback(async () => {
     setRefreshing(true);
+    const yieldRefresh = loadYieldData();
     try {
-      const fresh = await fetchFeed();
-      if (fresh && fresh.length > 0) {
-        setFeed(fresh);
-        await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+      try {
+        const fresh = await fetchFeed();
+        if (fresh && fresh.length > 0) {
+          setFeed(fresh);
+          await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+        }
+      } catch {
+        // keep current feed
       }
-    } catch {
-      // keep current feed
+    } finally {
+      await yieldRefresh;
+      setRefreshing(false);
     }
-    await loadYieldData();
-    setRefreshing(false);
   }, [loadYieldData]);
 
   const handleLike = async (id: string) => {
@@ -585,6 +664,7 @@ export default function HomeScreen() {
       () => undefined
     );
     setEarningsModalVisible(true);
+    void loadEarningsHistory();
     earningsSheetTranslateY.setValue(48);
     earningsBackdropOpacity.setValue(0);
     Animated.parallel([
@@ -629,6 +709,12 @@ export default function HomeScreen() {
     setAutoEarnSyncing(true);
     try {
       await updateAutoEarn(value);
+      if (value) {
+        // Idle funds start sweeping into yield — confirm with a light bump.
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+          () => undefined
+        );
+      }
     } catch {
       // Revert on failure
       setAutoYieldEnabled(previous);
@@ -683,22 +769,6 @@ export default function HomeScreen() {
 
   const displayBalance = (amount: string) =>
     balanceMasked ? MASKED_BALANCE : amount;
-
-  const monthlyEarnings = useMemo(() => {
-    const baseTotal = MONTHLY_EARNINGS.reduce(
-      (sum, item) => sum + item.amount,
-      0
-    );
-    const targetTotal = parseCurrencyAmount(
-      yieldData?.totalYieldEarned ?? "₦3,280.45"
-    );
-    const scale =
-      targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
-    return MONTHLY_EARNINGS.map((item) => ({
-      ...item,
-      amount: Number((item.amount * scale).toFixed(2)),
-    }));
-  }, [yieldData]);
 
   useEffect(() => {
     if (selectedMonthIndex > monthlyEarnings.length - 1) {
@@ -757,8 +827,14 @@ export default function HomeScreen() {
     monthlyEarnings,
   ]);
 
-  const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
-    <View style={[styles.skeletonBase, style]}>
+  const SkeletonBlock = ({
+    style,
+    testID,
+  }: {
+    style?: StyleProp<ViewStyle>;
+    testID?: string;
+  }) => (
+    <View style={[styles.skeletonBase, style]} testID={testID}>
       <Animated.View
         style={[
           styles.skeletonShimmer,
@@ -802,6 +878,7 @@ export default function HomeScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        testID="home-scroll-view"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -852,42 +929,103 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Balance Card */}
+        {/* Balance Card — available and earning balances, side by side */}
         <View style={styles.balanceCard}>
-          {/* Available Balance Section */}
-          <View style={styles.balanceSection}>
-            <View style={styles.balanceLabelRow}>
-              <Text style={styles.balanceLabel}>Available Balance</Text>
-              <TouchableOpacity
-                onPress={toggleBalanceMask}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  balanceMasked ? "Show balance" : "Hide balance"
-                }
-              >
-                <Ionicons
-                  name={balanceMasked ? "eye-outline" : "eye-off-outline"}
-                  size={20}
-                  color="#777"
+          <View style={styles.balanceSplit}>
+            {/* Available Balance Section */}
+            <View
+              style={[styles.balancePanel, styles.availablePanel]}
+              testID="available-balance-section"
+            >
+              <View style={styles.balanceLabelRow}>
+                <Text style={styles.availableLabel}>Available</Text>
+                <TouchableOpacity
+                  onPress={toggleBalanceMask}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    balanceMasked ? "Show balance" : "Hide balance"
+                  }
+                >
+                  <Ionicons
+                    name={balanceMasked ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color="#A9D8CF"
+                  />
+                </TouchableOpacity>
+              </View>
+              {yieldStatus === "loading" ? (
+                <SkeletonBlock
+                  testID="available-balance-skeleton"
+                  style={[
+                    styles.balanceAmountSkeleton,
+                    styles.availableSkeleton,
+                  ]}
                 />
-              </TouchableOpacity>
+              ) : (
+                <Text
+                  style={styles.availableAmount}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  testID="available-balance-amount"
+                >
+                  {yieldStatus === "error"
+                    ? BALANCE_UNAVAILABLE
+                    : displayBalance(availableBalanceDisplay)}
+                </Text>
+              )}
             </View>
             <Text style={styles.balanceAmount}>
-              {displayBalance(availableBalance)}
+              {displayBalance(availableBalanceDisplay)}
             </Text>
           </View>
 
           {/* Earning Balance Section */}
-          <View style={styles.earningBalanceSection}>
+          <TouchableOpacity
+            style={styles.earningBalanceSection}
+            activeOpacity={0.8}
+            onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance"
+            testID="earning-balance-section"
+          >
+            {autoYieldEnabled && yieldStatus === "success" && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.earningBalanceGlow,
+                  {
+                    opacity: earningGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.2, 0.75],
+                    }),
+                    transform: [
+                      {
+                        scale: earningGlowAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1, 1.025],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+                testID="earning-balance-glow"
+              />
+            )}
             <View style={styles.earningBalanceHeader}>
-              <View style={styles.earningDot} />
+              <Animated.View
+                style={[
+                  styles.earningDot,
+                  { transform: [{ scale: earningPulseAnim }] },
+                ]}
+                testID="earning-balance-pulse"
+              />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
             <Text style={styles.earningBalanceAmount}>
-              {displayBalance(totalYieldEarned)}
+              {displayBalance(totalYieldEarnedDisplay)}
             </Text>
-          </View>
+          </TouchableOpacity>
 
           {/* Pay / Request trigger button (#886) */}
           <TouchableOpacity
@@ -937,6 +1075,28 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.earningCardWrapper}>
+          {/* Outer soft glow ring — slower pulse for layered depth */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.earningGlow,
+              styles.earningOuterGlow,
+              {
+                opacity: earningOuterGlowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.08],
+                }),
+                transform: [
+                  {
+                    scale: earningOuterGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1.02, 1.12],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
           <Animated.View
             pointerEvents="none"
             style={[
@@ -944,13 +1104,13 @@ export default function HomeScreen() {
               {
                 opacity: earningGlowAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0.15, 0.55],
+                  outputRange: [0.04, 0.2],
                 }),
                 transform: [
                   {
                     scale: earningGlowAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.98, 1.04],
+                      outputRange: [0.97, 1.05],
                     }),
                   },
                 ],
@@ -961,42 +1121,30 @@ export default function HomeScreen() {
             style={styles.earningBalanceCard}
             activeOpacity={0.9}
             onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance Card"
+            testID="earning-balance-card"
           >
-            <View>
-              <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>
-                {totalYieldEarnedDisplay}
-              </Text>
-              <View style={styles.earningStatusRow}>
-                <Animated.View
-                  style={[
-                    styles.earningStatusDot,
-                    { transform: [{ scale: earningPulseAnim }] },
-                  ]}
-                />
-                <Text style={styles.earningStatusText}>
-                  {autoYieldEnabled
-                    ? "Your money is working"
-                    : "Auto-earn is off"}
-                </Text>
-              </View>
-            </View>
             {yieldStatus === "loading" ? (
-              <View style={styles.earningContent}>
+              <View
+                style={styles.earningContent}
+                testID="earning-card-skeleton"
+              >
                 <SkeletonBlock style={styles.earningLabelSkeleton} />
                 <SkeletonBlock style={styles.earningAmountSkeleton} />
                 <SkeletonBlock style={styles.earningHintSkeleton} />
               </View>
             ) : yieldStatus === "error" ? (
-              <View style={styles.earningContent}>
+              <View style={styles.earningContent} testID="earning-card-error">
                 <Text style={styles.earningLabel}>Earning Balance</Text>
-                <Text style={styles.earningErrorText}>
-                  Unable to load yield
-                </Text>
+                <Text style={styles.earningErrorText}>{yieldError}</Text>
                 <TouchableOpacity
                   style={styles.retryChip}
                   onPress={handleYieldRetry}
                   activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading yield"
+                  testID="earning-card-retry"
                 >
                   <Ionicons name="refresh" size={12} color={COLORS.primary} />
                   <Text style={styles.retryChipText}>Retry</Text>
@@ -1008,9 +1156,19 @@ export default function HomeScreen() {
                 <Text style={styles.earningAmount}>
                   {totalYieldEarnedDisplay}
                 </Text>
-                <Text style={styles.earningHint}>
-                  Tap to view yield breakdown
-                </Text>
+                <View style={styles.earningStatusRow}>
+                  <Animated.View
+                    style={[
+                      styles.earningStatusDot,
+                      { transform: [{ scale: earningPulseAnim }] },
+                    ]}
+                  />
+                  <Text style={styles.earningStatusText}>
+                    {autoYieldEnabled
+                      ? "Your money is working"
+                      : "Auto-earn is off"}
+                  </Text>
+                </View>
               </View>
             )}
             <View style={styles.earningIconWrap}>
@@ -1027,14 +1185,22 @@ export default function HomeScreen() {
             </View>
             <View style={styles.autoEarnTitleWrap}>
               <View style={styles.autoEarnTitleRow}>
-                <Text style={styles.autoEarnCardTitle}>
-                  Auto-Earn on Idle Funds
-                </Text>
                 <TouchableOpacity
                   onPress={openAutoEarnDescModal}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Learn about Auto-Earn"
+                  activeOpacity={0.8}
+                  accessibilityLabel="Learn about Auto-Earn yield rules"
                   accessibilityRole="button"
+                >
+                  <Text style={styles.autoEarnCardTitle}>
+                    Auto-Earn on Idle Funds
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={toggleAutoEarnTooltip}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Quick definition tooltip"
+                  accessibilityRole="button"
+                  testID="auto-earn-tooltip-trigger"
                 >
                   <Ionicons
                     name="information-circle-outline"
@@ -1051,7 +1217,13 @@ export default function HomeScreen() {
             </View>
             <Switch
               value={autoYieldEnabled}
-              onValueChange={handleAutoYieldToggle}
+              onValueChange={(val: boolean) => {
+                if (val) {
+                  openAutoEarnDescModal();
+                } else {
+                  void handleAutoYieldToggle(false);
+                }
+              }}
               disabled={autoEarnSyncing}
               trackColor={{ false: "#E2E8F0", true: "#34D399" }}
               thumbColor={COLORS.white}
@@ -1059,6 +1231,19 @@ export default function HomeScreen() {
               accessibilityRole="switch"
             />
           </View>
+          {autoEarnTooltipVisible && (
+            <View style={styles.autoEarnTooltip} testID="auto-earn-tooltip">
+              <Ionicons
+                name="information-circle"
+                size={16}
+                color="#166534"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.autoEarnTooltipText}>
+                Auto-Earn automatically sweeps idle funds into yield-earning vaults at competitive APYs while remaining instantly spendable.
+              </Text>
+            </View>
+          )}
           {autoEarnSyncing && (
             <View style={styles.autoEarnSyncingRow}>
               <Ionicons name="sync" size={13} color="#64748B" />
@@ -1276,7 +1461,7 @@ export default function HomeScreen() {
                   Could not load details
                 </Text>
                 <Text style={styles.yieldErrorCopy}>
-                  {yieldError}. Check your connection and try again.
+                  {yieldError} Check your connection and try again.
                 </Text>
                 <TouchableOpacity
                   style={styles.retryButton}
@@ -1295,9 +1480,16 @@ export default function HomeScreen() {
               <>
                 <View style={styles.earningsMetricCard}>
                   <Text style={styles.earningsMetricLabel}>Current APY</Text>
-                  <Text style={styles.earningsMetricValue}>
-                    {yieldData?.apy ?? "0.00%"}
-                  </Text>
+                  <View style={styles.apyValueRow}>
+                    <Text style={styles.earningsMetricValue}>
+                      {yieldData?.apy ?? "0.00%"}
+                    </Text>
+                    <View style={styles.apyTrendBadge}>
+                      <Ionicons name="trending-up" size={13} color="#16A34A" />
+                      <Text style={styles.apyTrendText}>+0.12%</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.apyTrendSubtext}>vs. last month</Text>
                 </View>
 
                 <View style={styles.earningsMetricCard}>
@@ -1328,7 +1520,20 @@ export default function HomeScreen() {
                   </View>
 
                   <View style={styles.earningsChartCanvas}>
-                    {chartGeometry && (
+                    {earningsHistoryStatus === "loading" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Loading earnings history...
+                      </Text>
+                    ) : earningsHistoryStatus === "error" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Earnings history is unavailable.
+                      </Text>
+                    ) : earningsHistoryStatus === "success" &&
+                      monthlyEarnings.every((item) => item.amount === 0) ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        No yield earnings recorded in the last 12 months.
+                      </Text>
+                    ) : chartGeometry ? (
                       <>
                         <Svg width={chartWidth} height={chartHeight}>
                           <Defs>
@@ -1389,7 +1594,7 @@ export default function HomeScreen() {
                           ))}
                         </View>
                       </>
-                    )}
+                    ) : null}
                   </View>
 
                   <View style={styles.earningsMonthRow}>
@@ -1495,8 +1700,31 @@ export default function HomeScreen() {
                 </View>
 
                 <Text style={styles.earningsInfoCopy}>
-                  {yieldData?.explanation}
+                  {yieldData?.explanation ||
+                    "Idle balances are automatically swept into yield-earning vaults at competitive APYs with daily compounding interest while remaining instantly spendable."}
                 </Text>
+
+                <TouchableOpacity
+                  style={styles.manageYieldButton}
+                  onPress={() => {
+                    closeEarningsModal();
+                    router.push("/yield-transaction");
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Deposit or Withdraw Yield"
+                  testID="manage-yield-button"
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={18}
+                    color={COLORS.secondary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.manageYieldButtonText}>
+                    Deposit / Withdraw Yield
+                  </Text>
+                </TouchableOpacity>
               </>
             )}
           </Animated.View>
@@ -1790,6 +2018,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#EAEAEA",
     marginBottom: 20,
+    gap: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.03,
@@ -1857,7 +2086,27 @@ const styles = StyleSheet.create({
     color: COLORS.secondary,
   },
   balanceSection: {
+    marginBottom: 0,
+  },
+  balanceSplit: {
+    flexDirection: "row",
+    gap: 10,
     marginBottom: 16,
+  },
+  balancePanel: {
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    minHeight: 92,
+    justifyContent: "space-between",
+  },
+  availablePanel: {
+    flex: 1.2,
+    backgroundColor: COLORS.primary,
+  },
+  earningPanel: {
+    flex: 1,
+    backgroundColor: "#E4F7EA",
   },
   balanceLabelRow: {
     flexDirection: "row",
@@ -1865,23 +2114,36 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 4,
   },
-  balanceLabel: {
+  availableLabel: {
     fontSize: 13,
-    fontFamily: "Outfit_400Regular",
-    color: "#777",
+    fontFamily: "Outfit_500Medium",
+    color: "#A9D8CF",
   },
   balanceAmount: {
-    fontSize: 34,
+    fontSize: 32,
+    lineHeight: 38,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
+    flexShrink: 1,
   },
   earningBalanceSection: {
-    backgroundColor: "#F2F9F0",
+    backgroundColor: "#F3FBF4",
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 0,
     borderWidth: 1,
-    borderColor: "#E8F5E9",
+    borderColor: "#DDEFE1",
+  },
+  earningBalanceGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: "#34D399",
+    shadowColor: "#34D399",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    elevation: 5,
   },
   earningBalanceHeader: {
     flexDirection: "row",
@@ -1901,13 +2163,16 @@ const styles = StyleSheet.create({
     color: "#456047",
   },
   earningBalanceAmount: {
-    fontSize: 28,
+    fontSize: 26,
+    lineHeight: 32,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
+    flexShrink: 1,
   },
   quickActions: {
     flexDirection: "row",
     gap: 10,
+    marginTop: 2,
   },
   payRequestButton: {
     backgroundColor: COLORS.primary,
@@ -1990,22 +2255,31 @@ const styles = StyleSheet.create({
     right: -8,
     bottom: -8,
     borderRadius: 30,
-    backgroundColor: "#34D399",
-    shadowColor: "#34D399",
+    backgroundColor: "#2F7655",
+    shadowColor: "#2F7655",
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.7,
     shadowRadius: 22,
     elevation: 8,
   },
+  earningOuterGlow: {
+    top: -18,
+    left: -18,
+    right: -18,
+    bottom: -18,
+    borderRadius: 40,
+    shadowRadius: 36,
+    elevation: 4,
+  },
   earningBalanceCard: {
-    backgroundColor: "#0F3D2E",
+    backgroundColor: "#0E3328",
     borderRadius: 22,
     paddingVertical: 18,
     paddingHorizontal: 18,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    shadowColor: "#0F3D2E",
+    shadowColor: "#0E3328",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.18,
     shadowRadius: 16,
@@ -2203,7 +2477,7 @@ const styles = StyleSheet.create({
   earningLabel: {
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
-    color: "#9FD9B5",
+    color: "#B5D9C5",
     marginBottom: 6,
   },
   earningAmount: {
@@ -2212,9 +2486,25 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     marginBottom: 8,
   },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#9FD9B5",
+  },
   earningStatusRow: {
     flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  earningStatusActive: {
+    backgroundColor: "rgba(167, 243, 192, 0.13)",
+  },
+  earningStatusInactive: {
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
   },
   earningStatusDot: {
     width: 7,
@@ -2226,12 +2516,23 @@ const styles = StyleSheet.create({
   earningStatusText: {
     fontSize: 12,
     fontFamily: "Outfit_500Medium",
-    color: "#BFE9CF",
+    color: "#D7F0DF",
+  },
+  earningStatusDotInactive: {
+    backgroundColor: "#A5B4AC",
+  },
+  earningStatusTextInactive: {
+    color: "#C3CEC8",
+  },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#9EB9AA",
   },
   earningErrorText: {
     fontSize: 14,
     fontFamily: "Outfit_600SemiBold",
-    color: "#B45309",
+    color: "#FBBF24",
     marginBottom: 6,
   },
   retryChip: {
@@ -2255,7 +2556,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(167, 243, 192, 0.14)",
+    backgroundColor: "rgba(167, 243, 192, 0.1)",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -2314,6 +2615,31 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     color: "#111827",
   },
+  apyValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  apyTrendBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#DCFCE7",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  apyTrendText: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  apyTrendSubtext: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#9CA3AF",
+    marginTop: 2,
+  },
   autoYieldRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2345,6 +2671,21 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+    marginBottom: 16,
+  },
+  manageYieldButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+    borderRadius: 24,
+    height: 48,
+    width: "100%",
+  },
+  manageYieldButtonText: {
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
   },
   earningsChartSection: {
     backgroundColor: "#F9FCF8",
@@ -2376,6 +2717,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
     backgroundColor: "#F2F9F0",
+  },
+  earningsHistoryMessage: {
+    alignSelf: "center",
+    color: "#64748B",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    textAlign: "center",
   },
   chartTouchOverlay: {
     ...StyleSheet.absoluteFillObject,

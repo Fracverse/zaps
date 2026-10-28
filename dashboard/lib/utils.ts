@@ -43,7 +43,7 @@ export function statusColor(status: string) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Stellar Address Formatting & Clipboard Utilities (#796)
+// Stellar Address Formatting & Clipboard Utilities (#796 / #1044)
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**

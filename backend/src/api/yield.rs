@@ -501,15 +501,31 @@ impl From<&str> for YieldTransactionType {
 pub struct HistoryQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Free-text search across tx hash, address, and asset.
+    pub q: Option<String>,
+    /// Filter by action type (e.g. `DEPOSIT`, `WITHDRAW`, `EARNED`).
+    pub action: Option<String>,
+    /// Inclusive lower bound on `created_at` (RFC 3339 or `YYYY-MM-DD`).
+    pub from: Option<String>,
+    /// Inclusive upper bound on `created_at` (RFC 3339 or `YYYY-MM-DD`).
+    pub to: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct YieldHistoryItem {
     pub id: String,
     pub tx_hash: String,
+    /// Stellar account address that performed the action.
+    pub address: String,
     #[serde(rename = "type")]
     pub tx_type: YieldTransactionType,
     pub amount: i64,
+    /// Asset code / identifier for the moved volume (e.g. `USDC`).
+    pub asset: String,
+    /// Ledger height the transaction was included in, when indexed.
+    pub block_height: Option<i64>,
+    /// Network fee paid, in stroops, when indexed.
+    pub fee: Option<i64>,
     pub created_at: String,
 }
 
@@ -521,6 +537,28 @@ pub struct YieldHistoryResponse {
     pub total: i64,
 }
 
+/// Parse a `from`/`to` bound into a naive UTC timestamp.
+///
+/// Accepts a full RFC 3339 timestamp or a bare `YYYY-MM-DD` date. A bare date
+/// used as `to` is pushed to the end of that day so the range is inclusive of
+/// the whole day rather than just its midnight.
+fn parse_history_bound(raw: &str, end_of_day: bool) -> Option<chrono::NaiveDateTime> {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.naive_utc());
+    }
+
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let time = if end_of_day {
+            chrono::NaiveTime::from_hms_opt(23, 59, 59)?
+        } else {
+            chrono::NaiveTime::from_hms_opt(0, 0, 0)?
+        };
+        return Some(chrono::NaiveDateTime::new(date, time));
+    }
+
+    None
+}
+
 pub async fn get_history(
     State(pool): State<sqlx::PgPool>,
     auth: AuthUser,
@@ -529,33 +567,87 @@ pub async fn get_history(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let total: i64 =
-        match sqlx::query_scalar("SELECT COUNT(*) FROM yield_transactions WHERE user_id = $1")
-            .bind(auth.id)
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!("yield history count error: {:?}", e);
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
-                )
-                    .into_response();
-            }
-        };
+    // Normalise the free-text search into a LIKE pattern; `None` disables it.
+    let search = params
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{}%", s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
 
-    let rows = match sqlx::query(
+    // Normalise the action filter to the stored upper-case form.
+    let action = params
+        .action
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_uppercase());
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| parse_history_bound(s, false));
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| parse_history_bound(s, true));
+
+    let total: i64 = match sqlx::query_scalar(
         r#"
-        SELECT id, tx_hash, type, amount, created_at
+        SELECT COUNT(*)
         FROM yield_transactions
         WHERE user_id = $1
-        ORDER BY created_at DESC
-        LIMIT $2 OFFSET $3
+          AND ($2::text IS NULL OR type = $2)
+          AND ($3::text IS NULL OR (
+                tx_hash ILIKE $3
+             OR address ILIKE $3
+             OR asset ILIKE $3
+          ))
+          AND ($4::timestamp IS NULL OR created_at >= $4)
+          AND ($5::timestamp IS NULL OR created_at <= $5)
         "#,
     )
     .bind(auth.id)
+    .bind(&action)
+    .bind(&search)
+    .bind(from)
+    .bind(to)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!("yield history count error: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to count yield transactions" })),
+            )
+                .into_response();
+        }
+    };
+
+    let rows = match sqlx::query(
+        r#"
+        SELECT id, tx_hash, address, type, amount, asset, block_height, fee, created_at
+        FROM yield_transactions
+        WHERE user_id = $1
+          AND ($2::text IS NULL OR type = $2)
+          AND ($3::text IS NULL OR (
+                tx_hash ILIKE $3
+             OR address ILIKE $3
+             OR asset ILIKE $3
+          ))
+          AND ($4::timestamp IS NULL OR created_at >= $4)
+          AND ($5::timestamp IS NULL OR created_at <= $5)
+        ORDER BY created_at DESC
+        LIMIT $6 OFFSET $7
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&action)
+    .bind(&search)
+    .bind(from)
+    .bind(to)
     .bind(limit)
     .bind(offset)
     .fetch_all(&pool)
@@ -581,8 +673,12 @@ pub async fn get_history(
             YieldHistoryItem {
                 id: id.to_string(),
                 tx_hash: r.get("tx_hash"),
+                address: r.try_get("address").unwrap_or_default(),
                 tx_type: raw_type.as_str().into(),
                 amount: r.get("amount"),
+                asset: r.try_get("asset").unwrap_or_default(),
+                block_height: r.try_get("block_height").ok(),
+                fee: r.try_get("fee").ok(),
                 created_at: created_at.to_string(),
             }
         })
@@ -1711,5 +1807,30 @@ mod tests {
         assert_eq!(fee_to_u32(u32::MAX as u64 + 1), u32::MAX);
         assert_eq!(fee_to_u32(u64::MAX), u32::MAX);
         assert_ne!(fee_to_u32(u32::MAX as u64 + 1), 0);
+    }
+
+    // ── #1063: audit-list history filters ──────────────────────────────────
+
+    #[test]
+    fn history_bound_accepts_rfc3339() {
+        let parsed = parse_history_bound("2024-05-01T12:30:00Z", false).unwrap();
+        assert_eq!(parsed.to_string(), "2024-05-01 12:30:00");
+    }
+
+    #[test]
+    fn history_bound_accepts_a_bare_date() {
+        let start = parse_history_bound("2024-05-01", false).unwrap();
+        assert_eq!(start.to_string(), "2024-05-01 00:00:00");
+    }
+
+    #[test]
+    fn history_bound_end_of_day_covers_the_whole_day() {
+        let end = parse_history_bound("2024-05-01", true).unwrap();
+        assert_eq!(end.to_string(), "2024-05-01 23:59:59");
+    }
+
+    #[test]
+    fn history_bound_rejects_garbage() {
+        assert!(parse_history_bound("not-a-date", false).is_none());
     }
 }

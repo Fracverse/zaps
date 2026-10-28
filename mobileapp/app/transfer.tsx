@@ -21,6 +21,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, Stack } from "expo-router";
+import * as StellarSdk from "@stellar/stellar-sdk";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
@@ -44,7 +45,11 @@ import {
   StellarWalletState,
   type TransactionFeeEstimate,
 } from "../src/services/stellarWallet";
-import { getRecentRecipients, saveRecentRecipient } from "../src/services/api";
+import {
+  getCachedRecentRecipientsSync,
+  getRecentRecipients,
+  saveRecentRecipient,
+} from "../src/services/api";
 import { isFederatedAddress } from "../src/utils/sep0007";
 // #580 — Biometric Verification Overlay
 import { authenticateWithBiometrics } from "./biometric";
@@ -200,7 +205,19 @@ const API_BASE =
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_API_URL) ||
   "http://localhost:8080";
 
-const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any) => {
+interface SuccessAnimationProps {
+  amount: string;
+  recipient: string;
+  selectedUser: ZapsUser | null;
+  description: string;
+}
+
+export const SuccessAnimation = ({
+  amount,
+  recipient,
+  selectedUser,
+  description,
+}: SuccessAnimationProps) => {
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideRecipient = useRef(new Animated.Value(60)).current;
@@ -221,7 +238,7 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         duration: 300,
         useNativeDriver: true,
       }),
-      Animated.parallel([
+      Animated.stagger(120, [
         Animated.timing(slideRecipient, {
           toValue: 0,
           duration: 400,
@@ -234,7 +251,7 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         }),
       ]),
     ]).start();
-  }, []);
+  }, [fadeAnim, scaleAnim, slideDetails, slideRecipient]);
 
   const displayUser = selectedUser || {
     username: recipient,
@@ -260,7 +277,13 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         </View>
       </Animated.View>
 
-      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideRecipient }], opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.detailsCard,
+          { transform: [{ translateY: slideRecipient }], opacity: fadeAnim },
+        ]}
+        testID="success-recipient-card"
+      >
         <View style={styles.detailsRow}>
           <View style={styles.detailsAvatar}>
             <Text style={styles.detailsAvatarText}>
@@ -269,7 +292,12 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
           </View>
           <View style={styles.detailsInfo}>
             <Text style={styles.detailsLabel}>Recipient</Text>
-            <Text style={styles.detailsValue}>{displayUser.username}</Text>
+            <Text
+              style={[styles.detailsValue, styles.successUsername]}
+              testID="success-recipient-username"
+            >
+              @{displayUser.username}
+            </Text>
           </View>
           {displayUser.isVerified && (
             <Ionicons name="checkmark-circle" size={20} color="#1A4B4A" />
@@ -277,14 +305,20 @@ const SuccessAnimation = ({ amount, recipient, selectedUser, description }: any)
         </View>
       </Animated.View>
 
-      <Animated.View style={[styles.detailsCard, { transform: [{ translateY: slideDetails }], opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.detailsCard,
+          { transform: [{ translateY: slideDetails }], opacity: fadeAnim },
+        ]}
+        testID="success-transaction-card"
+      >
         <View style={styles.detailsRow}>
           <Ionicons name="information-circle-outline" size={20} color="#777" />
           <View style={styles.detailsInfo}>
             <Text style={styles.detailsLabel}>Note</Text>
             <Text style={styles.detailsValue}>{description || "Sent money"}</Text>
           </View>
-          <View style={styles.statusBadge}>
+          <View style={styles.statusBadge} testID="success-transaction-status">
             <Text style={styles.statusBadgeText}>Completed</Text>
           </View>
         </View>
@@ -316,21 +350,32 @@ function TransferScreen() {
 
   // Recipient search state
   const [searchResults, setSearchResults] = useState<ZapsUser[]>([]);
-  const [recentRecipients, setRecentRecipients] = useState<string[]>([]);
+  const [recentRecipients, setRecentRecipients] = useState<string[]>(() =>
+    getCachedRecentRecipientsSync()
+  );
   const [searching, setSearching] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedUser, setSelectedUser] = useState<ZapsUser | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Registry check state (not registered / blacklisted warnings)
-  type UsernameStatus = "idle" | "checking" | "registered" | "not_registered" | "blacklisted";
+  type UsernameStatus =
+    | "idle"
+    | "checking"
+    | "registered"
+    | "not_registered"
+    | "blacklisted"
+    | "invalid"
+    | "error";
   const [usernameStatus, setUsernameStatus] = useState<UsernameStatus>("idle");
+  const usernameCheckId = useRef(0);
 
   // #686 — Stellar Federation resolution state
   type FederationStatus = "idle" | "resolving" | "resolved" | "error";
   const [federationStatus, setFederationStatus] = useState<FederationStatus>("idle");
   const [federationError, setFederationError] = useState<string | null>(null);
   const federationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const federationResolvedRecipient = useRef<string | null>(null);
 
   // Batch upload state
   const [batchFile, setBatchFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
@@ -380,35 +425,65 @@ function TransferScreen() {
    *   - "checking"       → while the request is in flight
    *   - "idle"           → when no check is needed
    */
-  const checkUsernameRegistry = useCallback(async (username: string) => {
-    if (!username || username.length < 2) {
-      setUsernameStatus("idle");
+  const checkUsernameRegistry = useCallback(async (
+    username: string,
+    checkId = ++usernameCheckId.current
+  ) => {
+    const normalizedUsername = username.trim().replace(/^@/, "");
+    if (normalizedUsername.length < 3) {
+      if (checkId === usernameCheckId.current) {
+        setUsernameStatus(normalizedUsername ? "invalid" : "idle");
+      }
       return;
     }
-    setUsernameStatus("checking");
     try {
       const res = await fetch(
-        `${API_BASE}/api/users/resolve/${encodeURIComponent(username)}`
+        `${API_BASE}/api/users/resolve/${encodeURIComponent(normalizedUsername)}`
       );
+      if (checkId !== usernameCheckId.current) return;
       if (res.status === 404) {
         setUsernameStatus("not_registered");
         return;
       }
-      if (!res.ok) {
-        // Non-404 error — treat as unknown, keep current status
-        setUsernameStatus("idle");
+      if (res.status === 400) {
+        setUsernameStatus("invalid");
         return;
       }
-      const body: { username: string; address: string; is_blacklisted?: boolean } =
-        await res.json();
+      if (!res.ok) {
+        setUsernameStatus("error");
+        return;
+      }
+      const body: {
+        username: string;
+        address: string;
+        is_blacklisted?: boolean;
+        display_name?: string;
+        name?: string;
+        avatar_url?: string;
+        is_verified?: boolean;
+      } = await res.json();
+      if (checkId !== usernameCheckId.current) return;
+      if (!body.username || !body.address) {
+        setUsernameStatus("error");
+        return;
+      }
       if (body.is_blacklisted) {
         setUsernameStatus("blacklisted");
       } else {
         setUsernameStatus("registered");
+        setSelectedUser((prev: ZapsUser | null) => ({
+          username: body.username,
+          address: body.address,
+          avatar_url: body.avatar_url ?? prev?.avatar_url ?? null,
+          name: body.display_name ?? body.name ?? prev?.name ?? null,
+          display_name: body.display_name ?? prev?.display_name ?? null,
+          isVerified: body.is_verified ?? prev?.isVerified ?? false,
+        }));
       }
     } catch {
-      // Network error — don't block the user from proceeding
-      setUsernameStatus("idle");
+      if (checkId === usernameCheckId.current) {
+        setUsernameStatus("error");
+      }
     }
   }, []);
 
@@ -460,6 +535,7 @@ function TransferScreen() {
       }
 
       setRecipient(publicKey);
+      federationResolvedRecipient.current = publicKey;
       setFederationStatus("resolved");
       setUsernameStatus("registered");
     } catch (err) {
@@ -474,23 +550,36 @@ function TransferScreen() {
 
   // Debounce search while user types (ZAPS mode only) + registry check + federation
   useEffect(() => {
-    if (transferType !== "ZAPS") return;
+    const checkId = ++usernameCheckId.current;
+    if (transferType !== "ZAPS") {
+      setUsernameStatus("idle");
+      return () => {
+        usernameCheckId.current += 1;
+      };
+    }
     if (searchTimer.current) clearTimeout(searchTimer.current);
     if (federationTimer.current) clearTimeout(federationTimer.current);
 
-    // Reset registry status when the user is actively typing
-    if (recipient.length >= 2) {
-      setUsernameStatus("idle");
-    }
+    const normalizedUsername = recipient.trim().replace(/^@/, "");
+    const isResolvedFederationRecipient =
+      recipient === federationResolvedRecipient.current;
+    const isFederationAddress = isFederatedAddress(recipient);
+    setUsernameStatus(
+      isFederationAddress || isResolvedFederationRecipient
+        ? "idle"
+        : normalizedUsername.length >= 3
+          ? "checking"
+          : normalizedUsername
+            ? "invalid"
+            : "idle"
+    );
 
     // #686 — Trigger federation resolution for federated addresses
-    if (isFederatedAddress(recipient)) {
-      setFederationStatus("idle");
-      setFederationError(null);
+    if (isFederationAddress) {
       federationTimer.current = setTimeout(() => {
         resolveFederationAddress(recipient);
       }, 300);
-    } else {
+    } else if (!isResolvedFederationRecipient) {
       setFederationStatus("idle");
       setFederationError(null);
     }
@@ -498,40 +587,58 @@ function TransferScreen() {
     searchTimer.current = setTimeout(() => {
       searchUsers(recipient);
       // After search settles, check the exact username against the registry
-      if (recipient.length >= 3 && !isFederatedAddress(recipient)) {
-        checkUsernameRegistry(recipient);
-      } else {
-        setUsernameStatus("idle");
+      if (
+        normalizedUsername.length >= 3 &&
+        !isFederationAddress &&
+        !isResolvedFederationRecipient
+      ) {
+        void checkUsernameRegistry(recipient, checkId);
+      } else if (!isFederationAddress && !isResolvedFederationRecipient) {
+        setUsernameStatus(normalizedUsername ? "invalid" : "idle");
       }
-    }, 350);
+    }, 300);
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
       if (federationTimer.current) clearTimeout(federationTimer.current);
+      usernameCheckId.current += 1;
     };
   }, [recipient, transferType, searchUsers, checkUsernameRegistry, resolveFederationAddress]);
 
   const handleSelectUser = useCallback((user: ZapsUser) => {
+    federationResolvedRecipient.current = null;
+    usernameCheckId.current += 1;
     setRecipient(user.username);
     setSelectedUser(user);
     setSearchResults([]);
     setShowDropdown(false);
-    // User selected from search results → definitely registered
-    setUsernameStatus("registered");
-  }, []);
+    setUsernameStatus("checking");
+
+    if (recipient.trim().replace(/^@/, "") === user.username) {
+      void checkUsernameRegistry(user.username);
+    }
+  }, [checkUsernameRegistry, recipient]);
 
   // #699 — Select a matched contact as the recipient
   const handleSelectContact = useCallback((contact: MatchedContact) => {
+    federationResolvedRecipient.current = null;
+    usernameCheckId.current += 1;
     setRecipient(contact.username);
     setSelectedUser({
       username: contact.username,
+      name: contact.contactName,
+      display_name: contact.contactName,
       address: contact.address,
       avatar_url: contact.avatarUrl ?? null,
       isVerified: false,
     } as ZapsUser);
     setSearchResults([]);
     setShowDropdown(false);
-    setUsernameStatus("registered");
-  }, []);
+    setUsernameStatus("checking");
+
+    if (recipient.trim().replace(/^@/, "") === contact.username) {
+      void checkUsernameRegistry(contact.username);
+    }
+  }, [checkUsernameRegistry, recipient]);
 
   // #699 — Load matched contacts on first ZAPS-mode step (lazy load, once)
   const loadContacts = useCallback(async () => {
@@ -566,9 +673,18 @@ function TransferScreen() {
   }, []);
 
   const token = TOKENS.find((t) => t.id === selectedToken) || TOKENS[0];
+  const recipientValidationPassed =
+    usernameStatus === "registered" ||
+    (federationStatus === "resolved" &&
+      recipient === federationResolvedRecipient.current);
 
   useEffect(() => {
-    if (step !== 3 || !walletState?.isConnected || !recipient || !amount) {
+    if (
+      step !== 3 ||
+      !walletState?.isConnected ||
+      !paymentDestination ||
+      !amount
+    ) {
       setTransactionFeeEstimate(null);
       return;
     }
@@ -581,7 +697,7 @@ function TransferScreen() {
           token.symbol !== "XLM" ? STELLAR_ASSET_ISSUERS[token.symbol] : undefined;
         const txXdr = await buildPaymentEnvelope(
           walletState.publicKey,
-          recipient,
+          paymentDestination,
           amount,
           token.symbol,
           assetIssuer,
@@ -601,7 +717,7 @@ function TransferScreen() {
     return () => {
       isMounted = false;
     };
-  }, [step, walletState, recipient, amount, token.symbol, description]);
+  }, [step, walletState, paymentDestination, amount, token.symbol, description]);
 
   useEffect(() => {
     (async () => {
@@ -658,7 +774,76 @@ function TransferScreen() {
     []
   );
 
+  const processConfirmedTransfer = async () => {
+    if (!paymentDestination) {
+      Alert.alert(
+        "Recipient Not Resolved",
+        "Select a Zaps recipient or enter a valid Stellar public key before sending."
+      );
+      return;
+    }
+
+    // Biometric Verification Overlay
+    // Gate the payment submission behind biometric / passcode authentication.
+    // The transfer is blocked unless the user successfully authenticates.
+    const biometricResult = await authenticateWithBiometrics(
+      "Verify your identity to confirm the transfer"
+    );
+
+    if (!biometricResult.success) {
+      if (biometricResult.reason === "cancelled") {
+        return;
+      }
+      Alert.alert(
+        "Authentication Required",
+        "You must verify your identity before sending a payment. Please try again.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const assetIssuer =
+        token.symbol !== "XLM"
+          ? STELLAR_ASSET_ISSUERS[token.symbol]
+          : undefined;
+      const result = await submitPayment(
+        paymentDestination,
+        amount,
+        walletState!.source!,
+        walletState!.publicKey,
+        token.symbol,
+        assetIssuer,
+        description || undefined
+      );
+      const stored = await AsyncStorage.getItem("pending_transfers");
+      const list = stored ? JSON.parse(stored) : [];
+      list.unshift({
+        recipient,
+        amount,
+        description: description || "Sent money",
+        visibility,
+        token: token.symbol,
+        hash: result.hash,
+      });
+      await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
+      await saveRecentRecipient(recipient);
+    } catch (e) {
+      Alert.alert("Transfer Failed", (e as Error).message);
+      setSubmitting(false);
+      return;
+    }
+    setSubmitting(false);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setStep(4);
+  };
+
   const handleNext = async () => {
+    if (step === 1 && transferType === "ZAPS" && !recipientValidationPassed) {
+      return;
+    }
+
     if (step === 0 && transferType === "BATCH") {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep(1);
@@ -676,61 +861,27 @@ function TransferScreen() {
     }
 
     if (step === 3) {
-      // #580 — Biometric Verification Overlay
-      // Gate the payment submission behind biometric / passcode authentication.
-      // The transfer is blocked unless the user successfully authenticates.
-      const biometricResult = await authenticateWithBiometrics(
-        "Verify your identity to confirm the transfer"
+      const recipientDisplayName =
+        selectedUser?.name ||
+        selectedUser?.display_name ||
+        selectedUser?.real_name;
+      const recipientLabel = recipientDisplayName
+        ? `${recipientDisplayName} (@${recipient})`
+        : recipient;
+
+      Alert.alert(
+        "Confirm Transfer",
+        `Are you sure you want to send ${amount} ${token.symbol} to ${recipientLabel}?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Confirm",
+            onPress: () => {
+              void processConfirmedTransfer();
+            },
+          },
+        ]
       );
-
-      if (!biometricResult.success) {
-        if (biometricResult.reason === "cancelled") {
-          // User deliberately dismissed the prompt — do nothing, stay on step 3.
-          return;
-        }
-        Alert.alert(
-          "Authentication Required",
-          "You must verify your identity before sending a payment. Please try again.",
-          [{ text: "OK" }]
-        );
-        return;
-      }
-
-      setSubmitting(true);
-      try {
-        const assetIssuer =
-          token.symbol !== "XLM"
-            ? STELLAR_ASSET_ISSUERS[token.symbol]
-            : undefined;
-        const result = await submitPayment(
-          recipient,
-          amount,
-          walletState!.source!,
-          walletState!.publicKey,
-          token.symbol,
-          assetIssuer,
-          description || undefined
-        );
-        const stored = await AsyncStorage.getItem("pending_transfers");
-        const list = stored ? JSON.parse(stored) : [];
-        list.unshift({
-          recipient,
-          amount,
-          description: description || "Sent money",
-          visibility,
-          token: token.symbol,
-          hash: result.hash,
-        });
-        await AsyncStorage.setItem("pending_transfers", JSON.stringify(list));
-        await saveRecentRecipient(recipient);
-      } catch (e) {
-        Alert.alert("Transfer Failed", (e as Error).message);
-        setSubmitting(false);
-        return;
-      }
-      setSubmitting(false);
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setStep(4);
       return;
     }
 
@@ -770,9 +921,19 @@ function TransferScreen() {
 
   const handleKeypadPress = (value: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setAmount((prev: string) =>
-      value === "backspace" ? prev.slice(0, -1) : prev + value
-    );
+    setAmount((prev: string) => {
+      if (value === "backspace") return prev.slice(0, -1);
+
+      if (value === ".") {
+        if (prev.includes(".")) return prev;
+        return prev ? `${prev}.` : "0.";
+      }
+
+      const decimalIndex = prev.indexOf(".");
+      if (decimalIndex >= 0 && prev.length - decimalIndex > 7) return prev;
+      if (prev === "0") return value;
+      return `${prev}${value}`;
+    });
   };
 
   const renderStep0 = () => (
@@ -812,30 +973,39 @@ function TransferScreen() {
       <View style={styles.inputsSection}>
         {/* Recipient input + live-search dropdown (ZAPS mode only) */}
         <View style={styles.recipientSearchWrapper}>
-          <Input
-            placeholder={
-              transferType === "ZAPS"
-                ? "Recipient ZAPS ID (e.g. tolu.zaps)"
-                : "Wallet Address"
-            }
-            value={recipient}
-            onChangeText={(text: string) => {
-              setRecipient(text);
-              setSelectedUser(null);
-              // Reset registry warning when user edits the field
-              setUsernameStatus("idle");
-              // #686 — Reset federation status when user edits the field
-              setFederationStatus("idle");
-              setFederationError(null);
-              if (transferType !== "ZAPS") return;
-              if (text.length < 2) {
-                setShowDropdown(false);
-                setSearchResults([]);
+          <View style={styles.searchInputRow}>
+            <Ionicons
+              name="search"
+              size={18}
+              color="#9CA3AF"
+              style={styles.searchInputIcon}
+            />
+            <Input
+              placeholder={
+                transferType === "ZAPS"
+                  ? "Recipient ZAPS ID (e.g. tolu.zaps)"
+                  : "Wallet Address"
               }
-            }}
-            autoCapitalize="none"
-            style={styles.transferInput}
-          />
+              value={recipient}
+              onChangeText={(text: string) => {
+                federationResolvedRecipient.current = null;
+                setRecipient(text);
+                setSelectedUser(null);
+                // Reset registry warning when user edits the field
+                setUsernameStatus("idle");
+                // #686 — Reset federation status when user edits the field
+                setFederationStatus("idle");
+                setFederationError(null);
+                if (transferType !== "ZAPS") return;
+                if (text.length < 2) {
+                  setShowDropdown(false);
+                  setSearchResults([]);
+                }
+              }}
+              autoCapitalize="none"
+              style={[styles.transferInput, styles.searchInputWithIcon]}
+            />
+          </View>
           {/* Searching indicator */}
           {transferType === "ZAPS" && searching && (
             <ActivityIndicator
@@ -925,7 +1095,7 @@ function TransferScreen() {
                     onPress={() => {
                       setRecipient(username);
                       setShowDropdown(false);
-                      // Check registry for recent-contact selection
+                      setUsernameStatus("checking");
                       checkUsernameRegistry(username);
                     }}
                     activeOpacity={0.75}
@@ -1002,7 +1172,7 @@ function TransferScreen() {
           )}
 
         {/* ── Registry status warning banners (ZAPS mode only) ──────── */}
-        {transferType === "ZAPS" && recipient.length >= 3 && (
+        {transferType === "ZAPS" && recipient.trim().length > 0 && (
           <>
             {usernameStatus === "checking" && (
               <View style={styles.warningBanner} testID="warning-checking">
@@ -1037,6 +1207,30 @@ function TransferScreen() {
               </View>
             )}
 
+            {usernameStatus === "invalid" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerDanger]}
+                testID="warning-invalid-username"
+              >
+                <Ionicons name="alert-circle" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  Enter a valid username using 3–15 lowercase letters or numbers.
+                </Text>
+              </View>
+            )}
+
+            {usernameStatus === "error" && (
+              <View
+                style={[styles.warningBanner, styles.warningBannerDanger]}
+                testID="warning-username-check-failed"
+              >
+                <Ionicons name="alert-circle" size={20} color="#DC2626" />
+                <Text style={styles.warningBannerTextDanger}>
+                  Unable to verify this username. Check your connection and try again.
+                </Text>
+              </View>
+            )}
+
             {usernameStatus === "registered" && (
               <View
                 style={[styles.warningBanner, styles.warningBannerSuccess]}
@@ -1055,9 +1249,14 @@ function TransferScreen() {
         <TouchableOpacity
           activeOpacity={1}
           style={[styles.transferInput, styles.amountDisplayContainer]}
+          testID="transfer-amount-display"
         >
-          <Text style={styles.nairaSymbol}>₦</Text>
-          <Text style={styles.amountText}>{amount || "0"}</Text>
+          <Text style={styles.nairaSymbol} testID="transfer-amount-currency">
+            ₦
+          </Text>
+          <Text style={styles.amountText} testID="transfer-amount-value">
+            {amount || "0"}
+          </Text>
         </TouchableOpacity>
 
         {/* Custom Numeric Keypad */}
@@ -1068,6 +1267,7 @@ function TransferScreen() {
                 key={num}
                 style={styles.keypadButton}
                 onPress={() => handleKeypadPress(num)}
+                testID={`keypad-key-${num}`}
               >
                 <Text style={styles.keypadButtonText}>{num}</Text>
               </TouchableOpacity>
@@ -1099,18 +1299,21 @@ function TransferScreen() {
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress(".")}
+              testID="keypad-decimal"
             >
               <Text style={styles.keypadButtonText}>.</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress("0")}
+              testID="keypad-key-0"
             >
               <Text style={styles.keypadButtonText}>0</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.keypadButton}
               onPress={() => handleKeypadPress("backspace")}
+              testID="keypad-backspace"
             >
               <Text style={styles.keypadButtonText}>⌫</Text>
             </TouchableOpacity>
@@ -1677,9 +1880,7 @@ function TransferScreen() {
                   (!recipient ||
                     !amount ||
                     (transferType === "ZAPS" &&
-                      recipient.length >= 3 &&
-                      (usernameStatus === "not_registered" ||
-                        usernameStatus === "blacklisted")) ||
+                      !recipientValidationPassed) ||
                     (federationStatus === "resolving" ||
                       federationStatus === "error"))) ||
                 (step === 3 && submitting) ||
@@ -2083,6 +2284,19 @@ const styles = StyleSheet.create({
     position: "relative",
     zIndex: 10,
   },
+  searchInputRow: {
+    position: "relative",
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchInputIcon: {
+    position: "absolute",
+    left: 14,
+    zIndex: 1,
+  },
+  searchInputWithIcon: {
+    paddingLeft: 40,
+  },
   searchingIndicator: {
     position: "absolute",
     right: 16,
@@ -2242,6 +2456,10 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_600SemiBold",
     color: COLORS.black,
     marginTop: 2,
+  },
+  successUsername: {
+    fontSize: 17,
+    color: "#1A4B4A",
   },
   statusBadge: {
     backgroundColor: "#E8F5E9",
