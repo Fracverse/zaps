@@ -21,6 +21,7 @@ import {
 import { useSuperAdmin } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import EmergencyPauseControl from "@/components/EmergencyPauseControl";
+import { reconcileAuditRows, type YieldTx } from "@/lib/yield-audit";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -36,20 +37,7 @@ export interface VaultParams {
   adminAddress: string;
 }
 
-export interface YieldTx {
-  id: string;
-  txHash: string;
-  timestamp: string;
-  /** Full Stellar public key of the address involved. */
-  address: string;
-  action: "deposit" | "withdraw" | "yield_accrual" | "config";
-  tokenVolume: number;
-  asset: string;
-  blockHeight?: number;
-  fee?: number;
-  yieldIndex?: number;
-  details?: string;
-}
+export type { YieldTx };
 
 type SortKey = keyof Pick<YieldTx, "timestamp" | "address" | "action" | "tokenVolume">;
 type ActionFilter = YieldTx["action"] | "all";
@@ -148,108 +136,6 @@ function validateVaultParams(p: VaultParams): FormErrors {
 
   return errors;
 }
-
-// ── Mock data (seeded ledger audit records) ────────────────────────────────────
-
-const MOCK_TXS: YieldTx[] = [
-  {
-    id: "1",
-    txHash: "abc123def456789012345678901234567890abcd",
-    timestamp: "2026-06-25T10:00:00Z",
-    address: "GD3XABCDEFGHIJKLMNOPQRSTUVWXYZ12345678ABCD",
-    action: "deposit",
-    tokenVolume: 1000,
-    asset: "USDC",
-    blockHeight: 48231902,
-    fee: 0.00001,
-    yieldIndex: 1.04285012,
-  },
-  {
-    id: "2",
-    txHash: "bcd234efg5678901234567890123456789012345",
-    timestamp: "2026-06-24T15:30:00Z",
-    address: "GA1YEFGHIJKLMNOPQRSTUVWXYZ1234567890EFGH",
-    action: "yield_accrual",
-    tokenVolume: 25.5,
-    asset: "USDC",
-    blockHeight: 48198344,
-    fee: 0.00001,
-    yieldIndex: 1.04261295,
-  },
-  {
-    id: "3",
-    txHash: "cde345fgh6789012345678901234567890123456",
-    timestamp: "2026-06-23T09:15:00Z",
-    address: "GB2ZIJKLMNOPQRSTUVWXYZ1234567890ABCDIJKL",
-    action: "withdraw",
-    tokenVolume: 500,
-    asset: "USDC",
-    blockHeight: 48164721,
-    fee: 0.00001,
-    yieldIndex: 1.04238714,
-  },
-  {
-    id: "4",
-    txHash: "def456ghi7890123456789012345678901234567",
-    timestamp: "2026-06-22T12:00:00Z",
-    address: "GD3XABCDEFGHIJKLMNOPQRSTUVWXYZ12345678ABCD",
-    action: "config",
-    tokenVolume: 0,
-    asset: "—",
-    blockHeight: 48131050,
-    fee: 0.00001,
-    yieldIndex: 1.04215433,
-    details: "Admin updated APY parameters and yield curve",
-  },
-  {
-    id: "5",
-    txHash: "efg567hij8901234567890123456789012345678",
-    timestamp: "2026-06-21T08:45:00Z",
-    address: "GC4AMNOPQRSTUVWXYZ1234567890ABCDEFGHMNOP",
-    action: "deposit",
-    tokenVolume: 2500,
-    asset: "USDC",
-    blockHeight: 48097389,
-    fee: 0.00001,
-    yieldIndex: 1.04192015,
-  },
-  {
-    id: "6",
-    txHash: "fgh678ijk9012345678901234567890123456789",
-    timestamp: "2026-06-20T17:20:00Z",
-    address: "GE5BOPQRSTUVWXYZ1234567890ABCDEFGHIJOPQR",
-    action: "yield_accrual",
-    tokenVolume: 62.3,
-    asset: "USDC",
-    blockHeight: 48063728,
-    fee: 0.00001,
-    yieldIndex: 1.04168924,
-  },
-  {
-    id: "7",
-    txHash: "ghi789jkl0123456789012345678901234567890",
-    timestamp: "2026-06-19T11:05:00Z",
-    address: "GF6CQRSTUVWXYZ1234567890ABCDEFGHIJKLQRST",
-    action: "withdraw",
-    tokenVolume: 1200,
-    asset: "USDC",
-    blockHeight: 48030067,
-    fee: 0.00001,
-    yieldIndex: 1.04145781,
-  },
-  {
-    id: "8",
-    txHash: "hij890klm1234567890123456789012345678901",
-    timestamp: "2026-06-18T14:55:00Z",
-    address: "GA1YEFGHIJKLMNOPQRSTUVWXYZ1234567890EFGH",
-    action: "deposit",
-    tokenVolume: 750,
-    asset: "USDC",
-    blockHeight: 47996406,
-    fee: 0.00001,
-    yieldIndex: 1.04122509,
-  },
-];
 
 const ACTION_META: Record<
   YieldTx["action"],
@@ -508,14 +394,15 @@ export default function YieldPage() {
         // Record on-chain config audit log event (#1012)
         const newAuditEntry: YieldTx = {
           id: `cfg-${Date.now()}`,
-          txHash: `tx_${Math.random().toString(16).slice(2, 10)}${result.signedTxXdr.slice(0, 20)}`,
+          // Hash and ledger height come from the audit API once the
+          // transaction is indexed — never synthesized here (#1151).
+          txHash: "",
           timestamp: new Date().toISOString(),
           address: wallet.publicKey,
           action: "config",
           tokenVolume: 0,
           asset: "—",
-          blockHeight: 48240000 + Math.floor(Math.random() * 5000),
-          fee: 0.00001,
+          pending: true,
           yieldIndex: updatedMetrics.newYieldIndex,
           details: `APY adjusted to ${params.apy}%, Base Rate: ${params.baseInterestRate}%, Dynamic Rules: ${params.dynamicApyEnabled ? params.dynamicRuleType : "disabled"}`,
         };
@@ -533,7 +420,7 @@ export default function YieldPage() {
   );
 
   // ── Detailed Ledger Audit Log State & Query Integration (#1012) ──────────────
-  const [auditTransactions, setAuditTransactions] = useState<YieldTx[]>(MOCK_TXS);
+  const [auditTransactions, setAuditTransactions] = useState<YieldTx[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState<ActionFilter>("all");
@@ -566,36 +453,13 @@ export default function YieldPage() {
         setTotalFromApi(null);
       }
 
-      if (res && Array.isArray(res.items) && res.items.length > 0) {
-        const mapped: YieldTx[] = res.items.map((item) => ({
-          id: item.id,
-          txHash: item.tx_hash,
-          timestamp: item.created_at,
-          address: item.address || "GD3XABCDEFGHIJKLMNOPQRSTUVWXYZ12345678ABCD",
-          action: (item.type.toLowerCase().includes("deposit")
-            ? "deposit"
-            : item.type.toLowerCase().includes("withdraw")
-            ? "withdraw"
-            : item.type.toLowerCase().includes("config")
-            ? "config"
-            : "yield_accrual") as YieldTx["action"],
-          tokenVolume: Math.abs(item.amount) / 10_000_000,
-          asset: item.asset || "USDC",
-          blockHeight: item.block_height,
-          fee: item.fee ?? 0.00001,
-        }));
-
-        // Merge backend database transactions with local state, preserving recent changes
-        setAuditTransactions((prev) => {
-          const configItems = prev.filter((p) => p.action === "config");
-          const existingIds = new Set(mapped.map((m) => m.id));
-          const uniqueConfigs = configItems.filter((c) => !existingIds.has(c.id));
-          return [...uniqueConfigs, ...mapped];
-        });
-      }
+      setAuditTransactions((prev) =>
+        reconcileAuditRows(prev, Array.isArray(res?.items) ? res.items : []),
+      );
     } catch (err) {
-      // Backend database offline: graceful local query filtering over ledger history
+      // Never keep stale or sample rows on failure — only pending local entries.
       setTotalFromApi(null);
+      setAuditTransactions((prev) => reconcileAuditRows(prev, null));
       setAuditError(
         err instanceof Error ? err.message : "Failed to load audit history from database",
       );
@@ -1555,7 +1419,7 @@ export default function YieldPage() {
               data-testid="audit-error"
               className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700"
             >
-              {auditError} — showing locally cached ledger history.
+              Could not load audit history: {auditError}
             </div>
           )}
 
@@ -1627,7 +1491,11 @@ export default function YieldPage() {
                   ) : paginated.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
-                        No transactions match your filters
+                        {auditTransactions.length === 0
+                          ? auditError
+                            ? "Audit history unavailable"
+                            : "No audit records yet"
+                          : "No transactions match your filters"}
                       </td>
                     </tr>
                   ) : (
@@ -1645,6 +1513,14 @@ export default function YieldPage() {
                               className="flex items-center px-4 py-3 cursor-pointer select-none"
                             >
                               <div className="w-[18%] font-mono text-xs text-slate-500 whitespace-nowrap">
+                                {tx.pending ? (
+                                  <span
+                                    data-testid="audit-pending"
+                                    className="rounded-full bg-amber-50 px-2 py-0.5 font-sans font-semibold text-amber-700 ring-1 ring-amber-200"
+                                  >
+                                    Pending indexing
+                                  </span>
+                                ) : (
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -1661,6 +1537,7 @@ export default function YieldPage() {
                                     {copiedHash === tx.txHash ? "✓" : "⧉"}
                                   </span>
                                 </button>
+                                )}
                               </div>
                               <div className="w-[18%] text-slate-600 whitespace-nowrap">
                                 <div>{format(new Date(tx.timestamp), "MMM d, yyyy")}</div>
@@ -1704,7 +1581,7 @@ export default function YieldPage() {
                                     <p className="font-semibold text-slate-500 uppercase tracking-wide mb-1">
                                       Full Tx Hash
                                     </p>
-                                    <p className="font-mono text-slate-700 break-all">{tx.txHash}</p>
+                                    <p className="font-mono text-slate-700 break-all">{tx.txHash || "Pending"}</p>
                                   </div>
                                   <div>
                                     <p className="font-semibold text-slate-500 uppercase tracking-wide mb-1">
