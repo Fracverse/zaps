@@ -349,10 +349,15 @@ impl StellarClient {
         Err("Invalid RPC response format".into())
     }
 
-    /// Retrieve the latest ledger sequence from Soroban RPC
+    /// Retrieve the latest ledger sequence from Soroban RPC (BE-013, #1145).
+    ///
+    /// Calls `getLatestLedger` through [`Self::send_rpc_request`], so it gets
+    /// the same endpoint failover and backoff as every other RPC call. There
+    /// is no fallback value: any RPC error or malformed response is returned
+    /// as an error rather than a made-up ledger height.
     pub async fn get_latest_ledger(&self) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: Implement BE-013 (Perform RPC query for ledger)
-        Ok(1234567)
+        let response = self.send_rpc_request("getLatestLedger", json!({})).await?;
+        parse_latest_ledger_response(&response).map_err(Into::into)
     }
 
     /// Broadcast a transaction envelope to the network.
@@ -384,6 +389,117 @@ impl StellarClient {
         };
 
         Ok(hash)
+    }
+}
+
+/// Extract and validate `result.sequence` from a `getLatestLedger` JSON-RPC
+/// response (#1145).
+///
+/// Soroban RPC returns `{"result": {"id", "protocolVersion", "sequence"}}`.
+/// The sequence must be a non-negative integer that fits in `u32` (the
+/// return type of [`StellarClient::get_latest_ledger`]); ledger 0 is
+/// rejected because no live network reports it.
+fn parse_latest_ledger_response(response: &Value) -> Result<u32, String> {
+    if let Some(error) = response.get("error") {
+        return Err(format!("RPC error fetching latest ledger: {error}"));
+    }
+
+    let result = response
+        .get("result")
+        .ok_or("Invalid getLatestLedger response: missing `result`")?;
+
+    let sequence = result
+        .get("sequence")
+        .ok_or("Invalid getLatestLedger response: missing `result.sequence`")?;
+
+    let value = sequence.as_u64().ok_or_else(|| {
+        format!("Invalid getLatestLedger response: `sequence` is not a non-negative integer: {sequence}")
+    })?;
+
+    let ledger = u32::try_from(value).map_err(|_| {
+        format!("Invalid getLatestLedger response: `sequence` {value} does not fit in u32")
+    })?;
+
+    if ledger == 0 {
+        return Err("Invalid getLatestLedger response: `sequence` is 0".to_string());
+    }
+
+    Ok(ledger)
+}
+
+#[cfg(test)]
+mod latest_ledger_tests {
+    use super::parse_latest_ledger_response;
+    use serde_json::json;
+
+    #[test]
+    fn parses_valid_sequence() {
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "id": "c73c5eac58a441d4eb733c35253ae85f783e018f7be5ef974258fed067aabb36",
+                "protocolVersion": 22,
+                "sequence": 2539605
+            }
+        });
+        assert_eq!(parse_latest_ledger_response(&response), Ok(2539605));
+    }
+
+    #[test]
+    fn accepts_u32_max() {
+        let response = json!({ "result": { "sequence": u32::MAX } });
+        assert_eq!(parse_latest_ledger_response(&response), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn rpc_error_is_returned() {
+        let response = json!({ "error": { "code": -32601, "message": "method not found" } });
+        let err = parse_latest_ledger_response(&response).unwrap_err();
+        assert!(err.contains("RPC error"), "{err}");
+        assert!(err.contains("method not found"), "{err}");
+    }
+
+    #[test]
+    fn missing_result_is_rejected() {
+        let err = parse_latest_ledger_response(&json!({ "id": 1 })).unwrap_err();
+        assert!(err.contains("missing `result`"), "{err}");
+    }
+
+    #[test]
+    fn missing_sequence_is_rejected() {
+        let response = json!({ "result": { "protocolVersion": 22 } });
+        let err = parse_latest_ledger_response(&response).unwrap_err();
+        assert!(err.contains("missing `result.sequence`"), "{err}");
+    }
+
+    #[test]
+    fn non_integer_sequences_are_rejected() {
+        for bad in [json!("2539605"), json!(-1), json!(12.5), json!(null)] {
+            let response = json!({ "result": { "sequence": bad } });
+            let err = parse_latest_ledger_response(&response).unwrap_err();
+            assert!(err.contains("not a non-negative integer"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn sequence_above_u32_is_rejected() {
+        let response = json!({ "result": { "sequence": u64::from(u32::MAX) + 1 } });
+        let err = parse_latest_ledger_response(&response).unwrap_err();
+        assert!(err.contains("does not fit in u32"), "{err}");
+    }
+
+    #[test]
+    fn zero_sequence_is_rejected() {
+        let response = json!({ "result": { "sequence": 0 } });
+        assert!(parse_latest_ledger_response(&response).is_err());
+    }
+
+    #[test]
+    fn hardcoded_placeholder_is_gone() {
+        // The old stub returned 1234567 regardless of the RPC; an empty
+        // response must now be an error, never a success-shaped default.
+        assert!(parse_latest_ledger_response(&json!({})).is_err());
     }
 }
 
