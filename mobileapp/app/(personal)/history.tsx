@@ -183,7 +183,10 @@ const TransactionRow = React.memo(function TransactionRow({
             {isMassPayout && item.senderName ? item.senderName : label}
           </Text>
           {isMassPayout && (
-            <View style={styles.massPayoutBadge} testID="sdp-disbursement-badge">
+            <View
+              style={styles.massPayoutBadge}
+              testID="sdp-disbursement-badge"
+            >
               <Ionicons name="shield-checkmark" size={10} color="#7C3AED" />
               <Text style={styles.massPayoutBadgeText}>SDP Disbursement</Text>
             </View>
@@ -191,8 +194,14 @@ const TransactionRow = React.memo(function TransactionRow({
         </View>
         {/* Anchor/sender info for SDP disbursements */}
         {isMassPayout && (
-          <Text style={styles.senderAnchor} numberOfLines={1} testID="sender-anchor-info">
-            {item.senderAnchor ? `via ${item.senderAnchor}` : "Stellar Disbursement Platform"}
+          <Text
+            style={styles.senderAnchor}
+            numberOfLines={1}
+            testID="sender-anchor-info"
+          >
+            {item.senderAnchor
+              ? `via ${item.senderAnchor}`
+              : "Stellar Disbursement Platform"}
           </Text>
         )}
         <View style={styles.txMeta}>
@@ -353,6 +362,7 @@ export default function HistoryScreen() {
     refreshing,
     loadingMore,
     error,
+    offlineCache,
     filters,
     total,
     reload,
@@ -710,6 +720,11 @@ export default function HistoryScreen() {
           </Text>
         </View>
       )}
+      {!loading && !error && offlineCache && (
+        <Text style={styles.offlineCacheNotice} testID="offline-cache-notice">
+          Offline — showing saved server history.
+        </Text>
+      )}
 
       {/* Loading skeleton */}
       {loading && (
@@ -825,6 +840,13 @@ const styles = StyleSheet.create({
   clearBtn: { padding: 4 },
   // Summary
   summaryRow: { paddingHorizontal: 20, paddingBottom: 6 },
+  offlineCacheNotice: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    color: "#9A6700",
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+  },
   summaryText: {
     fontSize: 12,
     fontFamily: "Outfit_400Regular",

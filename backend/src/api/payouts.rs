@@ -13,6 +13,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::db::models::PayoutBatch;
+use crate::api::auth_middleware::AuthenticatedUser;
 
 /// HMAC-SHA256 construction used to verify SDP webhook signatures.
 type HmacSha256 = Hmac<Sha256>;
@@ -140,6 +141,7 @@ pub struct BatchRecipientSummary {
 
 pub async fn get_batch_detail(
     State(pool): State<PgPool>,
+    axum::extract::Extension(user): axum::extract::Extension<AuthenticatedUser>,
     axum::extract::Path(batch_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let batch_id: Uuid = match batch_id.parse() {
@@ -161,10 +163,11 @@ pub async fn get_batch_detail(
         SELECT id, status, currency, total_recipients, total_amount,
                succeeded_count, failed_count, created_at, started_at, completed_at
         FROM payout_batches
-        WHERE id = $1
+        WHERE id = $1 AND created_by = $2
         "#,
     )
     .bind(batch_id)
+    .bind(user.id)
     .fetch_optional(&pool)
     .await
     {

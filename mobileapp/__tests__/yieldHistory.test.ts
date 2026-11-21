@@ -1,74 +1,131 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { fetchTransactions } from "../src/services/transactionService";
-import { getYieldTransactions } from "../src/services/api";
+import { apiFetch } from "../src/services/api";
+import {
+  fetchTransactionById,
+  fetchTransactions,
+  invalidateTransactionCache,
+} from "../src/services/transactionService";
 import type { TransactionFilters } from "../src/types/transaction";
 
 jest.mock("@react-native-async-storage/async-storage", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require("@react-native-async-storage/async-storage/jest/async-storage-mock");
 });
+jest.mock("../src/services/api", () => ({
+  apiFetch: jest.fn(),
+  getSessionToken: jest.fn().mockResolvedValue("test-session"),
+}));
 
+const apiFetchMock = apiFetch as jest.Mock;
 const baseFilters: TransactionFilters = {
   type: "all",
   status: "all",
   search: "",
 };
 
-const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-  .toISOString()
-  .slice(0, 10);
+function response(payload: object) {
+  return { ok: true, status: 200, json: async () => payload };
+}
 
-describe("yield transaction history filtering (#692)", () => {
+describe("authenticated transaction history", () => {
   beforeEach(async () => {
+    jest.clearAllMocks();
+    jest.restoreAllMocks();
     await AsyncStorage.clear();
+    await invalidateTransactionCache();
   });
 
-  it("filters the client-side list by asset type", async () => {
-    const page = await fetchTransactions(
-      { ...baseFilters, yieldOnly: true, asset: "USDC" },
-      null
+  it("uses the authenticated server page and preserves filters and cursor", async () => {
+    apiFetchMock.mockResolvedValue(
+      response({
+        items: [
+          {
+            id: "server-tx-1",
+            type: "yield",
+            status: "completed",
+            amount: "12.5",
+            asset: "USDC",
+            address: "yield.zaps",
+            timestamp: "2026-07-20T10:00:00Z",
+            yield_type: "interest",
+          },
+        ],
+        next_cursor: "server-tx-1",
+        total: 4,
+      })
     );
-    expect(page.items.length).toBeGreaterThan(0);
-    expect(page.items.every((tx) => tx.asset.toUpperCase() === "USDC")).toBe(
-      true
-    );
-  });
 
-  it("filters the client-side list by date range", async () => {
     const page = await fetchTransactions(
       {
         ...baseFilters,
         yieldOnly: true,
-        dateFrom: last30Days,
-        dateTo: undefined,
+        asset: "USDC",
+        dateFrom: "2026-07-01",
       },
-      null
+      "prior-cursor"
     );
-    const cutoff = new Date(`${last30Days}T00:00:00`);
-    expect(page.items.every((tx) => new Date(tx.timestamp) >= cutoff)).toBe(
-      true
+
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/transactions/history?")
     );
+    const requestUrl = new URL(apiFetchMock.mock.calls[0][0]);
+    expect(requestUrl.searchParams.get("type")).toBe("yield");
+    expect(requestUrl.searchParams.get("asset")).toBe("USDC");
+    expect(requestUrl.searchParams.get("date_from")).toBe("2026-07-01");
+    expect(requestUrl.searchParams.get("cursor")).toBe("prior-cursor");
+    expect(page.items.map((tx) => tx.id)).toEqual(["server-tx-1"]);
+    expect(page.nextCursor).toBe("server-tx-1");
+    expect(page.offlineCache).toBe(false);
   });
 
-  it("refreshes yield history via api.getYieldTransactions with params", async () => {
-    const items = await getYieldTransactions({
-      asset: "XLM",
-      dateFrom: last30Days,
-    });
-    expect(items.every((tx) => tx.type === "yield")).toBe(true);
-    expect(items.every((tx) => tx.asset.toUpperCase() === "XLM")).toBe(true);
+  it("does not substitute local mock transactions for an empty server page", async () => {
+    apiFetchMock.mockResolvedValue(
+      response({ items: [], next_cursor: null, total: 0 })
+    );
+
+    const page = await fetchTransactions(baseFilters, null);
+
+    expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("yield-only filter never returns non-yield transactions", async () => {
-    const all = await fetchTransactions(baseFilters, null);
-    const nonYield = all.items.filter((tx) => tx.type !== "yield");
-    const page = await fetchTransactions(
-      { ...baseFilters, yieldOnly: true },
-      null
+  it("serves only cached server responses during a network failure", async () => {
+    apiFetchMock.mockResolvedValue(
+      response({
+        items: [
+          {
+            id: "server-cached",
+            type: "received",
+            status: "completed",
+            amount: "3.25",
+            asset: "USDC",
+            address: "GSERVER",
+            timestamp: "2026-07-20T10:00:00Z",
+          },
+        ],
+        next_cursor: null,
+        total: 1,
+      })
     );
-    expect(page.items.every((tx) => tx.type === "yield")).toBe(true);
-    expect(page.items.length).toBeLessThanOrEqual(
-      all.items.length - nonYield.length
+    const now = Date.now();
+    jest.spyOn(Date, "now").mockReturnValue(now);
+    await fetchTransactions(baseFilters, null);
+
+    jest.spyOn(Date, "now").mockReturnValue(now + 31_000);
+    apiFetchMock.mockRejectedValue(new TypeError("Network request failed"));
+    const page = await fetchTransactions(baseFilters, null);
+
+    expect(page.items.map((tx) => tx.id)).toEqual(["server-cached"]);
+    expect(page.offlineCache).toBe(true);
+  });
+
+  it("returns no transaction detail for an unknown server ID", async () => {
+    apiFetchMock.mockResolvedValue({ ok: false, status: 404 });
+
+    await expect(fetchTransactionById("unknown-id")).resolves.toBeNull();
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/transactions/history/unknown-id")
     );
   });
 });

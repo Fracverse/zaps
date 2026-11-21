@@ -2,11 +2,18 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchTransactions } from "../src/services/transactionService";
 import type { TransactionFilters } from "../src/types/transaction";
 import { activeYieldTag, toggleYieldTag } from "../src/utils/yieldFilter";
+import { apiFetch } from "../src/services/api";
 
 jest.mock("@react-native-async-storage/async-storage", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require("@react-native-async-storage/async-storage/jest/async-storage-mock");
 });
+jest.mock("../src/services/api", () => ({
+  apiFetch: jest.fn(),
+  getSessionToken: jest.fn().mockResolvedValue("test-session"),
+}));
+
+const apiFetchMock = apiFetch as jest.Mock;
 
 const baseFilters: TransactionFilters = {
   type: "all",
@@ -53,7 +60,28 @@ describe("yield filter tags (#905)", () => {
 
 describe("yield type filtering in fetchTransactions (#905)", () => {
   beforeEach(async () => {
+    jest.clearAllMocks();
     await AsyncStorage.clear();
+    apiFetchMock.mockImplementation((url: string) => {
+      const yieldType = new URL(url).searchParams.get("yield_type");
+      const items = ["interest", "reward", "apy"]
+        .filter((type) => !yieldType || type === yieldType)
+        .map((type, index) => ({
+          id: `server-yield-${index}`,
+          type: "yield",
+          status: "completed",
+          amount: "1",
+          asset: "USDC",
+          address: "yield.zaps",
+          timestamp: "2026-07-20T10:00:00Z",
+          yield_type: type,
+        }));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ items, next_cursor: null, total: items.length }),
+      });
+    });
   });
 
   it.each(["interest", "reward", "apy"] as const)(

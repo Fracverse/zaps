@@ -3,7 +3,7 @@ import { View, StyleSheet, Pressable, Animated, Easing } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
@@ -13,12 +13,19 @@ export default function SuccessScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{ amount?: string; accepted?: string }>();
+  const amount = Number(params.amount);
+  const accepted = params.accepted === "true" && Number.isFinite(amount) && amount > 0;
 
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const checkAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    if (!accepted) {
+      router.replace("/merchant/withdraw-bank");
+      return;
+    }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     // Success animation sequence
@@ -43,7 +50,7 @@ export default function SuccessScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [scaleAnim, fadeAnim, checkAnim]);
+  }, [accepted, router, scaleAnim, fadeAnim, checkAnim]);
 
   const formatCurrency = (value: number) => {
     return value.toLocaleString("en-US", {
@@ -54,13 +61,15 @@ export default function SuccessScreen() {
 
   const handleDone = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    router.push("/");
+    router.replace("/");
   };
 
   const checkScale = checkAnim.interpolate({
     inputRange: [0, 0.5, 1],
     outputRange: [0, 1.2, 1],
   });
+
+  if (!accepted) return null;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.backgroundRoot }]}>
@@ -99,7 +108,7 @@ export default function SuccessScreen() {
 
             <View style={styles.amountCapsule}>
               <ThemedText style={styles.amountText}>
-                ${formatCurrency(15046.12)}
+                ${formatCurrency(amount)}
               </ThemedText>
             </View>
           </Animated.View>

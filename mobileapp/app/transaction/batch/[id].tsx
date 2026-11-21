@@ -5,8 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
-  FlatList,
   Animated,
   Share,
   Platform,
@@ -14,12 +12,14 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { captureRef } from "react-native-view-shot";
 import { COLORS } from "../../../src/constants/colors";
 import {
   BatchPayoutItem,
   BatchPayoutSummary,
 } from "../../../src/types/batchPayout";
+import { fetchBatchPayoutDetail } from "../../../src/services/batchPayoutService";
 
 type BatchStep = "pending" | "parsing" | "initiating" | "completed";
 
@@ -35,77 +35,6 @@ const BATCH_STEPS: BatchStepMeta[] = [
   { key: "initiating", label: "Initiating", icon: "rocket-outline" },
   { key: "completed", label: "Completed", icon: "checkmark-circle-outline" },
 ];
-
-const MOCK_SUMMARY: BatchPayoutSummary = {
-  id: "BATCH-001",
-  totalAmount: "15000.00",
-  currency: "USDC",
-  itemCount: 48,
-  completedCount: 32,
-  failedCount: 3,
-  createdAt: new Date(Date.now() - 3600000).toISOString(),
-};
-
-const MOCK_ITEMS: BatchPayoutItem[] = Array.from({ length: 48 }, (_, i) => {
-  const statuses: BatchPayoutItem["status"][] = [
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "completed",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "pending",
-    "failed",
-    "failed",
-    "failed",
-  ];
-  return {
-    id: `item-${i + 1}`,
-    recipientName: `Recipient ${i + 1}`,
-    recipientAddress: `GABCDEF${String(i + 1).padStart(5, "0")}123456789`,
-    amount: `${(Math.random() * 500 + 50).toFixed(2)}`,
-    currency: "USDC",
-    status: statuses[i] ?? "pending",
-  };
-});
 
 function StepIndicator({ currentStep }: { currentStep: BatchStep }) {
   const currentIndex = BATCH_STEPS.findIndex((s) => s.key === currentStep);
@@ -297,8 +226,12 @@ function BatchItemRow({ item }: { item: BatchPayoutItem }) {
 export default function BatchDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const [summary] = useState<BatchPayoutSummary>(MOCK_SUMMARY);
-  const [items] = useState<BatchPayoutItem[]>(MOCK_ITEMS);
+  const [summary, setSummary] = useState<BatchPayoutSummary | null>(null);
+  const [items, setItems] = useState<BatchPayoutItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [batchStatus, setBatchStatus] = useState("");
   const [filter, setFilter] = useState<
     "all" | "completed" | "pending" | "failed"
   >("all");
@@ -306,18 +239,60 @@ export default function BatchDetailScreen() {
 
   const receiptRef = useRef<View>(null);
 
+  const loadBatch = async () => {
+    if (!id) {
+      setLoading(false);
+      setNotFound(true);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setNotFound(false);
+    try {
+      const detail = await fetchBatchPayoutDetail(id);
+      if (!detail) {
+        setSummary(null);
+        setItems([]);
+        setNotFound(true);
+      } else {
+        setSummary(detail.summary);
+        setItems(detail.items);
+        setBatchStatus(detail.status);
+      }
+    } catch (e) {
+      setSummary(null);
+      setItems([]);
+      setError(e instanceof Error ? e.message : "Could not load batch details");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadBatch();
+    // Load each route ID independently; no fallback batch data is displayed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const currentStep: BatchStep = useMemo(() => {
-    if (summary.failedCount > 0) return "completed";
-    if (summary.completedCount === summary.itemCount) return "completed";
-    if (summary.completedCount > summary.itemCount / 2) return "initiating";
+    if (!summary) return "pending";
+    const status = batchStatus.toUpperCase();
+    if (
+      ["COMPLETED", "PARTIALLY_FAILED", "FAILED", "CANCELLED"].includes(status)
+    ) {
+      return "completed";
+    }
+    if (status === "PROCESSING") return "initiating";
+    if (status === "PENDING" || summary.itemCount === 0) return "pending";
     if (summary.completedCount > 0) return "parsing";
     return "pending";
-  }, [summary]);
+  }, [summary, batchStatus]);
 
   const progress = useMemo(
     () =>
-      summary.itemCount > 0
-        ? (summary.completedCount / summary.itemCount) * 100
+      summary && summary.itemCount > 0
+        ? ((summary.completedCount + summary.failedCount) / summary.itemCount) *
+          100
         : 0,
     [summary]
   );
@@ -329,10 +304,10 @@ export default function BatchDetailScreen() {
 
   const successRate = useMemo(
     () =>
-      summary.itemCount > 0
+      summary && summary.completedCount + summary.failedCount > 0
         ? (
             (summary.completedCount /
-              (summary.itemCount - summary.failedCount)) *
+              (summary.completedCount + summary.failedCount)) *
             100
           ).toFixed(1)
         : "0",
@@ -347,7 +322,7 @@ export default function BatchDetailScreen() {
    * completed batches and (once wired to real data) P2P transfers.
    */
   const handleExportReceipt = async () => {
-    if (!receiptRef.current) return;
+    if (!receiptRef.current || !summary) return;
     try {
       setExporting(true);
       const uri = await captureRef(receiptRef, {
@@ -379,6 +354,83 @@ export default function BatchDetailScreen() {
     { key: "failed" as const, label: "Failed" },
   ];
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+          >
+            <Ionicons name="arrow-back" size={24} color={COLORS.black} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Batch Details</Text>
+          <View style={styles.exportBtn} />
+        </View>
+        <View style={styles.stateContainer} testID="batch-loading">
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.stateText}>Loading batch details…</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+          >
+            <Ionicons name="arrow-back" size={24} color={COLORS.black} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Batch Details</Text>
+          <View style={styles.exportBtn} />
+        </View>
+        <View style={styles.stateContainer} testID="batch-not-found">
+          <Text style={styles.stateText}>Batch not found.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !summary) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+          >
+            <Ionicons name="arrow-back" size={24} color={COLORS.black} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Batch Details</Text>
+          <View style={styles.exportBtn} />
+        </View>
+        <View style={styles.stateContainer} testID="batch-error">
+          <Text style={styles.stateText}>
+            {error ?? "Could not load batch details."}
+          </Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => void loadBatch()}
+          >
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const statusCounts = items.reduce(
+    (counts, item) => ({ ...counts, [item.status]: counts[item.status] + 1 }),
+    { completed: 0, pending: 0, failed: 0 }
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -390,7 +442,7 @@ export default function BatchDetailScreen() {
         <Text style={styles.headerTitle}>Batch Details</Text>
         <TouchableOpacity
           onPress={handleExportReceipt}
-          disabled={exporting}
+          disabled={exporting || !summary}
           style={styles.exportBtn}
           accessibilityLabel="Export receipt"
         >
@@ -469,15 +521,24 @@ export default function BatchDetailScreen() {
                     filter === f.key && styles.filterChipTextActive,
                   ]}
                 >
-                  {f.label}
+                  {f.label} (
+                  {f.key === "all" ? items.length : statusCounts[f.key]})
                 </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          {filteredItems.map((item) => (
-            <BatchItemRow key={item.id} item={item} />
-          ))}
+          {filteredItems.length ? (
+            filteredItems.map((item) => (
+              <BatchItemRow key={item.id} item={item} />
+            ))
+          ) : (
+            <Text style={styles.emptyItemsText} testID="batch-empty-items">
+              {items.length
+                ? "No recipients match this filter."
+                : "No recipients in this batch."}
+            </Text>
+          )}
         </View>
       </ScrollView>
 
@@ -549,6 +610,33 @@ export default function BatchDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.white },
+  stateContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    padding: 24,
+  },
+  stateText: {
+    color: COLORS.black,
+    fontSize: 15,
+    fontFamily: "Outfit_500Medium",
+    textAlign: "center",
+  },
+  retryBtn: {
+    marginTop: 4,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 100,
+    backgroundColor: COLORS.primary,
+  },
+  retryBtnText: { color: COLORS.white, fontFamily: "Outfit_600SemiBold" },
+  emptyItemsText: {
+    paddingVertical: 20,
+    color: "#999",
+    fontFamily: "Outfit_400Regular",
+    textAlign: "center",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
