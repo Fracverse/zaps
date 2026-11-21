@@ -28,6 +28,8 @@ fn setup() -> Ctx {
     let client = CircleContractClient::new(&env, &contract);
     let (admin, alice, bob) = (Address::generate(&env), Address::generate(&env), Address::generate(&env));
     let token = asset(&env, &[&admin, &alice, &bob]);
+    client.initialize(&admin);
+    client.add_supported_asset(&admin, &token);
     let client: CircleContractClient<'static> = unsafe { core::mem::transmute(client) };
     Ctx { env, client, contract, admin, alice, bob, token }
 }
@@ -69,6 +71,7 @@ fn full_lifecycle_moves_balances_and_emits_events() {
 fn multiple_assets_are_isolated_per_circle() {
     let c = setup();
     let other = asset(&c.env, &[&c.alice]);
+    c.client.add_supported_asset(&c.admin, &other);
     let a = c.client.create_circle(&c.admin, &c.token, &0);
     let b = c.client.create_circle(&c.admin, &other, &0);
     c.client.join(&a, &c.alice);
@@ -80,12 +83,208 @@ fn multiple_assets_are_isolated_per_circle() {
 }
 
 #[test]
+fn supported_assets_are_authorized_queryable_and_used_for_financial_operations() {
+    let c = setup();
+    let other = asset(&c.env, &[&c.alice]);
+
+    assert!(c.client.is_supported_asset(&c.token));
+    assert!(!c.client.is_supported_asset(&other));
+    let configured_assets = c.client.get_supported_assets();
+    assert_eq!(configured_assets.len(), 1);
+    assert!(configured_assets.contains(&c.token));
+    assert_eq!(c.client.try_initialize(&c.alice), Err(Ok(Error::AlreadyInitialized)));
+    assert_eq!(
+        c.client.try_create_circle(&c.admin, &other, &0),
+        Err(Ok(Error::UnsupportedAsset))
+    );
+    assert_eq!(
+        c.client.try_add_supported_asset(&c.alice, &other),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    c.client.add_supported_asset(&c.admin, &other);
+    c.client.add_supported_asset(&c.admin, &other);
+    assert!(c.client.is_supported_asset(&other));
+    assert_eq!(c.client.get_supported_assets().len(), 2);
+
+    let id = c.client.create_circle(&c.admin, &other, &0);
+    c.client.join(&id, &c.alice);
+    let contribution_id = c.client.contribute_with_record(&id, &c.alice, &50);
+    assert_eq!(c.client.get_contribution_record(&contribution_id).asset, other);
+
+    let payout_id = c.client.request_payout(&id, &c.alice, &c.bob, &50);
+    assert_eq!(c.client.get_payout(&id, &payout_id).asset, other);
+    assert_eq!(
+        c.client.try_remove_supported_asset(&c.admin, &other),
+        Err(Ok(Error::AssetInUse))
+    );
+    c.client.approve(&id, &payout_id, &c.admin);
+    c.client.execute(&id, &payout_id);
+    assert_eq!(TokenClient::new(&c.env, &other).balance(&c.bob), 1_050);
+
+    c.client.remove_supported_asset(&c.admin, &other);
+    assert!(!c.client.is_supported_asset(&other));
+    assert_eq!(c.client.get_supported_assets().len(), 1);
+    assert_eq!(
+        c.client.try_contribute(&id, &c.alice, &1),
+        Err(Ok(Error::UnsupportedAsset))
+    );
+    assert_eq!(
+        c.client.try_request_payout(&id, &c.alice, &c.bob, &1),
+        Err(Ok(Error::UnsupportedAsset))
+    );
+}
+
+#[test]
 fn payout_limit_boundaries() {
     let c = setup();
     let id = funded_circle(&c, 100);
     assert!(c.client.try_request_payout(&id, &c.alice, &c.bob, &100).is_ok());
     assert_eq!(c.client.try_request_payout(&id, &c.alice, &c.bob, &101), Err(Ok(Error::ExceedsLimit)));
     assert_eq!(c.client.try_request_payout(&id, &c.alice, &c.bob, &0), Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn contribution_rules_are_authorized_validated_and_enforced_on_every_path() {
+    let c = setup();
+    let id = c.client.create_circle(&c.admin, &c.token, &0);
+    c.client.join(&id, &c.alice);
+
+    let defaults = c.client.get_contribution_rules(&id);
+    assert_eq!(
+        defaults,
+        ContributionRules {
+            fixed_amount: 0,
+            min_amount: 0,
+            max_amount: 0,
+        }
+    );
+    assert_eq!(
+        c.client.try_set_contribution_rules(&id, &c.alice, &25, &10, &100),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        c.client.try_set_contribution_rules(&id, &c.admin, &0, &10, &9),
+        Err(Ok(Error::InvalidContributionRules))
+    );
+    assert_eq!(
+        c.client.try_set_contribution_rules(&id, &c.admin, &5, &10, &100),
+        Err(Ok(Error::InvalidContributionRules))
+    );
+    assert_eq!(
+        c.client.try_set_contribution_rules(&id, &c.admin, &0, &-1, &100),
+        Err(Ok(Error::InvalidContributionRules))
+    );
+
+    c.client.set_contribution_rules(&id, &c.admin, &0, &10, &100);
+    assert_eq!(
+        c.client.get_contribution_rules(&id),
+        ContributionRules {
+            fixed_amount: 0,
+            min_amount: 10,
+            max_amount: 100,
+        }
+    );
+    let goal_id = c.client.create_goal(&id, &c.admin, &1_000, &0);
+
+    assert_eq!(
+        c.client.try_contribute(&id, &c.alice, &9),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+    assert_eq!(
+        c.client.try_contribute_with_record(&id, &c.alice, &101),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+    assert_eq!(
+        c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &9),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+    assert_eq!(TokenClient::new(&c.env, &c.token).balance(&c.alice), 1_000);
+    assert_eq!(c.client.get_total_records_count(), 0);
+
+    c.client.contribute(&id, &c.alice, &10);
+    c.client.contribute_with_record(&id, &c.alice, &100);
+    c.client.contribute_to_goal(&id, &goal_id, &c.alice, &50);
+
+    c.client.set_contribution_rules(&id, &c.admin, &25, &10, &100);
+    assert_eq!(
+        c.client.try_contribute(&id, &c.alice, &26),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+    assert_eq!(
+        c.client.try_contribute_with_record(&id, &c.alice, &24),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+    assert_eq!(
+        c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &50),
+        Err(Ok(Error::ContributionRuleViolation))
+    );
+
+    c.client.contribute(&id, &c.alice, &25);
+    c.client.contribute_with_record(&id, &c.alice, &25);
+    c.client.contribute_to_goal(&id, &goal_id, &c.alice, &25);
+    assert_eq!(c.client.get_circle_balance(&id).total_balance, 235);
+    assert_eq!(TokenClient::new(&c.env, &c.token).balance(&c.alice), 765);
+}
+
+#[test]
+fn circle_configuration_is_initialized_authorized_and_preserves_financial_state() {
+    let c = setup();
+    let id = funded_circle(&c, 0);
+
+    let initial = c.client.get_circle_configuration(&id);
+    assert_eq!(initial.asset, c.token);
+    assert!(initial.asset_supported);
+    assert_eq!(initial.contribution_rules.min_amount, 0);
+    assert_eq!(initial.max_members, 0);
+    assert_eq!(initial.member_count, 3);
+    assert_eq!(initial.max_payout, 0);
+    assert_eq!(initial.withdrawal_threshold, 1);
+    assert!(initial.withdrawal_approvers.contains(&c.admin));
+
+    assert_eq!(
+        c.client.try_set_member_limit(&id, &c.alice, &3),
+        Err(Ok(Error::Unauthorized))
+    );
+    c.client.set_contribution_rules(&id, &c.admin, &0, &10, &100);
+    c.client.set_max_payout(&id, &c.admin, &80);
+    c.client.set_governance(
+        &id,
+        &c.admin,
+        &2,
+        &vec![&c.env, c.admin.clone(), c.bob.clone()],
+    );
+    c.client.set_member_limit(&id, &c.admin, &3);
+
+    let (emitter, topics, data) = c.env.events().all().last().unwrap();
+    assert_eq!(emitter, c.contract);
+    let event_name: soroban_sdk::Symbol = topics.get(0).unwrap().into_val(&c.env);
+    let member_limit: u32 = data.into_val(&c.env);
+    assert_eq!((event_name, member_limit), (symbol_short!("mem_cap"), 3));
+
+    assert_eq!(
+        c.client.try_set_member_limit(&id, &c.admin, &2),
+        Err(Ok(Error::InvalidConfiguration))
+    );
+    let stranger = Address::generate(&c.env);
+    assert_eq!(
+        c.client.try_join(&id, &stranger),
+        Err(Ok(Error::MembershipLimitReached))
+    );
+    c.client.join(&id, &c.alice);
+    assert_eq!(c.client.get_circle_configuration(&id).member_count, 3);
+
+    c.client.set_member_limit(&id, &c.admin, &4);
+    c.client.join(&id, &stranger);
+    c.client.leave(&id, &c.alice);
+    let updated = c.client.get_circle_configuration(&id);
+    assert_eq!(updated.max_members, 4);
+    assert_eq!(updated.member_count, 3);
+    assert_eq!(updated.contribution_rules.min_amount, 10);
+    assert_eq!(updated.max_payout, 80);
+    assert_eq!(updated.withdrawal_threshold, 2);
+    assert_eq!(updated.withdrawal_approvers.len(), 2);
+    assert_eq!(c.client.get_circle_balance(&id).total_balance, 500);
 }
 
 #[test]
@@ -382,6 +581,7 @@ fn test_contribution_accounting_per_member_and_asset() {
 
     // Multiple assets tracked independently
     let other_token = asset(&c.env, &[&c.alice]);
+    c.client.add_supported_asset(&c.admin, &other_token);
     let other_circle = c.client.create_circle(&c.admin, &other_token, &0);
     c.client.join(&other_circle, &c.alice);
     c.client.contribute(&other_circle, &c.alice, &250);
@@ -394,6 +594,7 @@ fn test_contribution_accounting_per_member_and_asset() {
     // Large integer precision test
     let large_asset = asset(&c.env, &[]);
     StellarAssetClient::new(&c.env, &large_asset).mint(&c.bob, &10_000_000_000_000_000i128);
+    c.client.add_supported_asset(&c.admin, &large_asset);
     let large_circle = c.client.create_circle(&c.admin, &large_asset, &0);
     c.client.join(&large_circle, &c.bob);
     c.client.contribute(&large_circle, &c.bob, &10_000_000_000_000_000i128);

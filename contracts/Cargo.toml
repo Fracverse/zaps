@@ -8,6 +8,7 @@ members = [
     "contracts/allbridge_receiver",
     "contracts/yield_vault",
     "contracts/circle",
+    "contracts/circle_factory",
 ]
 
 [profile.release]

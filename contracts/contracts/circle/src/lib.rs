@@ -31,6 +31,14 @@ pub enum Error {
     GoalAlreadyCompleted = 19,
     InvalidDeadline = 20,
     DuplicateRecord = 21,
+    NotInitialized = 22,
+    AlreadyInitialized = 23,
+    UnsupportedAsset = 24,
+    AssetInUse = 25,
+    InvalidContributionRules = 26,
+    ContributionRuleViolation = 27,
+    InvalidConfiguration = 28,
+    MembershipLimitReached = 29,
 }
 
 #[contracttype]
@@ -57,6 +65,31 @@ pub struct Circle {
     pub next_request: u32,
     pub total_contributed: i128,
     pub total_paid: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContributionRules {
+    /// Exact amount required per contribution; 0 disables the fixed amount.
+    pub fixed_amount: i128,
+    /// Minimum amount per contribution; 0 disables the minimum.
+    pub min_amount: i128,
+    /// Maximum amount per contribution; 0 disables the maximum.
+    pub max_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CircleConfiguration {
+    pub asset: Address,
+    pub asset_supported: bool,
+    pub contribution_rules: ContributionRules,
+    /// Maximum member count; 0 means no limit.
+    pub max_members: u32,
+    pub member_count: u32,
+    pub max_payout: i128,
+    pub withdrawal_threshold: u32,
+    pub withdrawal_approvers: Vec<Address>,
 }
 
 #[contracttype]
@@ -155,8 +188,14 @@ pub struct ContributionRecord {
 
 #[contracttype]
 enum Key {
+    Admin,
+    SupportedAsset(Address),
+    SupportedAssets,
     Count,
     Circle(u32),
+    ContributionRules(u32),
+    MaxMembers(u32),
+    MemberCount(u32),
     Member(u32, Address),
     Contribution(u32, Address),
     Pending(u32, Address),
@@ -194,6 +233,49 @@ fn is_member(env: &Env, id: u32, who: &Address) -> bool {
 
 fn pending(env: &Env, id: u32, who: &Address) -> u32 {
     env.storage().persistent().get(&Key::Pending(id, who.clone())).unwrap_or(0)
+}
+
+fn load_contribution_rules(env: &Env, id: u32) -> ContributionRules {
+    env.storage()
+        .persistent()
+        .get(&Key::ContributionRules(id))
+        .unwrap_or(ContributionRules {
+            fixed_amount: 0,
+            min_amount: 0,
+            max_amount: 0,
+        })
+}
+
+fn validate_contribution_rules(
+    fixed_amount: i128,
+    min_amount: i128,
+    max_amount: i128,
+) -> Result<(), Error> {
+    if fixed_amount < 0
+        || min_amount < 0
+        || max_amount < 0
+        || (max_amount > 0 && min_amount > max_amount)
+        || (fixed_amount > 0
+            && ((min_amount > 0 && fixed_amount < min_amount)
+                || (max_amount > 0 && fixed_amount > max_amount)))
+    {
+        return Err(Error::InvalidContributionRules);
+    }
+    Ok(())
+}
+
+fn validate_contribution_amount(env: &Env, id: u32, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let rules = load_contribution_rules(env, id);
+    if (rules.fixed_amount > 0 && amount != rules.fixed_amount)
+        || (rules.min_amount > 0 && amount < rules.min_amount)
+        || (rules.max_amount > 0 && amount > rules.max_amount)
+    {
+        return Err(Error::ContributionRuleViolation);
+    }
+    Ok(())
 }
 
 fn check_governance(threshold: u32, approvers: &Vec<Address>) -> Result<(), Error> {
@@ -237,6 +319,33 @@ fn set_asset_p(env: &Env, asset: &Address, val: i128) {
 
 fn get_circle_deadl(env: &Env, id: u32) -> u64 {
     env.storage().persistent().get(&Key::CircleDeadline(id)).unwrap_or(0)
+}
+
+fn is_supported_asset(env: &Env, asset: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&Key::SupportedAsset(asset.clone()))
+        .unwrap_or(false)
+}
+
+fn require_supported_asset(env: &Env, asset: &Address) -> Result<(), Error> {
+    if is_supported_asset(env, asset) {
+        Ok(())
+    } else {
+        Err(Error::UnsupportedAsset)
+    }
+}
+
+fn require_asset_admin(env: &Env, admin: &Address) -> Result<(), Error> {
+    let configured_admin: Address = env
+        .storage()
+        .instance()
+        .get(&Key::Admin)
+        .ok_or(Error::NotInitialized)?;
+    if admin != &configured_admin {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
 }
 
 fn record_contribution_internal(
@@ -310,9 +419,89 @@ fn record_contribution_internal(
 
 #[contractimpl]
 impl CircleContract {
+    /// One-time initialization. The administrator manages the supported token registry.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
+        if env.storage().instance().has(&Key::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&Key::Admin, &admin);
+        env.storage()
+            .persistent()
+            .set(&Key::SupportedAssets, &Vec::<Address>::new(&env));
+        Ok(())
+    }
+
+    /// Registers a Soroban token contract that circles may use.
+    pub fn add_supported_asset(env: Env, admin: Address, asset: Address) -> Result<(), Error> {
+        admin.require_auth();
+        require_asset_admin(&env, &admin)?;
+
+        if !is_supported_asset(&env, &asset) {
+            let mut assets: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&Key::SupportedAssets)
+                .unwrap_or(Vec::new(&env));
+            assets.push_back(asset.clone());
+            env.storage()
+                .persistent()
+                .set(&Key::SupportedAssets, &assets);
+            env.storage()
+                .persistent()
+                .set(&Key::SupportedAsset(asset.clone()), &true);
+            env.events().publish((symbol_short!("asset_add"),), asset);
+        }
+        Ok(())
+    }
+
+    /// Removes an asset only when no circle has an outstanding tracked balance or reservation.
+    pub fn remove_supported_asset(env: Env, admin: Address, asset: Address) -> Result<(), Error> {
+        admin.require_auth();
+        require_asset_admin(&env, &admin)?;
+        require_supported_asset(&env, &asset)?;
+        if get_asset_bal(&env, &asset) != 0 || get_asset_res(&env, &asset) != 0 {
+            return Err(Error::AssetInUse);
+        }
+
+        let current: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&Key::SupportedAssets)
+            .unwrap_or(Vec::new(&env));
+        let mut assets = Vec::new(&env);
+        for registered_asset in current.iter() {
+            if registered_asset != asset {
+                assets.push_back(registered_asset);
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&Key::SupportedAssets, &assets);
+        env.storage()
+            .persistent()
+            .remove(&Key::SupportedAsset(asset.clone()));
+        env.events().publish((symbol_short!("asset_rem"),), asset);
+        Ok(())
+    }
+
+    /// Queries whether an asset is currently registered for circle operations.
+    pub fn is_supported_asset(env: Env, asset: Address) -> bool {
+        is_supported_asset(&env, &asset)
+    }
+
+    /// Queries all currently registered token contract addresses.
+    pub fn get_supported_assets(env: Env) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&Key::SupportedAssets)
+            .unwrap_or(Vec::new(&env))
+    }
+
     /// Creates a circle. The admin becomes the first member and sole approver (threshold 1).
     pub fn create_circle(env: Env, admin: Address, token: Address, max_payout: i128) -> Result<u32, Error> {
         admin.require_auth();
+        require_supported_asset(&env, &token)?;
         if max_payout < 0 {
             return Err(Error::InvalidAmount);
         }
@@ -333,6 +522,8 @@ impl CircleContract {
         };
         save(&env, id, &c);
         env.storage().persistent().set(&Key::Member(id, admin.clone()), &true);
+        env.storage().persistent().set(&Key::MaxMembers(id), &0u32);
+        env.storage().persistent().set(&Key::MemberCount(id), &1u32);
         env.events().publish((symbol_short!("created"), id), admin);
         Ok(id)
     }
@@ -340,6 +531,25 @@ impl CircleContract {
     pub fn join(env: Env, id: u32, member: Address) -> Result<(), Error> {
         member.require_auth();
         load(&env, id)?;
+        if !is_member(&env, id, &member) {
+            let max_members: u32 = env
+                .storage()
+                .persistent()
+                .get(&Key::MaxMembers(id))
+                .unwrap_or(0);
+            let member_count: u32 = env
+                .storage()
+                .persistent()
+                .get(&Key::MemberCount(id))
+                .unwrap_or(1);
+            if max_members > 0 && member_count >= max_members {
+                return Err(Error::MembershipLimitReached);
+            }
+            let next_member_count = member_count.checked_add(1).ok_or(Error::Overflow)?;
+            env.storage()
+                .persistent()
+                .set(&Key::MemberCount(id), &next_member_count);
+        }
         env.storage().persistent().set(&Key::Member(id, member.clone()), &true);
         env.events().publish((symbol_short!("joined"), id), member);
         Ok(())
@@ -351,9 +561,8 @@ impl CircleContract {
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
         }
-        if amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
+        require_supported_asset(&env, &c.token)?;
+        validate_contribution_amount(&env, id, amount)?;
 
         // Validate circle deadline
         let deadline = get_circle_deadl(&env, id);
@@ -392,9 +601,8 @@ impl CircleContract {
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
         }
-        if amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
+        require_supported_asset(&env, &c.token)?;
+        validate_contribution_amount(&env, id, amount)?;
 
         // Validate circle deadline
         let deadline = get_circle_deadl(&env, id);
@@ -440,6 +648,86 @@ impl CircleContract {
         save(&env, id, &c);
         env.events().publish((symbol_short!("limit"), id), max_payout);
         Ok(())
+    }
+
+    /// Admin-only. Configures per-contribution fixed, minimum, and maximum amounts.
+    /// A value of 0 disables that individual rule.
+    pub fn set_contribution_rules(
+        env: Env,
+        id: u32,
+        admin: Address,
+        fixed_amount: i128,
+        min_amount: i128,
+        max_amount: i128,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        let circle = load(&env, id)?;
+        if admin != circle.admin {
+            return Err(Error::Unauthorized);
+        }
+        validate_contribution_rules(fixed_amount, min_amount, max_amount)?;
+
+        let rules = ContributionRules {
+            fixed_amount,
+            min_amount,
+            max_amount,
+        };
+        env.storage()
+            .persistent()
+            .set(&Key::ContributionRules(id), &rules);
+        env.events().publish((symbol_short!("rules_set"), id), rules);
+        Ok(())
+    }
+
+    /// Queries the circle's contribution rules; unset rules are returned as zeros.
+    pub fn get_contribution_rules(env: Env, id: u32) -> Result<ContributionRules, Error> {
+        load(&env, id)?;
+        Ok(load_contribution_rules(&env, id))
+    }
+
+    /// Admin-only. Sets the maximum number of circle members; 0 means unlimited.
+    pub fn set_member_limit(env: Env, id: u32, admin: Address, max_members: u32) -> Result<(), Error> {
+        admin.require_auth();
+        let circle = load(&env, id)?;
+        if admin != circle.admin {
+            return Err(Error::Unauthorized);
+        }
+        let member_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&Key::MemberCount(id))
+            .unwrap_or(1);
+        if max_members > 0 && max_members < member_count {
+            return Err(Error::InvalidConfiguration);
+        }
+        env.storage()
+            .persistent()
+            .set(&Key::MaxMembers(id), &max_members);
+        env.events().publish((symbol_short!("mem_cap"), id), max_members);
+        Ok(())
+    }
+
+    /// Queries all circle-level financial, asset, membership, and withdrawal configuration.
+    pub fn get_circle_configuration(env: Env, id: u32) -> Result<CircleConfiguration, Error> {
+        let circle = load(&env, id)?;
+        Ok(CircleConfiguration {
+            asset_supported: is_supported_asset(&env, &circle.token),
+            asset: circle.token,
+            contribution_rules: load_contribution_rules(&env, id),
+            max_members: env
+                .storage()
+                .persistent()
+                .get(&Key::MaxMembers(id))
+                .unwrap_or(0),
+            member_count: env
+                .storage()
+                .persistent()
+                .get(&Key::MemberCount(id))
+                .unwrap_or(1),
+            max_payout: circle.max_payout,
+            withdrawal_threshold: circle.threshold,
+            withdrawal_approvers: circle.approvers,
+        })
     }
 
     /// Admin-only. Sets full governance: threshold and approvers list. Existing requests keep their snapshot threshold.
@@ -514,6 +802,7 @@ impl CircleContract {
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
         }
+        require_supported_asset(&env, &c.token)?;
         if to == env.current_contract_address() {
             return Err(Error::InvalidDestination);
         }
@@ -596,6 +885,10 @@ impl CircleContract {
         if p.approvals.len() < p.threshold {
             return Err(Error::NotApproved);
         }
+        require_supported_asset(&env, &p.asset)?;
+        if p.asset != c.token {
+            return Err(Error::UnsupportedAsset);
+        }
         // Re-check limit and balance so a limit lowered after the request cannot be bypassed.
         if c.max_payout > 0 && p.amount > c.max_payout {
             return Err(Error::ExceedsLimit);
@@ -651,7 +944,16 @@ impl CircleContract {
         if pending(&env, id, &member) > 0 {
             return Err(Error::PendingObligations);
         }
+        let member_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&Key::MemberCount(id))
+            .unwrap_or(1);
+        let next_member_count = member_count.checked_sub(1).ok_or(Error::InvalidConfiguration)?;
         env.storage().persistent().set(&Key::Member(id, member.clone()), &false);
+        env.storage()
+            .persistent()
+            .set(&Key::MemberCount(id), &next_member_count);
         env.events().publish((symbol_short!("left"), id), member);
         Ok(())
     }
@@ -818,6 +1120,7 @@ impl CircleContract {
         if !is_member(&env, circle_id, &creator) {
             return Err(Error::NotMember);
         }
+        require_supported_asset(&env, &c.token)?;
         if target_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -862,9 +1165,8 @@ impl CircleContract {
         if !is_member(&env, circle_id, &member) {
             return Err(Error::NotMember);
         }
-        if amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
+        require_supported_asset(&env, &c.token)?;
+        validate_contribution_amount(&env, circle_id, amount)?;
 
         // Validate circle deadline
         let circle_deadline = get_circle_deadl(&env, circle_id);

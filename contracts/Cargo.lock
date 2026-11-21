@@ -1706,6 +1706,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zaps-circle-factory"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "zaps-circle",
+]
+
+[[package]]
 name = "zaps-naira-token"
 version = "0.1.0"
 dependencies = [
