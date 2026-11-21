@@ -7,6 +7,7 @@ use axum::{
 pub mod admin;
 pub use admin::admin_routes;
 pub mod auth;
+pub mod circles;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
@@ -216,5 +217,21 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         // client-side signing without touching the database.
         .route("/build/deposit", post(r#yield::build_unsigned_deposit))
         .route("/build/withdraw", post(r#yield::build_unsigned_withdraw))
+        .with_state(state)
+}
+
+/// #1227 — Circles API routes.
+pub fn circle_routes(pool: sqlx::PgPool) -> Router {
+    let state = circles::CirclesState::new(pool);
+    Router::new()
+        .route("/", post(circles::create_circle).get(circles::list_circles))
+        .route("/:id", get(circles::get_circle))
+        .route("/:id/contribute", post(circles::contribute))
+        .route("/:id/payout", post(circles::request_payout))
+        .route("/:id/payout/:req_id", get(circles::get_payout_status))
+        .route("/:id/payout/:req_id/approve", post(circles::approve_payout))
+        .route("/:id/members", get(circles::list_members).post(circles::add_member))
+        .route("/:id/members/:address", delete(circles::remove_member))
+        .route("/:id/goals", get(circles::list_goals).post(circles::create_goal))
         .with_state(state)
 }
