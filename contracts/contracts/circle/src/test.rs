@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events};
+use soroban_sdk::testutils::{Address as _, Events, Ledger as _};
 use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 use soroban_sdk::{symbol_short, vec, Env, IntoVal};
 
@@ -354,4 +354,272 @@ fn circle_balance_management_and_reconciliation() {
     assert_eq!(asset_info.available_balance, 300);
     assert_eq!(asset_info.total_contributed, 500);
     assert_eq!(asset_info.total_paid, 200);
+}
+
+#[test]
+fn test_contribution_accounting_per_member_and_asset() {
+    let c = setup();
+    let id = c.client.create_circle(&c.admin, &c.token, &0);
+    c.client.join(&id, &c.alice);
+    c.client.join(&id, &c.bob);
+
+    // Initial state
+    assert_eq!(c.client.contribution_of(&id, &c.alice), 0);
+    assert_eq!(c.client.get_member_contribution_count(&id, &c.alice), 0);
+    assert_eq!(c.client.get_member_asset_contribution(&c.alice, &c.token), 0);
+
+    // Alice contributes twice: 150 + 150 = 300 (integer precision preserved, no double count)
+    c.client.contribute(&id, &c.alice, &150);
+    c.client.contribute(&id, &c.alice, &150);
+
+    assert_eq!(c.client.contribution_of(&id, &c.alice), 300);
+    assert_eq!(c.client.get_member_contribution_count(&id, &c.alice), 2);
+    assert_eq!(c.client.get_member_asset_contribution(&c.alice, &c.token), 300);
+
+    // Asset balances are tracked
+    assert_eq!(c.client.get_asset_balance(&c.token), 300);
+    assert_eq!(c.client.get_total_contributions(&id), 300);
+
+    // Multiple assets tracked independently
+    let other_token = asset(&c.env, &[&c.alice]);
+    let other_circle = c.client.create_circle(&c.admin, &other_token, &0);
+    c.client.join(&other_circle, &c.alice);
+    c.client.contribute(&other_circle, &c.alice, &250);
+
+    assert_eq!(c.client.get_member_asset_contribution(&c.alice, &c.token), 300);
+    assert_eq!(c.client.get_member_asset_contribution(&c.alice, &other_token), 250);
+    assert_eq!(c.client.get_asset_balance(&c.token), 300);
+    assert_eq!(c.client.get_asset_balance(&other_token), 250);
+
+    // Large integer precision test
+    let large_asset = asset(&c.env, &[]);
+    StellarAssetClient::new(&c.env, &large_asset).mint(&c.bob, &10_000_000_000_000_000i128);
+    let large_circle = c.client.create_circle(&c.admin, &large_asset, &0);
+    c.client.join(&large_circle, &c.bob);
+    c.client.contribute(&large_circle, &c.bob, &10_000_000_000_000_000i128);
+    assert_eq!(c.client.contribution_of(&large_circle, &c.bob), 10_000_000_000_000_000i128);
+    assert_eq!(c.client.get_asset_balance(&large_asset), 10_000_000_000_000_000i128);
+
+    // Failed transactions do not alter balances
+    let stranger = Address::generate(&c.env);
+    assert_eq!(c.client.try_contribute(&id, &stranger, &50), Err(Ok(Error::NotMember)));
+    assert_eq!(c.client.try_contribute(&id, &c.alice, &-10), Err(Ok(Error::InvalidAmount)));
+    assert_eq!(c.client.try_contribute(&id, &c.alice, &0), Err(Ok(Error::InvalidAmount)));
+
+    // Verify balances remain unchanged after failures
+    assert_eq!(c.client.contribution_of(&id, &c.alice), 300);
+    assert_eq!(c.client.get_member_contribution_count(&id, &c.alice), 2);
+    assert_eq!(c.client.get_asset_balance(&c.token), 300);
+}
+
+#[test]
+fn test_goal_contribution_tracking() {
+    let c = setup();
+    let id = c.client.create_circle(&c.admin, &c.token, &0);
+    c.client.join(&id, &c.alice);
+    c.client.join(&id, &c.bob);
+
+    // Create goal with target 500
+    let goal_id = c.client.create_goal(&id, &c.admin, &500, &0);
+    assert_eq!(goal_id, 0);
+    assert_eq!(c.client.get_goal_count(&id), 1);
+
+    let initial_goal = c.client.get_goal(&id, &goal_id);
+    assert_eq!(initial_goal.target_amount, 500);
+    assert_eq!(initial_goal.current_amount, 0);
+    assert_eq!(initial_goal.token, c.token);
+    assert!(!initial_goal.completed);
+
+    let initial_prog = c.client.get_goal_progress(&id, &goal_id);
+    assert_eq!(initial_prog.target_amount, 500);
+    assert_eq!(initial_prog.current_amount, 0);
+    assert_eq!(initial_prog.remaining_amount, 500);
+    assert_eq!(initial_prog.progress_bps, 0);
+    assert!(!initial_prog.is_completed);
+
+    // Alice contributes 200 towards goal atomically
+    let rec_id = c.client.contribute_to_goal(&id, &goal_id, &c.alice, &200);
+    assert_eq!(c.client.get_member_goal_contribution(&id, &goal_id, &c.alice), 200);
+    assert_eq!(c.client.contribution_of(&id, &c.alice), 200);
+    assert_eq!(c.client.get_circle_balance(&id).total_balance, 200);
+
+    let prog_after_alice = c.client.get_goal_progress(&id, &goal_id);
+    assert_eq!(prog_after_alice.current_amount, 200);
+    assert_eq!(prog_after_alice.remaining_amount, 300);
+    assert_eq!(prog_after_alice.progress_bps, 4_000); // 40.00%
+    assert!(!prog_after_alice.is_completed);
+
+    // Verify record associates with goal
+    let rec = c.client.get_contribution_record(&rec_id);
+    assert_eq!(rec.goal_id, Some(goal_id));
+    assert_eq!(rec.amount, 200);
+
+    // Bob contributes 300 to reach and complete the goal
+    c.client.contribute_to_goal(&id, &goal_id, &c.bob, &300);
+    let final_prog = c.client.get_goal_progress(&id, &goal_id);
+    assert_eq!(final_prog.current_amount, 500);
+    assert_eq!(final_prog.remaining_amount, 0);
+    assert_eq!(final_prog.progress_bps, 10_000); // 100.00%
+    assert!(final_prog.is_completed);
+
+    let completed_goal = c.client.get_goal(&id, &goal_id);
+    assert!(completed_goal.completed);
+
+    // Rejection of further contributions to completed goal
+    assert_eq!(
+        c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &50),
+        Err(Ok(Error::GoalAlreadyCompleted))
+    );
+
+    // Unrelated goal checks
+    assert_eq!(
+        c.client.try_contribute_to_goal(&id, &999, &c.alice, &50),
+        Err(Ok(Error::GoalNotFound))
+    );
+
+    // Goal creation validation: non-member cannot create, amount must be positive
+    let stranger = Address::generate(&c.env);
+    assert_eq!(c.client.try_create_goal(&id, &stranger, &100, &0), Err(Ok(Error::NotMember)));
+    assert_eq!(c.client.try_create_goal(&id, &c.alice, &0, &0), Err(Ok(Error::InvalidAmount)));
+    assert_eq!(c.client.try_create_goal(&id, &c.alice, &-10, &0), Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_contribution_deadline_validation() {
+    let c = setup();
+    let id = c.client.create_circle(&c.admin, &c.token, &0);
+    c.client.join(&id, &c.alice);
+
+    // Unset deadline (0) allows contributions at any time
+    assert_eq!(c.client.get_circle_deadline(&id), 0);
+    assert!(c.client.is_circle_active(&id));
+    assert!(c.client.try_contribute(&id, &c.alice, &50).is_ok());
+
+    // Admin sets deadline to timestamp 1_000_000
+    c.client.set_circle_deadline(&id, &c.admin, &1_000_000);
+    assert_eq!(c.client.get_circle_deadline(&id), 1_000_000);
+
+    // Unauthorized non-admin cannot change deadline
+    assert_eq!(
+        c.client.try_set_circle_deadline(&id, &c.alice, &2_000_000),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    // Boundary 1: Within deadline (timestamp < deadline)
+    c.env.ledger().set_timestamp(999_999);
+    assert!(c.client.is_circle_active(&id));
+    assert!(c.client.try_contribute(&id, &c.alice, &50).is_ok());
+
+    // Boundary 2: Exact deadline boundary (timestamp == deadline)
+    c.env.ledger().set_timestamp(1_000_000);
+    assert!(c.client.is_circle_active(&id));
+    assert!(c.client.try_contribute(&id, &c.alice, &50).is_ok());
+
+    // Boundary 3: Expired period (timestamp == deadline + 1)
+    c.env.ledger().set_timestamp(1_000_001);
+    assert!(!c.client.is_circle_active(&id));
+    assert_eq!(
+        c.client.try_contribute(&id, &c.alice, &50),
+        Err(Ok(Error::DeadlineExpired))
+    );
+    assert_eq!(
+        c.client.try_contribute_with_record(&id, &c.alice, &50),
+        Err(Ok(Error::DeadlineExpired))
+    );
+
+    // Goal-specific deadline validation
+    // Circle deadline reset to future
+    c.client.set_circle_deadline(&id, &c.admin, &5_000_000);
+    // Create goal with deadline at 2_000_000
+    let goal_id = c.client.create_goal(&id, &c.admin, &300, &2_000_000);
+
+    // Contributing to goal before deadline succeeds
+    c.env.ledger().set_timestamp(1_999_999);
+    assert!(c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &100).is_ok());
+
+    // Contributing to goal at exact boundary succeeds
+    c.env.ledger().set_timestamp(2_000_000);
+    assert!(c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &50).is_ok());
+
+    // Contributing to goal past deadline fails
+    c.env.ledger().set_timestamp(2_000_001);
+    assert_eq!(
+        c.client.try_contribute_to_goal(&id, &goal_id, &c.alice, &50),
+        Err(Ok(Error::DeadlineExpired))
+    );
+
+    // Cannot create a goal with an expired deadline
+    assert_eq!(
+        c.client.try_create_goal(&id, &c.admin, &300, &1_000_000),
+        Err(Ok(Error::InvalidDeadline))
+    );
+}
+
+#[test]
+fn test_contribution_transaction_records() {
+    let c = setup();
+    let id = c.client.create_circle(&c.admin, &c.token, &0);
+    c.client.join(&id, &c.alice);
+    c.client.join(&id, &c.bob);
+
+    assert_eq!(c.client.get_total_records_count(), 0);
+    assert_eq!(c.client.get_circle_contribution_count(&id), 0);
+
+    // Alice contributes with unique record identifier
+    let rec0_id = c.client.contribute_with_record(&id, &c.alice, &150);
+    assert_eq!(rec0_id, 0);
+
+    let rec0 = c.client.get_contribution_record(&rec0_id);
+    assert_eq!(rec0.id, 0);
+    assert_eq!(rec0.circle_id, id);
+    assert_eq!(rec0.contributor, c.alice);
+    assert_eq!(rec0.amount, 150);
+    assert_eq!(rec0.asset, c.token);
+    assert_eq!(rec0.goal_id, None);
+
+    // Bob contributes with unique monotonic identifier
+    let rec1_id = c.client.contribute_with_record(&id, &c.bob, &250);
+    assert_eq!(rec1_id, 1);
+    assert_ne!(rec0_id, rec1_id);
+
+    let rec1 = c.client.get_contribution_record(&rec1_id);
+    assert_eq!(rec1.id, 1);
+    assert_eq!(rec1.contributor, c.bob);
+    assert_eq!(rec1.amount, 250);
+
+    // Goal contribution generates record with goal association
+    let goal_id = c.client.create_goal(&id, &c.admin, &500, &0);
+    let rec2_id = c.client.contribute_to_goal(&id, &goal_id, &c.alice, &100);
+    assert_eq!(rec2_id, 2);
+
+    let rec2 = c.client.get_contribution_record(&rec2_id);
+    assert_eq!(rec2.id, 2);
+    assert_eq!(rec2.goal_id, Some(goal_id));
+    assert_eq!(rec2.amount, 100);
+
+    // Query circle contribution count and global count
+    assert_eq!(c.client.get_circle_contribution_count(&id), 3);
+    assert_eq!(c.client.get_total_records_count(), 3);
+
+    // Paginated history retrieval
+    let all_records = c.client.get_circle_contributions(&id, &0, &10);
+    assert_eq!(all_records.len(), 3);
+    assert_eq!(all_records.get(0).unwrap().id, 0);
+    assert_eq!(all_records.get(1).unwrap().id, 1);
+    assert_eq!(all_records.get(2).unwrap().id, 2);
+
+    // Sub-slice pagination
+    let paged = c.client.get_circle_contributions(&id, &1, &2);
+    assert_eq!(paged.len(), 2);
+    assert_eq!(paged.get(0).unwrap().id, 1);
+    assert_eq!(paged.get(1).unwrap().id, 2);
+
+    // Query non-existent record
+    assert_eq!(c.client.try_get_contribution_record(&999), Err(Ok(Error::NotFound)));
+
+    // Atomicity: failed contribution creates no record
+    let stranger = Address::generate(&c.env);
+    assert_eq!(c.client.try_contribute_with_record(&id, &stranger, &50), Err(Ok(Error::NotMember)));
+    assert_eq!(c.client.get_circle_contribution_count(&id), 3);
+    assert_eq!(c.client.get_total_records_count(), 3);
 }
