@@ -33,6 +33,7 @@ export interface TransactionPage {
   items: Transaction[];
   nextCursor: string | null;
   total: number;
+  source?: "server" | "cache";
 }
 
 export interface TransactionFilters {

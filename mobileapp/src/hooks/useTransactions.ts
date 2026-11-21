@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { fetchTransactions } from "../services/transactionService";
 import { Transaction, TransactionFilters } from "../types/transaction";
 
@@ -14,7 +14,9 @@ export function useTransactions() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<TransactionFilters>(DEFAULT_FILTERS);
+  const [offlineCache, setOfflineCache] = useState(false);
+  const [filters, setFiltersState] =
+    useState<TransactionFilters>(DEFAULT_FILTERS);
   const [total, setTotal] = useState(0);
 
   const cursorRef = useRef<string | null>(null);
@@ -29,6 +31,7 @@ export function useTransactions() {
     ) => {
       try {
         const page = await fetchTransactions(newFilters, cursor);
+        setOfflineCache(page.source === "cache");
         cursorRef.current = page.nextCursor;
         hasMoreRef.current = page.nextCursor !== null;
         setTotal(page.total);
@@ -84,11 +87,32 @@ export function useTransactions() {
   /** Update filters and reload */
   const applyFilters = useCallback(
     (newFilters: TransactionFilters) => {
-      setFilters(newFilters);
+      setFiltersState(newFilters);
       reload(newFilters);
     },
     [reload]
   );
+
+  const setFilters = useCallback(
+    (
+      update:
+        TransactionFilters | ((prev: TransactionFilters) => TransactionFilters)
+    ) => {
+      setFiltersState((prev) => {
+        const next = typeof update === "function" ? update(prev) : update;
+        activeFiltersRef.current = next;
+        cursorRef.current = null;
+        hasMoreRef.current = true;
+        void reload(next);
+        return next;
+      });
+    },
+    [reload]
+  );
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
 
   return {
     items,
@@ -96,6 +120,7 @@ export function useTransactions() {
     refreshing,
     loadingMore,
     error,
+    offlineCache,
     filters,
     total,
     hasMore: hasMoreRef.current,
@@ -103,5 +128,6 @@ export function useTransactions() {
     refresh,
     loadMore,
     applyFilters,
+    setFilters,
   };
 }

@@ -337,6 +337,7 @@ async fn main() {
             .nest("/api/social", api::social_routes(pool.clone()))
             .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
             .nest("/api/registry", api::registry_routes(pool.clone()))
+            .nest("/api/transactions", api::transaction_routes(pool.clone()))
             .nest(
                 "/api/yield",
                 api::yield_routes_with_state(api::r#yield::YieldState::new(

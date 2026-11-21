@@ -16,6 +16,7 @@ pub mod social;
 pub mod user;
 pub use user as users;
 pub mod r#yield;
+pub mod transactions;
 
 // Re-export the middleware types used in main.rs so callers can import them
 // from `zaps_backend::api::*` without needing the full module path.
@@ -217,4 +218,11 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .route("/build/deposit", post(r#yield::build_unsigned_deposit))
         .route("/build/withdraw", post(r#yield::build_unsigned_withdraw))
         .with_state(state)
+}
+
+pub fn transaction_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("", get(transactions::list_transactions))
+        .route("/:id", get(transactions::get_transaction))
+        .with_state(pool)
 }

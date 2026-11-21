@@ -175,8 +175,10 @@ const TransactionRow = React.memo(function TransactionRow({
         <View style={styles.txLabelRow}>
           <Text style={styles.txLabel} numberOfLines={1}>
             {isMassPayout
-              ? item.senderName || item.addressLabel || "Disbursing Organization"
-              : item.addressLabel ?? truncateAddress(item.address)}
+              ? item.senderName ||
+                item.addressLabel ||
+                "Disbursing Organization"
+              : (item.addressLabel ?? truncateAddress(item.address))}
           </Text>
 
           {isMassPayout && (
@@ -265,8 +267,8 @@ const TransactionRow = React.memo(function TransactionRow({
               color: isOutgoing
                 ? COLORS.black
                 : isMassPayout
-                ? "#7C3AED"
-                : "#22C55E",
+                  ? "#7C3AED"
+                  : "#22C55E",
             },
           ]}
         >
@@ -292,7 +294,10 @@ function SectionHeader({ title }: { title: string }) {
 
 function MassPayoutSectionHeader({ count }: { count?: number }) {
   return (
-    <View style={styles.massPayoutSectionHeader} testID="mass-payout-section-header">
+    <View
+      style={styles.massPayoutSectionHeader}
+      testID="mass-payout-section-header"
+    >
       <View style={styles.massPayoutHeaderLeft}>
         <View style={styles.massPayoutHeaderIconWrap}>
           <Ionicons name="people" size={14} color="#7C3AED" />
@@ -427,8 +432,13 @@ function groupTransactions(
 // Full transactions screen with Disbursement history section
 export default function TransactionsScreen() {
   const router = useRouter();
+  const transactionState = useTransactions();
+  const legacyTransactionState = transactionState as typeof transactionState & {
+    transactions?: Transaction[];
+  };
+  const transactions =
+    transactionState.items ?? legacyTransactionState.transactions ?? [];
   const {
-    transactions,
     loading,
     refreshing,
     loadingMore,
@@ -436,7 +446,9 @@ export default function TransactionsScreen() {
     setFilters,
     refresh,
     loadMore,
-  } = useTransactions();
+    error,
+    offlineCache,
+  } = transactionState;
 
   const [filterVisible, setFilterVisible] = useState(false);
   const [speedingUpId, setSpeedingUpId] = useState<string | null>(null);
@@ -452,22 +464,25 @@ export default function TransactionsScreen() {
     setFilters((prev) => ({ ...prev, search: text }));
   };
 
-  const handleSpeedUp = useCallback(async (tx: Transaction) => {
-    if (!tx.stellarTxXdr) return;
-    setSpeedingUpId(tx.id);
-    setSpeedUpError(null);
-    try {
-      const source = await resolveWalletSource();
-      await speedUpTransaction(tx.stellarTxXdr, source);
-      await refresh();
-    } catch (err) {
-      setSpeedUpError(
-        err instanceof Error ? err.message : "Failed to speed up transaction"
-      );
-    } finally {
-      setSpeedingUpId(null);
-    }
-  }, [refresh]);
+  const handleSpeedUp = useCallback(
+    async (tx: Transaction) => {
+      if (!tx.stellarTxXdr) return;
+      setSpeedingUpId(tx.id);
+      setSpeedUpError(null);
+      try {
+        const source = await resolveWalletSource();
+        await speedUpTransaction(tx.stellarTxXdr, source);
+        await refresh();
+      } catch (err) {
+        setSpeedUpError(
+          err instanceof Error ? err.message : "Failed to speed up transaction"
+        );
+      } finally {
+        setSpeedingUpId(null);
+      }
+    },
+    [refresh]
+  );
 
   const items = useMemo(
     () => groupTransactions(transactions, sectionFilter),
@@ -602,7 +617,9 @@ export default function TransactionsScreen() {
           <Ionicons
             name="shield-checkmark"
             size={13}
-            color={sectionFilter === "mass_payout" ? COLORS.secondary : "#7C3AED"}
+            color={
+              sectionFilter === "mass_payout" ? COLORS.secondary : "#7C3AED"
+            }
             style={{ marginRight: 4 }}
           />
           <Text
@@ -689,7 +706,10 @@ export default function TransactionsScreen() {
               accessibilityLabel={`Filter by last ${label}`}
             >
               <Text
-                style={[styles.presetBtnText, active && styles.presetBtnTextActive]}
+                style={[
+                  styles.presetBtnText,
+                  active && styles.presetBtnTextActive,
+                ]}
               >
                 {label}
               </Text>
@@ -697,6 +717,32 @@ export default function TransactionsScreen() {
           );
         })}
       </View>
+
+      {loading && (
+        <View style={styles.initialLoading} testID="transactions-loading">
+          <ActivityIndicator size="small" color={COLORS.primary} />
+          <Text style={styles.initialLoadingText}>Loading transactions...</Text>
+        </View>
+      )}
+      {offlineCache && (
+        <View style={styles.statusBanner} testID="transactions-offline-cache">
+          <Ionicons name="cloud-offline-outline" size={16} color="#92400E" />
+          <Text style={styles.statusBannerText}>
+            Showing cached transactions while offline
+          </Text>
+        </View>
+      )}
+      {error && (
+        <View
+          style={[styles.statusBanner, styles.errorBanner]}
+          testID="transactions-api-error"
+        >
+          <Ionicons name="alert-circle-outline" size={16} color="#DC2626" />
+          <Text style={[styles.statusBannerText, styles.errorBannerText]}>
+            {error}
+          </Text>
+        </View>
+      )}
 
       {/* Speed up error banner */}
       {Boolean(speedUpError) && (
@@ -746,6 +792,39 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F9FAFB",
+  },
+  initialLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 10,
+  },
+  initialLoadingText: {
+    fontSize: 13,
+    color: "#6B7280",
+  },
+  statusBanner: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: "#FEF3C7",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  statusBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#92400E",
+  },
+  errorBanner: {
+    backgroundColor: "#FEE2E2",
+  },
+  errorBannerText: {
+    color: "#DC2626",
   },
   header: {
     flexDirection: "row",

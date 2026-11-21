@@ -99,14 +99,20 @@ export default function TransactionDetailScreen() {
   const router = useRouter();
   const [tx, setTx] = useState<Transaction | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    fetchTransactionById(id).then((t) => {
-      setTx(t);
-      setLoading(false);
-    });
+    fetchTransactionById(id)
+      .then((t) => {
+        setTx(t);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : "Failed to load transaction");
+      })
+      .finally(() => setLoading(false));
   }, [id]);
 
   const copy = useCallback(async (text: string, label: string) => {
@@ -143,6 +149,18 @@ export default function TransactionDetailScreen() {
   }
 
   if (!tx) {
+    if (error) {
+      return (
+        <SafeAreaView style={styles.container} edges={["top"]}>
+          <Stack.Screen options={{ headerShown: false }} />
+          <View style={styles.center}>
+            <Text style={styles.notFoundText} testID="transaction-api-error">
+              {error}
+            </Text>
+          </View>
+        </SafeAreaView>
+      );
+    }
     return (
       <SafeAreaView style={styles.container} edges={["top"]}>
         <Stack.Screen options={{ headerShown: false }} />

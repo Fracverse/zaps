@@ -1,278 +1,28 @@
 /**
- * Transaction service — fetches from backend API with local AsyncStorage cache.
- * Falls back to cache when offline.
+ * Authenticated transaction history and detail service.
+ * Only successful backend responses are cached.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { apiFetch } from "./api";
 import {
   Transaction,
   TransactionPage,
   TransactionFilters,
 } from "../types/transaction";
 
+const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? "https://api.zaps.app";
 const CACHE_KEY = "tx_cache_v1";
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const PAGE_SIZE = 20;
-
-// 30-second in-memory cache to deduplicate rapid identical requests
-const memCache = new Map<
-  string,
-  { data: TransactionPage; expiresAt: number }
->();
-
-// ── Mock data (replace with real API base URL from config) ────────────────────
-const MOCK_TRANSACTIONS: Transaction[] = [
-  {
-    id: "tx_001",
-    type: "sent",
-    status: "completed",
-    amount: "50.00",
-    asset: "USDC",
-    fiatValue: "50.00",
-    fiatCurrency: "USD",
-    address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-    addressLabel: "alice.zaps",
-    timestamp: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-    memo: "Lunch split",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_002",
-    type: "received",
-    status: "completed",
-    amount: "120.00",
-    asset: "USDC",
-    fiatValue: "120.00",
-    fiatCurrency: "USD",
-    address: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZXG5CPCJDGX4LNZM4IXX",
-    addressLabel: "bob.zaps",
-    timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_003",
-    type: "sent",
-    status: "pending",
-    amount: "25.50",
-    asset: "XLM",
-    fiatValue: "3.18",
-    fiatCurrency: "USD",
-    address: "GDQOE23CFSUMSVQK4Y5JHPPYK73VYCNHZHA7ENKCV37P6SUEO6XQBKPP",
-    timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
-    stellarTxXdr: "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_004",
-    type: "received",
-    status: "completed",
-    amount: "200.00",
-    asset: "USDT",
-    fiatValue: "200.00",
-    fiatCurrency: "USD",
-    address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
-    addressLabel: "carol.zaps",
-    timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
-    memo: "Invoice #1042",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_005",
-    type: "sent",
-    status: "failed",
-    amount: "10.00",
-    asset: "USDC",
-    fiatValue: "10.00",
-    fiatCurrency: "USD",
-    address: "GCFONE23CFSUMSVQK4Y5JHPPYK73VYCNHZHA7ENKCV37P6SUEO6XQBKPP",
-    timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_006",
-    type: "received",
-    status: "completed",
-    amount: "75.00",
-    asset: "USDC",
-    fiatValue: "75.00",
-    fiatCurrency: "USD",
-    address: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-    addressLabel: "alice.zaps",
-    timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
-    memo: "Rent share",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_007",
-    type: "sent",
-    status: "completed",
-    amount: "500.00",
-    asset: "USDC",
-    fiatValue: "500.00",
-    fiatCurrency: "USD",
-    address: "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGZXG5CPCJDGX4LNZM4IXX",
-    addressLabel: "bob.zaps",
-    timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3",
-    memo: "Project payment",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_008",
-    type: "received",
-    status: "pending",
-    amount: "30.00",
-    asset: "XLM",
-    fiatValue: "3.75",
-    fiatCurrency: "USD",
-    address: "GDQOE23CFSUMSVQK4Y5JHPPYK73VYCNHZHA7ENKCV37P6SUEO6XQBKPP",
-    timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4d5e6f7a2b3c4",
-    stellarTxXdr: "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_009",
-    type: "yield",
-    yieldType: "interest",
-    status: "completed",
-    amount: "2.45",
-    asset: "USDC",
-    fiatValue: "2.45",
-    fiatCurrency: "USD",
-    address: "yield.zaps",
-    addressLabel: "Daily yield",
-    timestamp: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
-    memo: "Daily yield interest",
-    network: "Stellar",
-  },
-  {
-    id: "tx_010",
-    type: "yield",
-    yieldType: "reward",
-    status: "completed",
-    amount: "15.20",
-    asset: "USDC",
-    fiatValue: "15.20",
-    fiatCurrency: "USD",
-    address: "yield.zaps",
-    addressLabel: "Yield reward",
-    timestamp: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-    memo: "Weekly yield reward",
-    network: "Stellar",
-  },
-  {
-    id: "tx_011",
-    type: "yield",
-    yieldType: "apy",
-    status: "completed",
-    amount: "8.75",
-    asset: "USDC",
-    fiatValue: "8.75",
-    fiatCurrency: "USD",
-    address: "yield.zaps",
-    addressLabel: "APY payout",
-    timestamp: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-    memo: "APY accrual",
-    network: "Stellar",
-  },
-  // ── SDP / Mass Payout transactions ─────────────────────────────────────────
-  {
-    id: "tx_012",
-    type: "mass_payout",
-    status: "completed",
-    amount: "250.00",
-    asset: "USDC",
-    fiatValue: "250.00",
-    fiatCurrency: "USD",
-    address: "GCMASS47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
-    addressLabel: "SDP Disbursement",
-    senderName: "Acme Relief Fund",
-    senderAnchor: "AnchorUSD",
-    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2",
-    memo: "Monthly aid disbursement",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_013",
-    type: "mass_payout",
-    status: "completed",
-    amount: "100.00",
-    asset: "USDC",
-    fiatValue: "100.00",
-    fiatCurrency: "USD",
-    address: "GCMASS57IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA6",
-    addressLabel: "SDP Disbursement",
-    senderName: "Global Aid Org",
-    senderAnchor: "StellarAnchor",
-    timestamp: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3",
-    memo: "Quarterly payout batch",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-  {
-    id: "tx_014",
-    type: "mass_payout",
-    status: "pending",
-    amount: "75.00",
-    asset: "USDC",
-    fiatValue: "75.00",
-    fiatCurrency: "USD",
-    address: "GCMASS67IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA7",
-    addressLabel: "SDP Disbursement",
-    senderName: "Community Wallet Project",
-    senderAnchor: "MoneyGram",
-    timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-    stellarTxHash:
-      "o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4q5r6m1n2o3p4",
-    stellarTxXdr: "AAAAAgAAAABhGug7fJjQPWZ3cN+e8rPcmBif9aM...demo-envelope...",
-    memo: "Emergency relief batch",
-    fee: "0.00001",
-    feeAsset: "XLM",
-    network: "Stellar",
-  },
-];
+const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry {
   data: Transaction[];
   timestamp: number;
 }
+
+const memCache = new Map<
+  string,
+  { data: TransactionPage; expiresAt: number }
+>();
 
 async function readCache(): Promise<Transaction[] | null> {
   try {
@@ -280,7 +30,7 @@ async function readCache(): Promise<Transaction[] | null> {
     if (!raw) return null;
     const entry: CacheEntry = JSON.parse(raw);
     if (Date.now() - entry.timestamp > CACHE_TTL_MS) return null;
-    return entry.data;
+    return Array.isArray(entry.data) ? entry.data : null;
   } catch {
     return null;
   }
@@ -288,25 +38,19 @@ async function readCache(): Promise<Transaction[] | null> {
 
 async function writeCache(data: Transaction[]): Promise<void> {
   try {
-    const entry: CacheEntry = { data, timestamp: Date.now() };
-    await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(entry));
+    await AsyncStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({ data, timestamp: Date.now() })
+    );
   } catch {
-    // non-fatal
+    // Cache writes are best-effort; the server remains authoritative.
   }
 }
 
-/** Fetch a page of transactions, with offline cache fallback. */
-export async function fetchTransactions(
+function buildParams(
   filters: TransactionFilters,
   cursor: string | null
-): Promise<TransactionPage> {
-  const cacheKey = JSON.stringify({ filters, cursor });
-  const cached = memCache.get(cacheKey);
-  if (cached && Date.now() < cached.expiresAt) return cached.data;
-
-  // Query params for the backend endpoint. The mock below applies the same
-  // predicates against local data; switching to the real API only requires
-  // uncommenting the fetch block and pointing it at these params.
+): URLSearchParams {
   const params = new URLSearchParams();
   if (cursor) params.set("cursor", cursor);
   const effectiveType =
@@ -322,97 +66,182 @@ export async function fetchTransactions(
   if (filters.amountMin) params.set("amount_min", filters.amountMin);
   if (filters.amountMax) params.set("amount_max", filters.amountMax);
   if (filters.search) params.set("search", filters.search);
-
-  // In production replace this block with a real API call:
-  // const res = await fetchWithRetry(`${API_BASE}/transactions?${params.toString()}`);
-  // const json = await res.json();
-
-  // Simulate network latency
-  await new Promise((r) => setTimeout(r, 600));
-
-  let all = MOCK_TRANSACTIONS;
-
-  // Try to merge with cache (real app would just use API response)
-  const cachedData = await readCache();
-  if (cachedData) {
-    const cachedIds = new Set(cachedData.map((t) => t.id));
-    const fresh = all.filter((t) => !cachedIds.has(t.id));
-    all = [...fresh, ...cachedData];
-  }
-
-  // Apply filters
-  let filtered = all.filter((tx) => {
-    if (filters.yieldOnly && tx.type !== "yield") return false;
-    if (filters.yieldType && tx.yieldType !== filters.yieldType) return false;
-    if (filters.type !== "all" && tx.type !== filters.type) return false;
-    if (filters.status !== "all" && tx.status !== filters.status) return false;
-    if (filters.asset && tx.asset.toUpperCase() !== filters.asset.toUpperCase())
-      return false;
-    if (filters.search) {
-      const q = filters.search.toLowerCase();
-      const matchAddr = tx.address.toLowerCase().includes(q);
-      const matchLabel = tx.addressLabel?.toLowerCase().includes(q) ?? false;
-      const matchMemo = tx.memo?.toLowerCase().includes(q) ?? false;
-      const matchHash = tx.stellarTxHash?.toLowerCase().includes(q) ?? false;
-      const matchAsset = tx.asset.toLowerCase().includes(q);
-      if (!matchAddr && !matchLabel && !matchMemo && !matchHash && !matchAsset)
-        return false;
-    }
-    if (filters.dateFrom) {
-      if (new Date(tx.timestamp) < new Date(filters.dateFrom)) return false;
-    }
-    if (filters.dateTo) {
-      if (new Date(tx.timestamp) > new Date(filters.dateTo)) return false;
-    }
-    if (filters.amountMin) {
-      if (parseFloat(tx.amount) < parseFloat(filters.amountMin)) return false;
-    }
-    if (filters.amountMax) {
-      if (parseFloat(tx.amount) > parseFloat(filters.amountMax)) return false;
-    }
-    return true;
-  });
-
-  // Sort newest first
-  filtered.sort(
-    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-
-  // Cursor-based pagination
-  const startIndex = cursor
-    ? filtered.findIndex((t) => t.id === cursor) + 1
-    : 0;
-  const page = filtered.slice(startIndex, startIndex + PAGE_SIZE);
-  const nextCursor =
-    startIndex + PAGE_SIZE < filtered.length
-      ? (page[page.length - 1]?.id ?? null)
-      : null;
-
-  // Update cache with latest full list
-  await writeCache(all);
-
-  const result: TransactionPage = {
-    items: page,
-    nextCursor,
-    total: filtered.length,
-  };
-  memCache.set(cacheKey, { data: result, expiresAt: Date.now() + 30_000 });
-  return result;
+  return params;
 }
 
-/** Fetch a single transaction by id (cache-first). */
+function normalizeTransaction(raw: Record<string, unknown>): Transaction {
+  const type = String(raw.type ?? "payment");
+  const status = String(raw.status ?? "completed");
+  return {
+    id: String(raw.id),
+    type:
+      type === "sent" ||
+      type === "received" ||
+      type === "swap" ||
+      type === "payment" ||
+      type === "yield" ||
+      type === "mass_payout"
+        ? (type as Transaction["type"])
+        : "payment",
+    status: status === "pending" || status === "failed" ? status : "completed",
+    amount: String(raw.amount ?? "0"),
+    asset: String(raw.asset ?? raw.currency ?? "XLM"),
+    fiatValue: String(raw.fiat_value ?? raw.fiatValue ?? raw.amount ?? "0"),
+    fiatCurrency: String(raw.fiat_currency ?? raw.fiatCurrency ?? "USD"),
+    address: String(raw.address ?? ""),
+    addressLabel:
+      typeof (raw.address_label ?? raw.addressLabel) === "string"
+        ? String(raw.address_label ?? raw.addressLabel)
+        : undefined,
+    timestamp: String(
+      raw.timestamp ?? raw.created_at ?? new Date().toISOString()
+    ),
+    stellarTxHash:
+      typeof (raw.stellar_tx_hash ?? raw.stellarTxHash) === "string"
+        ? String(raw.stellar_tx_hash ?? raw.stellarTxHash)
+        : undefined,
+    memo: typeof raw.memo === "string" ? raw.memo : undefined,
+    fee: typeof raw.fee === "string" ? raw.fee : undefined,
+    feeAsset:
+      typeof (raw.fee_asset ?? raw.feeAsset) === "string"
+        ? String(raw.fee_asset ?? raw.feeAsset)
+        : undefined,
+    network: typeof raw.network === "string" ? raw.network : "Stellar",
+    yieldType:
+      raw.yield_type === "interest" ||
+      raw.yieldType === "interest" ||
+      raw.yield_type === "reward" ||
+      raw.yieldType === "reward" ||
+      raw.yield_type === "apy" ||
+      raw.yieldType === "apy"
+        ? (String(raw.yield_type ?? raw.yieldType) as Transaction["yieldType"])
+        : undefined,
+    stellarTxXdr:
+      typeof (raw.stellar_tx_xdr ?? raw.stellarTxXdr) === "string"
+        ? String(raw.stellar_tx_xdr ?? raw.stellarTxXdr)
+        : undefined,
+    senderName:
+      typeof (raw.sender_name ?? raw.senderName) === "string"
+        ? String(raw.sender_name ?? raw.senderName)
+        : undefined,
+    senderAnchor:
+      typeof (raw.sender_anchor ?? raw.senderAnchor) === "string"
+        ? String(raw.sender_anchor ?? raw.senderAnchor)
+        : undefined,
+  };
+}
+
+function isNetworkError(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error && /network|fetch|offline/i.test(error.message))
+  );
+}
+
+/** Fetch a page from the authenticated backend. */
+export async function fetchTransactions(
+  filters: TransactionFilters,
+  cursor: string | null
+): Promise<TransactionPage> {
+  const cacheKey = JSON.stringify({ filters, cursor });
+  const cachedResponse = memCache.get(cacheKey);
+  if (cachedResponse && Date.now() < cachedResponse.expiresAt) {
+    return cachedResponse.data;
+  }
+
+  const params = buildParams(filters, cursor);
+  try {
+    const res = await apiFetch(
+      `${API_BASE}/api/transactions/${params.toString() ? `?${params}` : ""}`
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(
+        typeof body.error === "string"
+          ? body.error
+          : `Failed to load transactions (HTTP ${res.status})`
+      );
+    }
+
+    const json = (await res.json()) as Record<string, unknown>;
+    const itemsRaw = Array.isArray(json.items) ? json.items : [];
+    const items = itemsRaw
+      .filter(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" && item !== null
+      )
+      .map(normalizeTransaction);
+    const result: TransactionPage = {
+      items,
+      nextCursor:
+        typeof json.next_cursor === "string"
+          ? json.next_cursor
+          : typeof json.nextCursor === "string"
+            ? json.nextCursor
+            : null,
+      total: typeof json.total === "number" ? json.total : items.length,
+      source: "server",
+    };
+
+    if (!cursor) {
+      await writeCache(items);
+    }
+    memCache.set(cacheKey, { data: result, expiresAt: Date.now() + 30_000 });
+    return result;
+  } catch (error) {
+    if (isNetworkError(error)) {
+      const offline = await readCache();
+      if (offline) {
+        const result: TransactionPage = {
+          items: offline,
+          nextCursor: null,
+          total: offline.length,
+          source: "cache",
+        };
+        return result;
+      }
+    }
+    throw error;
+  }
+}
+
+/** Fetch one actual server transaction, with cache fallback only while offline. */
 export async function fetchTransactionById(
   id: string
 ): Promise<Transaction | null> {
-  const cached = await readCache();
-  if (cached) {
-    const found = cached.find((t) => t.id === id);
-    if (found) return found;
+  try {
+    const res = await apiFetch(
+      `${API_BASE}/api/transactions/${encodeURIComponent(id)}`
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(
+        typeof body.error === "string"
+          ? body.error
+          : `Failed to load transaction (HTTP ${res.status})`
+      );
+    }
+    const json = (await res.json()) as Record<string, unknown>;
+    const transaction =
+      typeof json.transaction === "object" && json.transaction !== null
+        ? normalizeTransaction(json.transaction as Record<string, unknown>)
+        : normalizeTransaction(json);
+    const cache = (await readCache()) ?? [];
+    await writeCache([
+      transaction,
+      ...cache.filter((item) => item.id !== transaction.id),
+    ]);
+    return transaction;
+  } catch (error) {
+    if (isNetworkError(error)) {
+      const cache = await readCache();
+      return cache?.find((item) => item.id === id) ?? null;
+    }
+    throw error;
   }
-  return MOCK_TRANSACTIONS.find((t) => t.id === id) ?? null;
 }
 
-/** Invalidate the local cache (call after a new transaction is submitted). */
 export async function invalidateTransactionCache(): Promise<void> {
   memCache.clear();
   await AsyncStorage.removeItem(CACHE_KEY);
