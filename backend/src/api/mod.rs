@@ -7,6 +7,7 @@ use axum::{
 pub mod admin;
 pub use admin::admin_routes;
 pub mod auth;
+pub mod bank_accounts;
 pub mod circles;
 pub mod auth_middleware;
 pub mod bridge;
@@ -14,6 +15,7 @@ pub mod feed;
 pub mod payouts;
 pub mod privy_jwks;
 pub mod social;
+pub mod transactions;
 pub mod user;
 pub use user as users;
 pub mod r#yield;
@@ -186,6 +188,13 @@ pub fn social_routes(pool: sqlx::PgPool) -> Router {
         .route("/unlike", delete(social::unlike_payment))
         .route("/comment", post(social::add_comment))
         .route("/comment/:id", delete(social::delete_comment))
+        .with_state(pool)
+}
+
+pub fn transaction_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/history", get(transactions::get_history))
+        .route("/history/:id", get(transactions::get_history_detail))
         .with_state(pool)
 }
 

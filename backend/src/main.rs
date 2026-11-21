@@ -335,7 +335,14 @@ async fn main() {
         Router::new()
             .nest("/api/feed", api::feed_routes(pool.clone()))
             .nest("/api/social", api::social_routes(pool.clone()))
+            .nest("/api/transactions", api::transaction_routes(pool.clone()))
             .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
+            .nest(
+                "/api/bank-accounts",
+                api::bank_accounts::bank_account_routes(
+                    api::bank_accounts::BankAccountState::from_env(pool.clone()),
+                ),
+            )
             .nest("/api/registry", api::registry_routes(pool.clone()))
             .nest(
                 "/api/yield",

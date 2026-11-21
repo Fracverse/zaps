@@ -14,6 +14,7 @@ export function useTransactions() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offlineCache, setOfflineCache] = useState(false);
   const [filters, setFilters] = useState<TransactionFilters>(DEFAULT_FILTERS);
   const [total, setTotal] = useState(0);
 
@@ -32,6 +33,7 @@ export function useTransactions() {
         cursorRef.current = page.nextCursor;
         hasMoreRef.current = page.nextCursor !== null;
         setTotal(page.total);
+        setOfflineCache(!!page.offlineCache);
         setItems((prev) => {
           if (!append) return page.items;
           // Guard against duplicates when the backend returns overlapping items
@@ -96,6 +98,7 @@ export function useTransactions() {
     refreshing,
     loadingMore,
     error,
+    offlineCache,
     filters,
     total,
     hasMore: hasMoreRef.current,

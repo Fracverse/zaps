@@ -99,15 +99,32 @@ export default function TransactionDetailScreen() {
   const router = useRouter();
   const [tx, setTx] = useState<Transaction | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
 
-  useEffect(() => {
-    if (!id) return;
-    fetchTransactionById(id).then((t) => {
-      setTx(t);
+  const loadTransaction = useCallback(async () => {
+    if (!id) {
+      setTx(null);
       setLoading(false);
-    });
+      return;
+    }
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setTx(await fetchTransactionById(id));
+    } catch (e) {
+      setTx(null);
+      setLoadError(
+        e instanceof Error ? e.message : "Could not load transaction"
+      );
+    } finally {
+      setLoading(false);
+    }
   }, [id]);
+
+  useEffect(() => {
+    void loadTransaction();
+  }, [loadTransaction]);
 
   const copy = useCallback(async (text: string, label: string) => {
     await Clipboard.setStringAsync(text);
@@ -137,6 +154,30 @@ export default function TransactionDetailScreen() {
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.center}>
           <ActivityIndicator size="large" color={COLORS.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!tx && loadError) {
+    return (
+      <SafeAreaView style={styles.container} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+          >
+            <Ionicons name="arrow-back" size={24} color={COLORS.black} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Receipt</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+        <View style={styles.center}>
+          <Text style={styles.notFoundText}>{loadError}</Text>
+          <TouchableOpacity onPress={() => void loadTransaction()}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -343,6 +384,11 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_400Regular",
     fontSize: 16,
     color: "#999",
+  },
+  retryText: {
+    marginTop: 12,
+    color: COLORS.primary,
+    fontFamily: "Outfit_600SemiBold",
   },
   header: {
     flexDirection: "row",
