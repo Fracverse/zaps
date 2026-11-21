@@ -220,11 +220,14 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .with_state(state)
 }
 
-/// #1227 — Circles API routes.
+/// Circles API routes (#1193, #1194, #1195, #1196).
 pub fn circle_routes(pool: sqlx::PgPool) -> Router {
     let state = circles::CirclesState::new(pool);
     Router::new()
         .route("/", post(circles::create_circle).get(circles::list_circles))
+        // #1196: Discovery endpoint must be registered before /:id to avoid
+        // "discover" being parsed as a UUID path segment.
+        .route("/discover", get(circles::discover_circles))
         .route("/:id", get(circles::get_circle))
         .route("/:id/contribute", post(circles::contribute))
         .route("/:id/payout", post(circles::request_payout))
