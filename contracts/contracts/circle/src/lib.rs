@@ -25,6 +25,12 @@ pub enum Error {
     ExitRestricted = 13,
     InvalidDestination = 14,
     Overflow = 15,
+    DeadlineExpired = 16,
+    GoalNotFound = 17,
+    GoalMismatch = 18,
+    GoalAlreadyCompleted = 19,
+    InvalidDeadline = 20,
+    DuplicateRecord = 21,
 }
 
 #[contracttype]
@@ -108,6 +114,46 @@ pub struct ReconciliationResult {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Goal {
+    pub id: u32,
+    pub circle_id: u32,
+    pub creator: Address,
+    pub token: Address,
+    pub target_amount: i128,
+    pub current_amount: i128,
+    pub deadline: u64,
+    pub completed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GoalProgress {
+    pub goal_id: u32,
+    pub circle_id: u32,
+    pub token: Address,
+    pub target_amount: i128,
+    pub current_amount: i128,
+    pub remaining_amount: i128,
+    pub progress_bps: u32,
+    pub is_completed: bool,
+    pub deadline: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContributionRecord {
+    pub id: u32,
+    pub circle_id: u32,
+    pub contributor: Address,
+    pub amount: i128,
+    pub asset: Address,
+    pub timestamp: u64,
+    pub ledger: u32,
+    pub goal_id: Option<u32>,
+}
+
+#[contracttype]
 enum Key {
     Count,
     Circle(u32),
@@ -119,6 +165,16 @@ enum Key {
     AssetReserved(Address),
     AssetContributed(Address),
     AssetPaid(Address),
+    CircleDeadline(u32),
+    Goal(u32, u32),
+    CircleGoalCount(u32),
+    MemberGoalContrib(u32, u32, Address),
+    MemberAssetContrib(Address, Address),
+    MemberContribCount(u32, Address),
+    RecordCount,
+    Record(u32),
+    CircleRecordCount(u32),
+    CircleRecordAt(u32, u32),
 }
 
 #[contract]
@@ -179,6 +235,79 @@ fn set_asset_p(env: &Env, asset: &Address, val: i128) {
     env.storage().persistent().set(&Key::AssetPaid(asset.clone()), &val);
 }
 
+fn get_circle_deadl(env: &Env, id: u32) -> u64 {
+    env.storage().persistent().get(&Key::CircleDeadline(id)).unwrap_or(0)
+}
+
+fn record_contribution_internal(
+    env: &Env,
+    circle_id: u32,
+    contributor: &Address,
+    amount: i128,
+    asset: &Address,
+    goal_id: Option<u32>,
+) -> Result<u32, Error> {
+    let rec_id: u32 = env.storage().persistent().get(&Key::RecordCount).unwrap_or(0);
+    let next_rec_id = rec_id.checked_add(1).ok_or(Error::Overflow)?;
+
+    let key = Key::Record(rec_id);
+    if env.storage().persistent().has(&key) {
+        return Err(Error::DuplicateRecord);
+    }
+
+    let record = ContributionRecord {
+        id: rec_id,
+        circle_id,
+        contributor: contributor.clone(),
+        amount,
+        asset: asset.clone(),
+        timestamp: env.ledger().timestamp(),
+        ledger: env.ledger().sequence(),
+        goal_id,
+    };
+
+    env.storage().persistent().set(&key, &record);
+    env.storage().persistent().set(&Key::RecordCount, &next_rec_id);
+
+    let circle_count: u32 = env
+        .storage()
+        .persistent()
+        .get(&Key::CircleRecordCount(circle_id))
+        .unwrap_or(0);
+    let next_circle_count = circle_count.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage()
+        .persistent()
+        .set(&Key::CircleRecordAt(circle_id, circle_count), &rec_id);
+    env.storage()
+        .persistent()
+        .set(&Key::CircleRecordCount(circle_id), &next_circle_count);
+
+    let member_contrib_count: u32 = env
+        .storage()
+        .persistent()
+        .get(&Key::MemberContribCount(circle_id, contributor.clone()))
+        .unwrap_or(0);
+    let next_m_count = member_contrib_count.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage()
+        .persistent()
+        .set(&Key::MemberContribCount(circle_id, contributor.clone()), &next_m_count);
+
+    let member_asset_total: i128 = env
+        .storage()
+        .persistent()
+        .get(&Key::MemberAssetContrib(contributor.clone(), asset.clone()))
+        .unwrap_or(0);
+    let next_asset_total = member_asset_total.checked_add(amount).ok_or(Error::Overflow)?;
+    env.storage()
+        .persistent()
+        .set(&Key::MemberAssetContrib(contributor.clone(), asset.clone()), &next_asset_total);
+
+    env.events()
+        .publish((symbol_short!("rec_crt"), circle_id, rec_id), amount);
+
+    Ok(rec_id)
+}
+
 #[contractimpl]
 impl CircleContract {
     /// Creates a circle. The admin becomes the first member and sole approver (threshold 1).
@@ -225,6 +354,13 @@ impl CircleContract {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+
+        // Validate circle deadline
+        let deadline = get_circle_deadl(&env, id);
+        if deadline > 0 && env.ledger().timestamp() > deadline {
+            return Err(Error::DeadlineExpired);
+        }
+
         token::Client::new(&env, &c.token).transfer(&member, &env.current_contract_address(), &amount);
 
         c.balance = c.balance.checked_add(amount).ok_or(Error::Overflow)?;
@@ -242,8 +378,52 @@ impl CircleContract {
         let ac = get_asset_contrib(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
         set_asset_contrib(&env, &c.token, ac);
 
+        // Atomic contribution record creation
+        record_contribution_internal(&env, id, &member, amount, &c.token, None)?;
+
         env.events().publish((symbol_short!("contrib"), id, member), amount);
         Ok(())
+    }
+
+    /// Contributes funds and returns the unique contribution record identifier.
+    pub fn contribute_with_record(env: Env, id: u32, member: Address, amount: i128) -> Result<u32, Error> {
+        member.require_auth();
+        let mut c = load(&env, id)?;
+        if !is_member(&env, id, &member) {
+            return Err(Error::NotMember);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Validate circle deadline
+        let deadline = get_circle_deadl(&env, id);
+        if deadline > 0 && env.ledger().timestamp() > deadline {
+            return Err(Error::DeadlineExpired);
+        }
+
+        token::Client::new(&env, &c.token).transfer(&member, &env.current_contract_address(), &amount);
+
+        c.balance = c.balance.checked_add(amount).ok_or(Error::Overflow)?;
+        c.total_contributed = c.total_contributed.checked_add(amount).ok_or(Error::Overflow)?;
+        save(&env, id, &c);
+
+        let key = Key::Contribution(id, member.clone());
+        let total: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let new_total = total.checked_add(amount).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&key, &new_total);
+
+        // Update asset-level tracking
+        let ab = get_asset_bal(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
+        set_asset_bal(&env, &c.token, ab);
+        let ac = get_asset_contrib(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
+        set_asset_contrib(&env, &c.token, ac);
+
+        // Atomic contribution record creation
+        let rec_id = record_contribution_internal(&env, id, &member, amount, &c.token, None)?;
+
+        env.events().publish((symbol_short!("contrib"), id, member), amount);
+        Ok(rec_id)
     }
 
     /// Admin-only. Sets the per-request payout limit (0 disables the limit).
@@ -590,6 +770,298 @@ impl CircleContract {
             recorded_balance: recorded,
             is_reconciled: actual >= recorded,
         }
+    }
+
+    // ── Contribution Deadlines (#1241) ───────────────────────────────────
+
+    /// Admin-only. Sets or updates the contribution deadline for a circle (0 = no deadline).
+    pub fn set_circle_deadline(env: Env, id: u32, admin: Address, deadline: u64) -> Result<(), Error> {
+        admin.require_auth();
+        let c = load(&env, id)?;
+        if admin != c.admin {
+            return Err(Error::Unauthorized);
+        }
+        env.storage().persistent().set(&Key::CircleDeadline(id), &deadline);
+        env.events().publish((symbol_short!("deadl_set"), id), deadline);
+        Ok(())
+    }
+
+    /// Queries the contribution deadline of a circle (0 if no deadline is set).
+    pub fn get_circle_deadline(env: Env, id: u32) -> Result<u64, Error> {
+        load(&env, id)?;
+        Ok(get_circle_deadl(&env, id))
+    }
+
+    /// Checks if a circle is currently active and accepting contributions based on ledger time.
+    pub fn is_circle_active(env: Env, id: u32) -> Result<bool, Error> {
+        load(&env, id)?;
+        let deadline = get_circle_deadl(&env, id);
+        if deadline == 0 {
+            Ok(true)
+        } else {
+            Ok(env.ledger().timestamp() <= deadline)
+        }
+    }
+
+    // ── Savings Goal Contribution Tracking (#1240) ───────────────────────
+
+    /// Creates a savings goal within a circle. Must be a circle member.
+    pub fn create_goal(
+        env: Env,
+        circle_id: u32,
+        creator: Address,
+        target_amount: i128,
+        deadline: u64,
+    ) -> Result<u32, Error> {
+        creator.require_auth();
+        let c = load(&env, circle_id)?;
+        if !is_member(&env, circle_id, &creator) {
+            return Err(Error::NotMember);
+        }
+        if target_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if deadline > 0 && deadline < env.ledger().timestamp() {
+            return Err(Error::InvalidDeadline);
+        }
+
+        let goal_id: u32 = env
+            .storage()
+            .persistent()
+            .get(&Key::CircleGoalCount(circle_id))
+            .unwrap_or(0);
+        let next_goal_id = goal_id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&Key::CircleGoalCount(circle_id), &next_goal_id);
+
+        let goal = Goal {
+            id: goal_id,
+            circle_id,
+            creator: creator.clone(),
+            token: c.token,
+            target_amount,
+            current_amount: 0,
+            deadline,
+            completed: false,
+        };
+        env.storage().persistent().set(&Key::Goal(circle_id, goal_id), &goal);
+
+        env.events().publish((symbol_short!("goal_crt"), circle_id, goal_id), target_amount);
+        Ok(goal_id)
+    }
+
+    /// Contributes towards a specific savings goal. Updates goal progress atomically.
+    pub fn contribute_to_goal(
+        env: Env,
+        circle_id: u32,
+        goal_id: u32,
+        member: Address,
+        amount: i128,
+    ) -> Result<u32, Error> {
+        member.require_auth();
+        let mut c = load(&env, circle_id)?;
+        if !is_member(&env, circle_id, &member) {
+            return Err(Error::NotMember);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Validate circle deadline
+        let circle_deadline = get_circle_deadl(&env, circle_id);
+        let now = env.ledger().timestamp();
+        if circle_deadline > 0 && now > circle_deadline {
+            return Err(Error::DeadlineExpired);
+        }
+
+        // Load goal
+        let mut goal: Goal = env
+            .storage()
+            .persistent()
+            .get(&Key::Goal(circle_id, goal_id))
+            .ok_or(Error::GoalNotFound)?;
+
+        if goal.circle_id != circle_id {
+            return Err(Error::GoalMismatch);
+        }
+
+        if goal.completed {
+            return Err(Error::GoalAlreadyCompleted);
+        }
+
+        // Validate goal deadline if set
+        if goal.deadline > 0 && now > goal.deadline {
+            return Err(Error::DeadlineExpired);
+        }
+
+        // Validate correct asset denomination
+        if goal.token != c.token {
+            return Err(Error::GoalMismatch);
+        }
+
+        token::Client::new(&env, &c.token).transfer(&member, &env.current_contract_address(), &amount);
+
+        c.balance = c.balance.checked_add(amount).ok_or(Error::Overflow)?;
+        c.total_contributed = c.total_contributed.checked_add(amount).ok_or(Error::Overflow)?;
+        save(&env, circle_id, &c);
+
+        let key = Key::Contribution(circle_id, member.clone());
+        let total: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let new_total = total.checked_add(amount).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&key, &new_total);
+
+        // Update member goal contribution
+        let goal_member_key = Key::MemberGoalContrib(circle_id, goal_id, member.clone());
+        let current_mgc: i128 = env.storage().persistent().get(&goal_member_key).unwrap_or(0);
+        let new_mgc = current_mgc.checked_add(amount).ok_or(Error::Overflow)?;
+        env.storage().persistent().set(&goal_member_key, &new_mgc);
+
+        // Update asset-level tracking
+        let ab = get_asset_bal(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
+        set_asset_bal(&env, &c.token, ab);
+        let ac = get_asset_contrib(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
+        set_asset_contrib(&env, &c.token, ac);
+
+        // Update goal progress and completion status
+        goal.current_amount = goal.current_amount.checked_add(amount).ok_or(Error::Overflow)?;
+        if goal.current_amount >= goal.target_amount {
+            goal.completed = true;
+            env.events().publish((symbol_short!("goal_cmp"), circle_id, goal_id), goal.current_amount);
+        }
+        env.storage().persistent().set(&Key::Goal(circle_id, goal_id), &goal);
+
+        // Atomic record creation associated with goal
+        let rec_id = record_contribution_internal(&env, circle_id, &member, amount, &c.token, Some(goal_id))?;
+
+        env.events().publish((symbol_short!("contrib"), circle_id, member), amount);
+        env.events().publish((symbol_short!("goal_con"), circle_id, goal_id), amount);
+
+        Ok(rec_id)
+    }
+
+    /// Queries goal details.
+    pub fn get_goal(env: Env, circle_id: u32, goal_id: u32) -> Result<Goal, Error> {
+        load(&env, circle_id)?;
+        env.storage()
+            .persistent()
+            .get(&Key::Goal(circle_id, goal_id))
+            .ok_or(Error::GoalNotFound)
+    }
+
+    /// Queries goal progress metrics including remaining amount and percentage completion in bps.
+    pub fn get_goal_progress(env: Env, circle_id: u32, goal_id: u32) -> Result<GoalProgress, Error> {
+        load(&env, circle_id)?;
+        let goal: Goal = env
+            .storage()
+            .persistent()
+            .get(&Key::Goal(circle_id, goal_id))
+            .ok_or(Error::GoalNotFound)?;
+
+        let remaining = if goal.current_amount >= goal.target_amount {
+            0
+        } else {
+            goal.target_amount - goal.current_amount
+        };
+
+        let progress_bps = if goal.target_amount <= 0 {
+            0
+        } else if goal.current_amount >= goal.target_amount {
+            10_000
+        } else {
+            let p = (goal.current_amount.checked_mul(10_000).unwrap_or(0)) / goal.target_amount;
+            p as u32
+        };
+
+        Ok(GoalProgress {
+            goal_id,
+            circle_id,
+            token: goal.token,
+            target_amount: goal.target_amount,
+            current_amount: goal.current_amount,
+            remaining_amount: remaining,
+            progress_bps,
+            is_completed: goal.completed,
+            deadline: goal.deadline,
+        })
+    }
+
+    /// Queries total goals created for a circle.
+    pub fn get_goal_count(env: Env, circle_id: u32) -> Result<u32, Error> {
+        load(&env, circle_id)?;
+        Ok(env.storage().persistent().get(&Key::CircleGoalCount(circle_id)).unwrap_or(0))
+    }
+
+    /// Queries how much a specific member contributed to a specific goal.
+    pub fn get_member_goal_contribution(env: Env, circle_id: u32, goal_id: u32, member: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&Key::MemberGoalContrib(circle_id, goal_id, member))
+            .unwrap_or(0)
+    }
+
+    // ── Contribution Transaction Records & Accounting (#1237, #1238) ─────
+
+    /// Queries an individual contribution record by its unique global ID.
+    pub fn get_contribution_record(env: Env, record_id: u32) -> Result<ContributionRecord, Error> {
+        env.storage()
+            .persistent()
+            .get(&Key::Record(record_id))
+            .ok_or(Error::NotFound)
+    }
+
+    /// Queries paginated contribution history for a circle.
+    pub fn get_circle_contributions(
+        env: Env,
+        circle_id: u32,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<ContributionRecord>, Error> {
+        load(&env, circle_id)?;
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&Key::CircleRecordCount(circle_id))
+            .unwrap_or(0);
+
+        let mut records = Vec::new(&env);
+        if start >= count || limit == 0 {
+            return Ok(records);
+        }
+
+        let safe_limit = if limit > 50 { 50 } else { limit };
+        let end = (start.saturating_add(safe_limit)).min(count);
+
+        for i in start..end {
+            let rec_id_opt: Option<u32> = env.storage().persistent().get(&Key::CircleRecordAt(circle_id, i));
+            if let Some(rec_id) = rec_id_opt {
+                let record_opt: Option<ContributionRecord> = env.storage().persistent().get(&Key::Record(rec_id));
+                if let Some(record) = record_opt {
+                    records.push_back(record);
+                }
+            }
+        }
+
+        Ok(records)
+    }
+
+    /// Queries total number of contributions recorded for a specific circle.
+    pub fn get_circle_contribution_count(env: Env, circle_id: u32) -> Result<u32, Error> {
+        load(&env, circle_id)?;
+        Ok(env.storage().persistent().get(&Key::CircleRecordCount(circle_id)).unwrap_or(0))
+    }
+
+    /// Queries total number of contribution records created across all circles.
+    pub fn get_total_records_count(env: Env) -> u32 {
+        env.storage().persistent().get(&Key::RecordCount).unwrap_or(0)
+    }
+
+    /// Queries total cumulative contributions made by a member across all circles for a specific asset.
+    pub fn get_member_asset_contribution(env: Env, who: Address, asset: Address) -> i128 {
+        env.storage().persistent().get(&Key::MemberAssetContrib(who, asset)).unwrap_or(0)
+    }
+
+    /// Queries the number of contributions made by a specific member to a specific circle.
+    pub fn get_member_contribution_count(env: Env, id: u32, who: Address) -> u32 {
+        env.storage().persistent().get(&Key::MemberContribCount(id, who)).unwrap_or(0)
     }
 }
 
