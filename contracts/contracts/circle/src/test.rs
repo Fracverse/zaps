@@ -172,3 +172,186 @@ fn failed_operations_leave_state_unchanged() {
     assert_eq!(tok.balance(&c.contract), 500);
     assert_eq!(c.client.get_circle(&id).balance, 500);
 }
+
+#[test]
+fn withdrawal_request_registration_and_validation() {
+    let c = setup();
+    let id = funded_circle(&c, 0);
+    let stranger = Address::generate(&c.env);
+
+    // Non-member cannot submit withdrawal request
+    assert_eq!(
+        c.client.try_request_withdrawal(&id, &stranger, &c.bob, &50),
+        Err(Ok(Error::NotMember))
+    );
+
+    // Amount <= 0 fails
+    assert_eq!(
+        c.client.try_request_withdrawal(&id, &c.alice, &c.bob, &0),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        c.client.try_request_withdrawal(&id, &c.alice, &c.bob, &-10),
+        Err(Ok(Error::InvalidAmount))
+    );
+
+    // Destination cannot be the contract address itself
+    assert_eq!(
+        c.client.try_request_withdrawal(&id, &c.alice, &c.contract, &50),
+        Err(Ok(Error::InvalidDestination))
+    );
+
+    // Exceeding available funds fails
+    assert_eq!(
+        c.client.try_request_withdrawal(&id, &c.alice, &c.bob, &501),
+        Err(Ok(Error::InsufficientBalance))
+    );
+
+    // Successful request creates unique identifiers and stores full withdrawal request information
+    let rid0 = c.client.request_withdrawal(&id, &c.alice, &c.bob, &150);
+    assert_eq!(rid0, 0);
+
+    let req0 = c.client.get_withdrawal_request(&id, &rid0);
+    assert_eq!(req0.requester, c.alice);
+    assert_eq!(req0.to, c.bob);
+    assert_eq!(req0.amount, 150);
+    assert_eq!(req0.asset, c.token);
+    assert_eq!(req0.status, RequestStatus::Pending);
+    assert_eq!(req0.threshold, 1);
+    assert!(!req0.executed);
+
+    let rid1 = c.client.request_withdrawal(&id, &c.bob, &c.alice, &50);
+    assert_eq!(rid1, 1);
+    assert_ne!(rid0, rid1);
+
+    // Available funds were properly reduced by reserved amount
+    assert_eq!(c.client.get_available_balance(&id), 300);
+}
+
+#[test]
+fn multi_member_payout_approval_and_progress_tracking() {
+    let c = setup();
+    let id = funded_circle(&c, 0);
+
+    // Admin adds bob as an approver and updates threshold to 2
+    c.client.add_approver(&id, &c.admin, &c.bob);
+    c.client.set_approval_threshold(&id, &c.admin, &2);
+
+    let rid = c.client.request_withdrawal(&id, &c.alice, &c.bob, &100);
+
+    // Query approval progress initially
+    let mut progress = c.client.get_approval_progress(&id, &rid);
+    assert_eq!(progress.current_approvals, 0);
+    assert_eq!(progress.required_threshold, 2);
+    assert!(!progress.is_approved);
+    assert!(!progress.is_executed);
+
+    // Alice is not an approver
+    assert_eq!(c.client.try_approve(&id, &rid, &c.alice), Err(Ok(Error::NotApprover)));
+
+    // Admin approves
+    c.client.approve(&id, &rid, &c.admin);
+
+    // Duplicate approval rejected
+    assert_eq!(c.client.try_approve(&id, &rid, &c.admin), Err(Ok(Error::AlreadyApproved)));
+
+    // Execution fails before threshold is reached
+    assert_eq!(c.client.try_execute(&id, &rid), Err(Ok(Error::NotApproved)));
+
+    // Approval progress updated
+    progress = c.client.get_approval_progress(&id, &rid);
+    assert_eq!(progress.current_approvals, 1);
+    assert!(!progress.is_approved);
+
+    // Bob approves -> reaches threshold of 2
+    c.client.approve(&id, &rid, &c.bob);
+    progress = c.client.get_approval_progress(&id, &rid);
+    assert_eq!(progress.current_approvals, 2);
+    assert!(progress.is_approved);
+
+    // Request status updated to Approved
+    let req = c.client.get_payout(&id, &rid);
+    assert_eq!(req.status, RequestStatus::Approved);
+
+    // Execution succeeds now
+    c.client.execute_payout(&id, &rid);
+    let executed_req = c.client.get_payout(&id, &rid);
+    assert_eq!(executed_req.status, RequestStatus::Executed);
+    assert!(executed_req.executed);
+
+    // Repeated execution prevented
+    assert_eq!(c.client.try_execute(&id, &rid), Err(Ok(Error::AlreadyExecuted)));
+}
+
+#[test]
+fn circle_balance_management_and_reconciliation() {
+    let c = setup();
+    let id = funded_circle(&c, 0);
+
+    // Verify initial balance breakdown
+    let initial_bal = c.client.get_circle_balance(&id);
+    assert_eq!(initial_bal.asset, c.token);
+    assert_eq!(initial_bal.total_balance, 500);
+    assert_eq!(initial_bal.reserved_balance, 0);
+    assert_eq!(initial_bal.available_balance, 500);
+    assert_eq!(initial_bal.total_contributed, 500);
+    assert_eq!(initial_bal.total_paid, 0);
+
+    assert_eq!(c.client.get_available_balance(&id), 500);
+    assert_eq!(c.client.get_total_contributions(&id), 500);
+    assert_eq!(c.client.get_total_payouts(&id), 0);
+
+    // Reconcile initial balance with token contract
+    let recon = c.client.reconcile_circle_balance(&id);
+    assert_eq!(recon.recorded_balance, 500);
+    assert_eq!(recon.on_chain_token_balance, 500);
+    assert!(recon.is_reconciled);
+
+    // Reconcile asset-level balance
+    let asset_recon = c.client.reconcile_asset_balance(&c.token);
+    assert_eq!(asset_recon.recorded_balance, 500);
+    assert!(asset_recon.is_reconciled);
+
+    // Request payout reserves funds
+    let rid = c.client.request_withdrawal(&id, &c.alice, &c.bob, &200);
+    let after_request = c.client.get_circle_balance(&id);
+    assert_eq!(after_request.total_balance, 500);
+    assert_eq!(after_request.reserved_balance, 200);
+    assert_eq!(after_request.available_balance, 300);
+
+    // Failed execution (not approved) does not reduce balances
+    assert_eq!(c.client.try_execute(&id, &rid), Err(Ok(Error::NotApproved)));
+    let after_failed = c.client.get_circle_balance(&id);
+    assert_eq!(after_failed.total_balance, 500);
+    assert_eq!(after_failed.reserved_balance, 200);
+    assert_eq!(after_failed.available_balance, 300);
+
+    // Approve and execute payout
+    c.client.approve(&id, &rid, &c.admin);
+    c.client.execute(&id, &rid);
+
+    // Completed payout atomically updates accounting
+    let after_exec = c.client.get_circle_balance(&id);
+    assert_eq!(after_exec.total_balance, 300);
+    assert_eq!(after_exec.reserved_balance, 0);
+    assert_eq!(after_exec.available_balance, 300);
+    assert_eq!(after_exec.total_contributed, 500);
+    assert_eq!(after_exec.total_paid, 200);
+
+    assert_eq!(c.client.get_total_payouts(&id), 200);
+    assert_eq!(c.client.get_available_balance(&id), 300);
+
+    // Reconcile balance after payout
+    let recon_after = c.client.reconcile_circle_balance(&id);
+    assert_eq!(recon_after.recorded_balance, 300);
+    assert_eq!(recon_after.on_chain_token_balance, 300);
+    assert!(recon_after.is_reconciled);
+
+    // Asset-specific info
+    let asset_info = c.client.get_asset_balance_info(&c.token);
+    assert_eq!(asset_info.total_balance, 300);
+    assert_eq!(asset_info.reserved_balance, 0);
+    assert_eq!(asset_info.available_balance, 300);
+    assert_eq!(asset_info.total_contributed, 500);
+    assert_eq!(asset_info.total_paid, 200);
+}
