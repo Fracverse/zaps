@@ -61,6 +61,9 @@ impl CircleRole {
             CirclePermission::ManagePayouts => matches!(self, Self::Owner | Self::Administrator),
             CirclePermission::ManageMembers => matches!(self, Self::Owner | Self::Administrator),
             CirclePermission::ManageRoles => matches!(self, Self::Owner | Self::Administrator),
+            CirclePermission::ManageGoals => {
+                matches!(self, Self::Owner | Self::Administrator | Self::Moderator)
+            }
             CirclePermission::Contribute => true,
         }
     }
@@ -76,6 +79,8 @@ pub enum CirclePermission {
     ManagePayouts,
     ManageMembers,
     ManageRoles,
+    /// #1204: create, edit and complete savings goals.
+    ManageGoals,
     Contribute,
 }
 
@@ -820,6 +825,14 @@ mod tests {
         assert!(!CircleRole::Member.has_permission(CirclePermission::ManageMembers));
         assert!(!CircleRole::Member.has_permission(CirclePermission::ManageRoles));
         assert!(CircleRole::Member.has_permission(CirclePermission::Contribute));
+    }
+
+    #[test]
+    fn test_manage_goals_permission() {
+        assert!(CircleRole::Owner.has_permission(CirclePermission::ManageGoals));
+        assert!(CircleRole::Administrator.has_permission(CirclePermission::ManageGoals));
+        assert!(CircleRole::Moderator.has_permission(CirclePermission::ManageGoals));
+        assert!(!CircleRole::Member.has_permission(CirclePermission::ManageGoals));
     }
 
     #[test]
