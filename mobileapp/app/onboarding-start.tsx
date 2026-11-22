@@ -20,6 +20,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fetchWithRetry } from "../src/utils/retry";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { PrivySocialButtons } from "../src/components/PrivySocialButtons";
+import { getSessionToken } from "../src/services/api";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8080";
 const PROFILE_CACHE_KEY = "user_profile";
@@ -48,6 +49,26 @@ export default function ProfileSetupScreen() {
           setBio(profile.bio || "");
           setAvatarUri(profile.avatarUri || null);
         }
+
+        const token = await getSessionToken();
+        const headers: Record<string, string> = {};
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
+        const res = await fetchWithRetry(`${API_BASE}/api/profile`, { headers }).catch(() => null);
+        if (res && res.ok) {
+          const remote = await res.json();
+          if (remote.display_name || remote.displayName) {
+            setDisplayName(remote.display_name || remote.displayName);
+          }
+          if (remote.bio) {
+            setBio(remote.bio);
+          }
+          if (remote.avatar_url || remote.avatarUri) {
+            setAvatarUri(remote.avatar_url || remote.avatarUri);
+          }
+        }
+      } catch {
+        // Fall back to cached or initial state
       } finally {
         setLoadingProfile(false);
       }
@@ -85,36 +106,67 @@ export default function ProfileSetupScreen() {
     setSaving(true);
     try {
       let finalAvatarUri = avatarUri;
+      const token = await getSessionToken();
+      const authHeaders: Record<string, string> = {};
+      if (token) authHeaders["Authorization"] = `Bearer ${token}`;
 
+      // Upload file to cloud storage or store URIs directly
       if (avatarUri && avatarUri.startsWith("file://")) {
-        const formData = new FormData();
-        const filename = avatarUri.split("/").pop() || "avatar.jpg";
-        formData.append("avatar", {
-          uri: avatarUri,
-          name: filename,
-          type: "image/jpeg",
-        } as any);
+        try {
+          const formData = new FormData();
+          const filename = avatarUri.split("/").pop() || "avatar.jpg";
+          formData.append("avatar", {
+            uri: avatarUri,
+            name: filename,
+            type: "image/jpeg",
+          } as any);
 
-        const uploadRes = await fetchWithRetry(
-          `${API_BASE}/api/profile/avatar`,
-          {
-            method: "POST",
-            body: formData,
-            headers: {},
+          const uploadRes = await fetchWithRetry(
+            `${API_BASE}/api/profile/avatar`,
+            {
+              method: "POST",
+              body: formData,
+              headers: { ...authHeaders },
+            }
+          );
+          if (uploadRes && uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            finalAvatarUri = uploadData.avatar_url || uploadData.url || avatarUri;
           }
-        );
-        const uploadData = await uploadRes.json();
-        finalAvatarUri = uploadData.url || avatarUri;
+        } catch {
+          // If cloud upload fails or is not available, store the URI directly
+          finalAvatarUri = avatarUri;
+        }
       }
 
-      await fetchWithRetry(`${API_BASE}/api/profile`, {
-        method: "PUT",
-        body: JSON.stringify({
-          displayName: displayName.trim(),
-          bio: bio.trim(),
-          avatarUri: finalAvatarUri,
-        }),
+      // Persist profile to backend DB
+      const postHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...authHeaders,
+      };
+
+      const payload = JSON.stringify({
+        display_name: displayName.trim(),
+        displayName: displayName.trim(),
+        bio: bio.trim(),
+        avatar_url: finalAvatarUri,
+        avatarUri: finalAvatarUri,
       });
+
+      // Try POST first (backend standard), fallback to PUT if needed
+      let saveRes = await fetchWithRetry(`${API_BASE}/api/profile`, {
+        method: "POST",
+        headers: postHeaders,
+        body: payload,
+      }).catch(() => null);
+
+      if (!saveRes || !saveRes.ok) {
+        saveRes = await fetchWithRetry(`${API_BASE}/api/profile`, {
+          method: "PUT",
+          headers: postHeaders,
+          body: payload,
+        }).catch(() => null);
+      }
 
       const profile: UserProfile = {
         displayName: displayName.trim(),

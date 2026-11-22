@@ -23,6 +23,7 @@ import {
   parseSep0007Uri,
   detectQrContentType,
   Sep0007PaymentParams,
+  parseZapsPayUri,
 } from "../src/utils/sep0007";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -284,8 +285,11 @@ function ScanScreen() {
 
       const contentType = detectQrContentType(data);
 
-      if (contentType === "sep0007") {
-        const result = parseSep0007Uri(data);
+      if (contentType === "sep0007" || contentType === "zaps_pay") {
+        const result =
+          contentType === "zaps_pay"
+            ? parseZapsPayUri(data)
+            : parseSep0007Uri(data);
         if (!result.valid) {
           setErrorMsg(result.error);
           setScreenState("error");
@@ -304,7 +308,6 @@ function ScanScreen() {
           });
           setScreenState("preview");
         } else {
-          // tx operation — show raw info
           setPreview({
             destination: "XDR Transaction",
             msg: "This QR contains a signed transaction envelope.",
@@ -320,7 +323,7 @@ function ScanScreen() {
         setScreenState("preview");
       } else {
         setErrorMsg(
-          `Unrecognized QR code content.\n\nExpected a SEP-0007 payment URI (web+stellar:pay?…) or a Stellar address.`
+          `Unrecognized QR code content.\n\nExpected a SEP-0007 payment URI (web+stellar:pay?…), a Zaps pay URI (zaps://pay?…), or a Stellar address.`
         );
         setScreenState("error");
       }

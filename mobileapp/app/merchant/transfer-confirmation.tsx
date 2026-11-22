@@ -1,95 +1,80 @@
-import React, { useState, useEffect } from "react";
-import { View, StyleSheet, Pressable, TextInput, Animated } from "react-native";
+import React, { useState } from "react";
+import { View, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
-import { Spacing } from "@/src/constants/theme";
-
-const PIN_LENGTH = 4;
+import { Spacing, BorderRadius } from "@/src/constants/theme";
+import { submitWithdrawal, WithdrawalError } from "@/src/services/withdrawalService";
 
 export default function TransferConfirmationScreen() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const router = useRouter();
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState(false);
-  const shakeAnim = React.useRef(new Animated.Value(0)).current;
-  const scaleAnims = React.useRef(
-    Array(PIN_LENGTH)
-      .fill(0)
-      .map(() => new Animated.Value(1))
-  ).current;
+  const params = useLocalSearchParams<{
+    amount?: string;
+    accountName?: string;
+    accountNumberLast4?: string;
+    bankCode?: string;
+    bankName?: string;
+    destinationId?: string;
+  }>();
+  const amount = Number(params.amount);
+  const accountName = params.accountName ?? "";
+  const accountNumberLast4 = params.accountNumberLast4 ?? "";
+  const bankCode = params.bankCode ?? "";
+  const bankName = params.bankName ?? "";
+  const destinationId = params.destinationId ?? "";
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
-  const shakeAnimation = React.useCallback(() => {
-    Animated.sequence([
-      Animated.timing(shakeAnim, {
-        toValue: 10,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-      Animated.timing(shakeAnim, {
-        toValue: -10,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-      Animated.timing(shakeAnim, {
-        toValue: 10,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-      Animated.timing(shakeAnim, {
-        toValue: 0,
-        duration: 50,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [shakeAnim]);
+  const valid =
+    Number.isFinite(amount) &&
+    amount > 0 &&
+    !!accountNumberLast4 &&
+    !!bankCode &&
+    !!bankName &&
+    !submitting;
 
-  useEffect(() => {
-    if (pin.length === PIN_LENGTH) {
-      // Simulate PIN verification
-      setTimeout(() => {
-        if (pin === "1234") {
-          // Correct PIN
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          router.push("/merchant/success");
-        } else {
-          // Incorrect PIN
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          setError(true);
-          shakeAnimation();
-          setPin("");
-          setTimeout(() => setError(false), 2000);
-        }
-      }, 300);
-    }
-  }, [pin, router, shakeAnimation]);
-
-  const handlePinInput = (value: string) => {
-    if (error) return;
-    if (value.length <= PIN_LENGTH) {
-      setPin(value);
-      if (value.length > pin.length && value.length <= PIN_LENGTH) {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        // Animate the dot
-        const index = value.length - 1;
-        Animated.sequence([
-          Animated.timing(scaleAnims[index], {
-            toValue: 1.3,
-            duration: 150,
-            useNativeDriver: true,
-          }),
-          Animated.timing(scaleAnims[index], {
-            toValue: 1,
-            duration: 150,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }
+  const confirmWithdrawal = async () => {
+    if (!valid) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const result = await submitWithdrawal({
+        amount,
+        destination: {
+          id: destinationId || undefined,
+          bankCode,
+          accountName,
+          accountNumberLast4,
+          bankName,
+        },
+      });
+      if (!result.accepted) throw new Error("Withdrawal was not accepted.");
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success
+      );
+      const successParams = new URLSearchParams({
+        amount: amount.toFixed(2),
+        requestId: result.id,
+        accepted: "true",
+      });
+      router.replace(`/merchant/success?${successParams.toString()}`);
+    } catch (e) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setError(
+        e instanceof WithdrawalError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : "Withdrawal failed. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -105,86 +90,71 @@ export default function TransferConfirmationScreen() {
         ]}
       >
         <View style={styles.header}>
-          <View
-            style={[
-              styles.lockCircle,
-              {
-                backgroundColor: error
-                  ? theme.backgroundDefault
-                  : theme.primary + "15",
-              },
-            ]}
-          >
-            <Feather
-              name="lock"
-              size={32}
-              color={error ? theme.text : theme.primary}
-            />
+          <View style={[styles.lockCircle, { backgroundColor: theme.primary + "15" }]}>
+            <Feather name="check-circle" size={32} color={theme.primary} />
           </View>
           <ThemedText style={[styles.title, { color: theme.text }]}>
-            Enter PIN Code
+            Confirm withdrawal
           </ThemedText>
           <ThemedText style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Please enter your 4-digit PIN to confirm
+            Review and confirm to submit your withdrawal.
           </ThemedText>
         </View>
 
-        <Animated.View
-          style={[
-            styles.pinContainer,
-            { transform: [{ translateX: shakeAnim }] },
+        <View style={[styles.details, { borderColor: theme.border }]}>
+          <View style={styles.detailRow}>
+            <ThemedText style={{ color: theme.textSecondary }}>Amount</ThemedText>
+            <ThemedText style={{ color: theme.text }}>
+              ${Number.isFinite(amount) ? amount.toFixed(2) : "0.00"}
+            </ThemedText>
+          </View>
+          <View style={styles.detailRow}>
+            <ThemedText style={{ color: theme.textSecondary }}>Bank</ThemedText>
+            <ThemedText style={{ color: theme.text }}>{bankName || "Missing"}</ThemedText>
+          </View>
+          <View style={styles.detailRow}>
+            <ThemedText style={{ color: theme.textSecondary }}>Account</ThemedText>
+            <ThemedText style={{ color: theme.text }}>
+              {accountNumberLast4 ? `•••• ${accountNumberLast4}` : "Missing"}
+            </ThemedText>
+          </View>
+        </View>
+
+        {error ? (
+          <View style={styles.errorContainer} testID="withdrawal-submit-error">
+            <Feather name="alert-circle" size={16} color="#EF4444" />
+            <ThemedText style={styles.errorText}>{error}</ThemedText>
+          </View>
+        ) : null}
+
+        <Pressable
+          onPress={confirmWithdrawal}
+          disabled={!valid}
+          testID="submit-withdrawal"
+          style={({ pressed }) => [
+            styles.confirmButton,
+            {
+              backgroundColor: theme.primary,
+              opacity: !valid ? 0.5 : pressed ? 0.8 : 1,
+            },
           ]}
         >
-          {Array(PIN_LENGTH)
-            .fill(0)
-            .map((_, index) => (
-              <Animated.View
-                key={index}
-                style={[
-                  styles.pinDot,
-                  {
-                    backgroundColor:
-                      pin.length > index
-                        ? error
-                          ? "#EF4444"
-                          : theme.primary
-                        : theme.backgroundDefault,
-                    borderColor: error ? "#EF4444" : theme.border,
-                    transform: [{ scale: scaleAnims[index] }],
-                  },
-                ]}
-              />
-            ))}
-        </Animated.View>
-
-        {error && (
-          <View style={styles.errorContainer}>
-            <Feather name="alert-circle" size={16} color="#EF4444" />
-            <ThemedText style={styles.errorText}>Incorrect PIN</ThemedText>
-          </View>
-        )}
-
-        {/* Hidden TextInput for keyboard */}
-        <TextInput
-          style={styles.hiddenInput}
-          value={pin}
-          onChangeText={handlePinInput}
-          keyboardType="number-pad"
-          maxLength={PIN_LENGTH}
-          autoFocus
-          secureTextEntry
-        />
+          {submitting ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <ThemedText style={styles.confirmText}>Confirm & withdraw</ThemedText>
+          )}
+        </Pressable>
 
         <Pressable
           onPress={() => router.back()}
+          disabled={submitting}
           style={({ pressed }) => [
             styles.cancelButton,
-            { opacity: pressed ? 0.7 : 1 },
+            { opacity: submitting ? 0.4 : pressed ? 0.7 : 1 },
           ]}
         >
-          <ThemedText
-            style={[styles.cancelText, { color: theme.textSecondary }]}
-          >
+          <ThemedText style={[styles.cancelText, { color: theme.textSecondary }]}>
             Cancel
           </ThemedText>
         </Pressable>
@@ -194,19 +164,13 @@ export default function TransferConfirmationScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   content: {
     flex: 1,
     paddingHorizontal: Spacing.lg,
     justifyContent: "center",
-    alignItems: "center",
   },
-  header: {
-    alignItems: "center",
-    marginBottom: Spacing["4xl"],
-  },
+  header: { alignItems: "center", marginBottom: Spacing["3xl"] },
   lockCircle: {
     width: 80,
     height: 80,
@@ -215,50 +179,30 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: Spacing.xl,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: "700",
-    marginBottom: Spacing.sm,
-  },
-  subtitle: {
-    fontSize: 14,
-    textAlign: "center",
-  },
-  pinContainer: {
-    flexDirection: "row",
+  title: { fontSize: 24, fontFamily: "Outfit_700Bold", marginBottom: Spacing.sm },
+  subtitle: { fontSize: 14, textAlign: "center" },
+  details: {
+    borderWidth: 1,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing["2xl"],
     gap: Spacing.lg,
-    marginBottom: Spacing.xl,
   },
-  pinDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 2,
-  },
-  hiddenInput: {
-    position: "absolute",
-    opacity: 0,
-    height: 0,
-    width: 0,
-  },
+  detailRow: { flexDirection: "row", justifyContent: "space-between", gap: Spacing.lg },
   errorContainer: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.xs,
-    marginTop: Spacing.md,
+    marginTop: Spacing.lg,
   },
-  errorText: {
-    fontSize: 14,
-    color: "#EF4444",
-    fontWeight: "500",
+  errorText: { flex: 1, fontSize: 14, color: "#EF4444", fontFamily: "Outfit_500Medium" },
+  confirmButton: {
+    height: Spacing.buttonHeight,
+    borderRadius: BorderRadius.full,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: Spacing["3xl"],
   },
-  cancelButton: {
-    marginTop: Spacing["4xl"],
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.xl,
-  },
-  cancelText: {
-    fontSize: 16,
-    fontWeight: "500",
-  },
+  confirmText: { color: "#FFFFFF", fontSize: 16, fontFamily: "Outfit_600SemiBold" },
+  cancelButton: { marginTop: Spacing.lg, alignItems: "center", padding: Spacing.md },
+  cancelText: { fontSize: 16, fontFamily: "Outfit_500Medium" },
 });

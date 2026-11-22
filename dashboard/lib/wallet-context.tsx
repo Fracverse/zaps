@@ -144,8 +144,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const signTransaction = useCallback(
     async (xdr: string, networkPassphrase: string) => {
-      if (!wallet.connected) {
-        throw new Error("Connect a wallet before signing");
+      // Surface a clear, actionable message when no wallet is connected so
+      // callers (e.g. the admin contracts page) can show it verbatim.
+      if (!wallet.connected || !wallet.publicKey) {
+        const message = "Connect a wallet before signing";
+        if (mountedRef.current) setError(message);
+        throw new Error(message);
       }
       setError(null);
       try {
@@ -157,7 +161,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         throw err instanceof Error ? err : new Error(message);
       }
     },
-    [wallet.connected],
+    [wallet.connected, wallet.publicKey],
   );
 
   const value = useMemo<WalletContextValue>(

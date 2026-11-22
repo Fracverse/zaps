@@ -18,6 +18,7 @@ import { Button } from "../src/components/Button";
 import { Input } from "../src/components/Input";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchWithRetry } from "../src/utils/retry";
+import { useDebounce } from "../src/hooks/useDebounce";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8080";
 export const USERNAME_STORAGE_KEY = "user_username";
@@ -61,20 +62,21 @@ export async function checkUsernameAvailabilityApi(
 ): Promise<boolean> {
   try {
     const res = await fetchWithRetry(
-      `${API_BASE}/api/users/resolve/${encodeURIComponent(username)}`,
+      `${API_BASE}/api/v1/users/check-username?username=${encodeURIComponent(username)}`,
       { method: "GET" }
     );
     if (res.status === 404) {
-      // 404 means user not found -> username is available
       return true;
     }
     if (res.ok) {
-      // 200 means user exists -> username is taken
-      return false;
+      const body = await res.json().catch(() => ({}));
+      if (typeof body?.available === "boolean") {
+        return body.available;
+      }
+      return true;
     }
     return true;
   } catch {
-    // If backend is unreachable or offline during dev/testing, default to available
     return true;
   }
 }
@@ -87,16 +89,16 @@ export default function UsernameScreen() {
   const [isAvailable, setIsAvailable] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const debouncedCheck = useDebounce(async (name: string) => {
+    const available = await checkUsernameAvailabilityApi(name);
+    setIsAvailable(available);
+    setIsChecking(false);
+  }, 300);
 
   const handleChangeText = (text: string) => {
     // Strip leading '@' if user typed or pasted it
     const cleaned = text.replace(/^@/, "");
     setUsername(cleaned);
-
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
 
     if (!cleaned) {
       setFormatError(undefined);
@@ -117,20 +119,14 @@ export default function UsernameScreen() {
     setIsChecking(true);
     setIsAvailable(null);
 
-    debounceTimerRef.current = setTimeout(async () => {
-      const available = await checkUsernameAvailabilityApi(cleaned);
-      setIsAvailable(available);
-      setIsChecking(false);
-    }, 350);
+    debouncedCheck(cleaned);
   };
 
   useEffect(() => {
     return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
+      debouncedCheck.cancel?.();
     };
-  }, []);
+  }, [debouncedCheck]);
 
   const canContinue =
     username.trim().length >= MIN_USERNAME_LENGTH &&

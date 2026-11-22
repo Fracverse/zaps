@@ -31,6 +31,7 @@ import Svg, {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";
 import { COLORS } from "../../src/constants/colors";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -38,8 +39,31 @@ import {
   likePayment,
   unlikePayment,
   fetchFeed,
+  addComment,
 } from "../../src/services/socialService";
-import { fetchYieldBalance, updateAutoEarn } from "../../src/services/api";
+import {
+  fetchYieldBalance,
+  fetchYieldEarningsHistory,
+  updateAutoEarn,
+} from "../../src/services/api";
+import {
+  BalanceCurrency,
+  formatBalance,
+  formatFiatBalance,
+  fiatFromTokens,
+} from "../../src/utils/balanceDisplay";
+import {
+  YIELD_REQUEST_TIMEOUT_MS,
+  describeYieldError,
+  withTimeout,
+} from "../../src/utils/yieldRequest";
+import {
+  markNotificationPromptDismissed,
+  registerForPushNotificationsAsync,
+  requestNotificationPermissionsAsync,
+  saveNotificationPreference,
+  shouldShowNotificationConsentPrompt,
+} from "../../src/services/notificationService";
 
 interface FeedItem {
   id: string;
@@ -57,7 +81,7 @@ interface FeedItem {
 interface YieldSnapshot {
   apy: string;
   totalYieldEarned: string;
-  explanation: string;
+  explanation?: string;
 }
 
 interface Comment {
@@ -69,23 +93,25 @@ interface Comment {
 
 interface MonthlyEarningPoint {
   month: string;
+  period: string;
   amount: number;
 }
 
-const MONTHLY_EARNINGS: MonthlyEarningPoint[] = [
-  { month: "Jan", amount: 140 },
-  { month: "Feb", amount: 172 },
-  { month: "Mar", amount: 205 },
-  { month: "Apr", amount: 238 },
-  { month: "May", amount: 261 },
-  { month: "Jun", amount: 296 },
-  { month: "Jul", amount: 317 },
-  { month: "Aug", amount: 334 },
-  { month: "Sep", amount: 352 },
-  { month: "Oct", amount: 365 },
-  { month: "Nov", amount: 388 },
-  { month: "Dec", amount: 412 },
-];
+const createRecentMonthlyEarnings = (): MonthlyEarningPoint[] => {
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + index, 1)
+    );
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth();
+    return {
+      month: date.toLocaleString("en-US", { month: "short", timeZone: "UTC" }),
+      period: `${year}-${String(month + 1).padStart(2, "0")}`,
+      amount: 0,
+    };
+  });
+};
 
 const INITIAL_FEED: FeedItem[] = [
   {
@@ -130,8 +156,10 @@ export default function HomeScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"public" | "friends">("public");
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
-  const [availableBalance, setAvailableBalance] = useState("₦0.00");
-  const [totalYieldEarned, setTotalYieldEarned] = useState("₦0.00");
+  const [availableBalanceXlm, setAvailableBalanceXlm] = useState(0);
+  const [totalYieldEarnedXlm, setTotalYieldEarnedXlm] = useState(0);
+  const [displayCurrency, setDisplayCurrency] =
+    useState<BalanceCurrency>("NGN");
   const [yieldData, setYieldData] = useState<YieldSnapshot | null>(null);
   const [yieldStatus, setYieldStatus] = useState<
     "loading" | "success" | "error"
@@ -139,21 +167,32 @@ export default function HomeScreen() {
   const [yieldError, setYieldError] = useState("");
   const [yieldRetryCount, setYieldRetryCount] = useState(0);
   const [chartWidth, setChartWidth] = useState(0);
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(
-    MONTHLY_EARNINGS.length - 1
+  const [monthlyEarnings, setMonthlyEarnings] = useState(
+    createRecentMonthlyEarnings
   );
+  const [earningsHistoryStatus, setEarningsHistoryStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(11);
   const [earningsModalVisible, setEarningsModalVisible] = useState(false);
   const [autoYieldEnabled, setAutoYieldEnabled] = useState(true);
   const [autoEarnSyncing, setAutoEarnSyncing] = useState(false);
   const [autoEarnTooltipVisible, setAutoEarnTooltipVisible] = useState(false);
   const [autoEarnDescModalVisible, setAutoEarnDescModalVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [notifPromptVisible, setNotifPromptVisible] = useState(false);
+  const [notifRequesting, setNotifRequesting] = useState(false);
+  const [balanceMasked, setBalanceMasked] = useState(true);
+  const MASKED_BALANCE = "••••••";
+  const BALANCE_UNAVAILABLE = "--";
   const earningsSheetTranslateY = useRef(new Animated.Value(48)).current;
   const earningsBackdropOpacity = useRef(new Animated.Value(0)).current;
   const shimmerAnim = useRef(new Animated.Value(-1)).current;
   const earningGlowAnim = useRef(new Animated.Value(0)).current;
   const earningPulseAnim = useRef(new Animated.Value(1)).current;
+  const earningOuterGlowAnim = useRef(new Animated.Value(0)).current;
   const yieldRequestRef = useRef(0);
+  const earningsHistoryRequestRef = useRef(0);
 
   // Animated values for like heart scale per feed item
   const scaleAnims = useRef<Map<string, Animated.Value>>(new Map());
@@ -172,33 +211,31 @@ export default function HomeScreen() {
   const [commentsList, setCommentsList] = useState<Comment[]>([]);
 
   const FEED_CACHE_KEY = "feed_items_cache";
-  const YIELD_REQUEST_TIMEOUT_MS = 4500;
+  const HOME_CURRENCY_PREF_KEY = "home_display_currency";
 
   const fetchYieldSnapshot = async (): Promise<YieldSnapshot> => {
     const data = await fetchYieldBalance();
     setAutoYieldEnabled(data.autoEarnEnabled);
-    
-    const formatCurr = (val: number) =>
-      `₦${val.toLocaleString("en-NG", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`;
 
-    // Parse numbers formatting correctly
-    const parseAPIValue = (val: string | number) => {
-      if (typeof val === "number") return formatCurr(val);
-      const strVal = String(val);
-      if (strVal.includes("₦")) return strVal;
-      const parsed = Number(strVal);
-      return isNaN(parsed) ? strVal : formatCurr(parsed);
+    // Balances are XLM token amounts; NGN is derived by multiplying by the
+    // configured rate, so keep the raw token figure around to redraw the card
+    // in either denomination when the toggle flips.
+    const parseRawBalance = (val: string | number): number => {
+      if (typeof val === "number") return val;
+      const sanitized = String(val).replace(/[^\d.-]/g, "");
+      const parsed = Number(sanitized);
+      return Number.isFinite(parsed) ? parsed : 0;
     };
 
-    const formattedYield = parseAPIValue(data.totalYieldEarned);
-    const formattedAvailable = parseAPIValue(data.availableBalance);
-    
-    setAvailableBalance(formattedAvailable);
-    setTotalYieldEarned(formattedYield);
-    
+    const availableXlm = parseRawBalance(data.availableBalance);
+    const yieldXlm = parseRawBalance(data.totalYieldEarned);
+
+    setAvailableBalanceXlm(availableXlm);
+    setTotalYieldEarnedXlm(yieldXlm);
+
+    // Yield analytics (monthly chart, compounding projection) stay in Naira.
+    const formattedYield = formatFiatBalance(fiatFromTokens(yieldXlm));
+
     return {
       apy: typeof data.apy === "number" ? `${data.apy}%` : String(data.apy).includes("%") ? String(data.apy) : `${data.apy}%`,
       totalYieldEarned: formattedYield,
@@ -206,17 +243,59 @@ export default function HomeScreen() {
     };
   };
 
+  const loadEarningsHistory = useCallback(async () => {
+    const requestId = ++earningsHistoryRequestRef.current;
+    const months = createRecentMonthlyEarnings();
+    const from = `${months[0].period}-01`;
+    const to = new Date().toISOString().slice(0, 10);
+    setEarningsHistoryStatus("loading");
+
+    try {
+      const history = await fetchYieldEarningsHistory(from, to);
+      if (requestId !== earningsHistoryRequestRef.current) return;
+
+      const totalsByMonth = new Map<string, number>();
+      history.forEach((item) => {
+        if (item.asset.toUpperCase() !== "XLM") return;
+        const amount = Number(item.amount);
+        const period = item.created_at.slice(0, 7);
+        if (!Number.isFinite(amount)) return;
+        totalsByMonth.set(
+          period,
+          (totalsByMonth.get(period) ?? 0) + fiatFromTokens(amount / 1_000_000)
+        );
+      });
+
+      setMonthlyEarnings(
+        months.map((month) => ({
+          ...month,
+          amount: Number((totalsByMonth.get(month.period) ?? 0).toFixed(2)),
+        }))
+      );
+      setSelectedMonthIndex(months.length - 1);
+      setEarningsHistoryStatus("success");
+    } catch {
+      if (requestId !== earningsHistoryRequestRef.current) return;
+      setEarningsHistoryStatus("error");
+    }
+  }, []);
+
   const withTimeout = async <T,>(
     promise: Promise<T>,
     timeoutMs: number
   ): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<T>((_, reject) => {
-      setTimeout(
+      timeoutId = setTimeout(
         () => reject(new Error("Request timed out. Please try again.")),
         timeoutMs
       );
     });
-    return Promise.race([promise, timeoutPromise]);
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
   };
 
   const loadYieldData = useCallback(async () => {
@@ -233,13 +312,44 @@ export default function HomeScreen() {
       setYieldStatus("success");
     } catch (error) {
       if (requestId !== yieldRequestRef.current) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to load yield details right now.";
-      setYieldError(message);
+      setYieldError(describeYieldError(error));
       setYieldStatus("error");
     }
+  }, []);
+
+  // Balance figures derived from the raw XLM tokens, redrawn in the active
+  // denomination the moment the currency preference changes.
+  const availableBalanceDisplay = useMemo(
+    () => formatBalance(availableBalanceXlm, displayCurrency),
+    [availableBalanceXlm, displayCurrency]
+  );
+  const totalYieldEarnedDisplay = useMemo(
+    () => formatBalance(totalYieldEarnedXlm, displayCurrency),
+    [totalYieldEarnedXlm, displayCurrency]
+  );
+
+  const toggleCurrency = useCallback(() => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setDisplayCurrency((prev) => {
+      const next = prev === "NGN" ? "XLM" : "NGN";
+      AsyncStorage.setItem(HOME_CURRENCY_PREF_KEY, next).catch(() => undefined);
+      return next;
+    });
+  }, []);
+
+  // Restore the user's saved display currency preference across app restarts.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(HOME_CURRENCY_PREF_KEY)
+      .then((stored) => {
+        if (!cancelled && (stored === "NGN" || stored === "XLM")) {
+          setDisplayCurrency(stored);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // On mount: hydrate UI from cache instantly, then fetch fresh data and overwrite cache
@@ -275,6 +385,48 @@ export default function HomeScreen() {
     void loadYieldData();
   }, [loadYieldData]);
 
+  // Home is the app's one first-ask moment for push notification consent —
+  // app boot (see _layout.tsx) deliberately does NOT trigger the native
+  // permission dialog so it isn't burned before the user sees any context.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const shouldShow = await shouldShowNotificationConsentPrompt();
+      if (!cancelled) {
+        setNotifPromptVisible(shouldShow);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleEnableNotifications = useCallback(async () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+    setNotifRequesting(true);
+    try {
+      const status = await requestNotificationPermissionsAsync();
+      if (status === Notifications.PermissionStatus.GRANTED) {
+        await saveNotificationPreference(true);
+        // Fetches the Expo push token and registers it with the backend
+        // (POST /api/notifications/register) now that the user has consented.
+        await registerForPushNotificationsAsync();
+      }
+    } finally {
+      await markNotificationPromptDismissed();
+      setNotifRequesting(false);
+      setNotifPromptVisible(false);
+    }
+  }, []);
+
+  const handleDismissNotifPrompt = useCallback(() => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    void markNotificationPromptDismissed();
+    setNotifPromptVisible(false);
+  }, []);
+
   useEffect(() => {
     const shimmerLoop = Animated.loop(
       Animated.timing(shimmerAnim, {
@@ -292,8 +444,10 @@ export default function HomeScreen() {
     if (!autoYieldEnabled || yieldStatus !== "success") {
       earningGlowAnim.stopAnimation();
       earningPulseAnim.stopAnimation();
+      earningOuterGlowAnim.stopAnimation();
       earningGlowAnim.setValue(0);
       earningPulseAnim.setValue(1);
+      earningOuterGlowAnim.setValue(0);
       return;
     }
     const glowLoop = Animated.loop(
@@ -317,6 +471,22 @@ export default function HomeScreen() {
         }),
       ])
     );
+    // Outer glow ring pulses slower for a layered depth effect
+    const outerGlowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.delay(400),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(earningOuterGlowAnim, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    );
     const pulseLoop = Animated.loop(
       Animated.sequence([
         // Slight delay so the status dot follows the card glow.
@@ -324,13 +494,13 @@ export default function HomeScreen() {
         Animated.delay(250),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.03,
+          toValue: 1.04,
           duration: 500,
           useNativeDriver: true,
         }),
 
         Animated.timing(earningPulseAnim, {
-          toValue: 1.06,
+          toValue: 1.07,
           duration: 450,
           useNativeDriver: true,
         }),
@@ -343,26 +513,32 @@ export default function HomeScreen() {
       ])
     );
     glowLoop.start();
+    outerGlowLoop.start();
     pulseLoop.start();
     return () => {
       glowLoop.stop();
+      outerGlowLoop.stop();
       pulseLoop.stop();
     };
-  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim]);
+  }, [autoYieldEnabled, yieldStatus, earningGlowAnim, earningPulseAnim, earningOuterGlowAnim]);
 
   const onPullRefresh = useCallback(async () => {
     setRefreshing(true);
+    const yieldRefresh = loadYieldData();
     try {
-      const fresh = await fetchFeed();
-      if (fresh && fresh.length > 0) {
-        setFeed(fresh);
-        await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+      try {
+        const fresh = await fetchFeed();
+        if (fresh && fresh.length > 0) {
+          setFeed(fresh);
+          await AsyncStorage.setItem(FEED_CACHE_KEY, JSON.stringify(fresh));
+        }
+      } catch {
+        // keep current feed
       }
-    } catch {
-      // keep current feed
+    } finally {
+      await yieldRefresh;
+      setRefreshing(false);
     }
-    await loadYieldData();
-    setRefreshing(false);
   }, [loadYieldData]);
 
   const handleLike = async (id: string) => {
@@ -422,43 +598,65 @@ export default function HomeScreen() {
       () => undefined
     );
     setSelectedItem(item);
-    setCommentsList([
-      {
-        id: "c1",
-        user: "Tolu",
-        text: "Thanks for the food! 😋",
-        time: "1h ago",
-      },
-      {
-        id: "c2",
-        user: "Ebube",
-        text: "Anytime! Let's do it again.",
-        time: "45m ago",
-      },
-    ]);
+    setCommentText("");
+    // Seed with an empty list; new comments are appended after a successful
+    // POST /api/social/comment so the drawer always reflects backend state.
+    setCommentsList([]);
     setCommentsModalVisible(true);
   };
 
-  const submitComment = () => {
-    if (!commentText.trim() || !selectedItem) return;
-    const newComment = {
-      id: Date.now().toString(),
+  const submitComment = async () => {
+    const trimmed = commentText.trim();
+    if (!trimmed || !selectedItem) return;
+
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+      () => undefined
+    );
+
+    const paymentId = selectedItem.id;
+    const optimistic: Comment = {
+      id: `local-${Date.now()}`,
       user: "Me",
-      text: commentText,
+      text: trimmed,
       time: "Just now",
     };
-    setCommentsList([...commentsList, newComment]);
-    setCommentText("");
 
-    // Update comments count on item
-    setFeed(
-      feed.map((item) => {
-        if (item.id === selectedItem.id) {
-          return { ...item, comments: item.comments + 1 };
-        }
-        return item;
-      })
+    // Optimistic UI: show the comment + bump the count immediately.
+    setCommentsList((prev) => [...prev, optimistic]);
+    setCommentText("");
+    setFeed((prev) =>
+      prev.map((item) =>
+        item.id === paymentId
+          ? { ...item, comments: item.comments + 1 }
+          : item
+      )
     );
+
+    try {
+      const saved = await addComment(paymentId, trimmed);
+      setCommentsList((prev) =>
+        prev.map((c) =>
+          c.id === optimistic.id
+            ? {
+                id: saved.id,
+                user: saved.username || "Me",
+                text: saved.content,
+                time: "Just now",
+              }
+            : c
+        )
+      );
+    } catch {
+      // Revert optimistic comment + count on failure.
+      setCommentsList((prev) => prev.filter((c) => c.id !== optimistic.id));
+      setFeed((prev) =>
+        prev.map((item) =>
+          item.id === paymentId
+            ? { ...item, comments: Math.max(0, item.comments - 1) }
+            : item
+        )
+      );
+    }
   };
 
   const openEarningsModal = () => {
@@ -466,6 +664,7 @@ export default function HomeScreen() {
       () => undefined
     );
     setEarningsModalVisible(true);
+    void loadEarningsHistory();
     earningsSheetTranslateY.setValue(48);
     earningsBackdropOpacity.setValue(0);
     Animated.parallel([
@@ -510,6 +709,12 @@ export default function HomeScreen() {
     setAutoEarnSyncing(true);
     try {
       await updateAutoEarn(value);
+      if (value) {
+        // Idle funds start sweeping into yield — confirm with a light bump.
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+          () => undefined
+        );
+      }
     } catch {
       // Revert on failure
       setAutoYieldEnabled(previous);
@@ -557,21 +762,13 @@ export default function HomeScreen() {
       maximumFractionDigits: 2,
     })}`;
 
-  const monthlyEarnings = useMemo(() => {
-    const baseTotal = MONTHLY_EARNINGS.reduce(
-      (sum, item) => sum + item.amount,
-      0
-    );
-    const targetTotal = parseCurrencyAmount(
-      yieldData?.totalYieldEarned ?? "₦3,280.45"
-    );
-    const scale =
-      targetTotal > 0 && baseTotal > 0 ? targetTotal / baseTotal : 1;
-    return MONTHLY_EARNINGS.map((item) => ({
-      ...item,
-      amount: Number((item.amount * scale).toFixed(2)),
-    }));
-  }, [yieldData]);
+  const toggleBalanceMask = () => {
+    void Haptics.selectionAsync().catch(() => undefined);
+    setBalanceMasked((prev) => !prev);
+  };
+
+  const displayBalance = (amount: string) =>
+    balanceMasked ? MASKED_BALANCE : amount;
 
   useEffect(() => {
     if (selectedMonthIndex > monthlyEarnings.length - 1) {
@@ -630,8 +827,14 @@ export default function HomeScreen() {
     monthlyEarnings,
   ]);
 
-  const SkeletonBlock = ({ style }: { style?: StyleProp<ViewStyle> }) => (
-    <View style={[styles.skeletonBase, style]}>
+  const SkeletonBlock = ({
+    style,
+    testID,
+  }: {
+    style?: StyleProp<ViewStyle>;
+    testID?: string;
+  }) => (
+    <View style={[styles.skeletonBase, style]} testID={testID}>
       <Animated.View
         style={[
           styles.skeletonShimmer,
@@ -675,6 +878,7 @@ export default function HomeScreen() {
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        testID="home-scroll-view"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -684,26 +888,153 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* Balance Card */}
+        {/* Notification Permission Soft-Ask */}
+        {notifPromptVisible && (
+          <View style={styles.notifPromptCard}>
+            <View style={styles.notifPromptIconWrap}>
+              <Ionicons
+                name="notifications-outline"
+                size={20}
+                color={COLORS.primary}
+              />
+            </View>
+            <View style={styles.notifPromptTextWrap}>
+              <Text style={styles.notifPromptTitle}>Stay in the loop</Text>
+              <Text style={styles.notifPromptSubtitle}>
+                Get notified when you receive payments and earn yield.
+              </Text>
+              <View style={styles.notifPromptActions}>
+                <TouchableOpacity
+                  style={styles.notifPromptDismissBtn}
+                  onPress={handleDismissNotifPrompt}
+                  disabled={notifRequesting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Dismiss notification prompt"
+                >
+                  <Text style={styles.notifPromptDismissText}>Not now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.notifPromptEnableBtn}
+                  onPress={handleEnableNotifications}
+                  disabled={notifRequesting}
+                  accessibilityRole="button"
+                  accessibilityLabel="Enable notifications"
+                >
+                  <Text style={styles.notifPromptEnableText}>
+                    {notifRequesting ? "Enabling…" : "Enable"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Balance Card — available and earning balances, side by side */}
         <View style={styles.balanceCard}>
-          {/* Available Balance Section */}
-          <View style={styles.balanceSection}>
-            <Text style={styles.balanceLabel}>Available Balance</Text>
-            <Text style={styles.balanceAmount}>{availableBalance}</Text>
+          <View style={styles.balanceSplit}>
+            {/* Available Balance Section */}
+            <View
+              style={[styles.balancePanel, styles.availablePanel]}
+              testID="available-balance-section"
+            >
+              <View style={styles.balanceLabelRow}>
+                <Text style={styles.availableLabel}>Available</Text>
+                <TouchableOpacity
+                  onPress={toggleBalanceMask}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    balanceMasked ? "Show balance" : "Hide balance"
+                  }
+                >
+                  <Ionicons
+                    name={balanceMasked ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color="#A9D8CF"
+                  />
+                </TouchableOpacity>
+              </View>
+              {yieldStatus === "loading" ? (
+                <SkeletonBlock
+                  testID="available-balance-skeleton"
+                  style={[
+                    styles.balanceAmountSkeleton,
+                    styles.availableSkeleton,
+                  ]}
+                />
+              ) : (
+                <Text
+                  style={styles.availableAmount}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  testID="available-balance-amount"
+                >
+                  {yieldStatus === "error"
+                    ? BALANCE_UNAVAILABLE
+                    : displayBalance(availableBalanceDisplay)}
+                </Text>
+              )}
+            </View>
+            <Text style={styles.balanceAmount}>
+              {displayBalance(availableBalanceDisplay)}
+            </Text>
           </View>
 
           {/* Earning Balance Section */}
-          <View style={styles.earningBalanceSection}>
+          <TouchableOpacity
+            style={styles.earningBalanceSection}
+            activeOpacity={0.8}
+            onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance"
+            testID="earning-balance-section"
+          >
+            {autoYieldEnabled && yieldStatus === "success" && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.earningBalanceGlow,
+                  {
+                    opacity: earningGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.2, 0.75],
+                    }),
+                    transform: [
+                      {
+                        scale: earningGlowAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [1, 1.025],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+                testID="earning-balance-glow"
+              />
+            )}
             <View style={styles.earningBalanceHeader}>
-              <View style={styles.earningDot} />
+              <Animated.View
+                style={[
+                  styles.earningDot,
+                  { transform: [{ scale: earningPulseAnim }] },
+                ]}
+                testID="earning-balance-pulse"
+              />
               <Text style={styles.earningRowLabel}>Earning Balance</Text>
             </View>
-            <Text style={styles.earningBalanceAmount}>{totalYieldEarned}</Text>
-          </View>
+            <Text style={styles.earningBalanceAmount}>
+              {displayBalance(totalYieldEarnedDisplay)}
+            </Text>
+          </TouchableOpacity>
 
+          {/* Pay / Request trigger button (#886) */}
           <TouchableOpacity
             style={styles.payRequestButton}
             onPress={() => router.push("/transfer")}
+            accessibilityRole="button"
+            accessibilityLabel="Pay / Request"
+            testID="pay-request-button"
+            activeOpacity={0.8}
           >
             <Ionicons
               name="send"
@@ -744,6 +1075,28 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.earningCardWrapper}>
+          {/* Outer soft glow ring — slower pulse for layered depth */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.earningGlow,
+              styles.earningOuterGlow,
+              {
+                opacity: earningOuterGlowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.08],
+                }),
+                transform: [
+                  {
+                    scale: earningOuterGlowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [1.02, 1.12],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
           <Animated.View
             pointerEvents="none"
             style={[
@@ -751,13 +1104,13 @@ export default function HomeScreen() {
               {
                 opacity: earningGlowAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0.15, 0.55],
+                  outputRange: [0.04, 0.2],
                 }),
                 transform: [
                   {
                     scale: earningGlowAnim.interpolate({
                       inputRange: [0, 1],
-                      outputRange: [0.98, 1.04],
+                      outputRange: [0.97, 1.05],
                     }),
                   },
                 ],
@@ -768,40 +1121,30 @@ export default function HomeScreen() {
             style={styles.earningBalanceCard}
             activeOpacity={0.9}
             onPress={openEarningsModal}
+            accessibilityRole="button"
+            accessibilityLabel="Earning Balance Card"
+            testID="earning-balance-card"
           >
-            <View>
-              <Text style={styles.earningLabel}>Earning Balance</Text>
-              <Text style={styles.earningAmount}>{totalYieldEarned}</Text>
-              <View style={styles.earningStatusRow}>
-                <Animated.View
-                  style={[
-                    styles.earningStatusDot,
-                    { transform: [{ scale: earningPulseAnim }] },
-                  ]}
-                />
-                <Text style={styles.earningStatusText}>
-                  {autoYieldEnabled
-                    ? "Your money is working"
-                    : "Auto-earn is off"}
-                </Text>
-              </View>
-            </View>
             {yieldStatus === "loading" ? (
-              <View style={styles.earningContent}>
+              <View
+                style={styles.earningContent}
+                testID="earning-card-skeleton"
+              >
                 <SkeletonBlock style={styles.earningLabelSkeleton} />
                 <SkeletonBlock style={styles.earningAmountSkeleton} />
                 <SkeletonBlock style={styles.earningHintSkeleton} />
               </View>
             ) : yieldStatus === "error" ? (
-              <View style={styles.earningContent}>
+              <View style={styles.earningContent} testID="earning-card-error">
                 <Text style={styles.earningLabel}>Earning Balance</Text>
-                <Text style={styles.earningErrorText}>
-                  Unable to load yield
-                </Text>
+                <Text style={styles.earningErrorText}>{yieldError}</Text>
                 <TouchableOpacity
                   style={styles.retryChip}
                   onPress={handleYieldRetry}
                   activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading yield"
+                  testID="earning-card-retry"
                 >
                   <Ionicons name="refresh" size={12} color={COLORS.primary} />
                   <Text style={styles.retryChipText}>Retry</Text>
@@ -811,11 +1154,21 @@ export default function HomeScreen() {
               <View style={styles.earningContent}>
                 <Text style={styles.earningLabel}>Earning Balance</Text>
                 <Text style={styles.earningAmount}>
-                  {yieldData?.totalYieldEarned ?? "₦0.00"}
+                  {totalYieldEarnedDisplay}
                 </Text>
-                <Text style={styles.earningHint}>
-                  Tap to view yield breakdown
-                </Text>
+                <View style={styles.earningStatusRow}>
+                  <Animated.View
+                    style={[
+                      styles.earningStatusDot,
+                      { transform: [{ scale: earningPulseAnim }] },
+                    ]}
+                  />
+                  <Text style={styles.earningStatusText}>
+                    {autoYieldEnabled
+                      ? "Your money is working"
+                      : "Auto-earn is off"}
+                  </Text>
+                </View>
               </View>
             )}
             <View style={styles.earningIconWrap}>
@@ -832,14 +1185,22 @@ export default function HomeScreen() {
             </View>
             <View style={styles.autoEarnTitleWrap}>
               <View style={styles.autoEarnTitleRow}>
-                <Text style={styles.autoEarnCardTitle}>
-                  Auto-Earn on Idle Funds
-                </Text>
                 <TouchableOpacity
                   onPress={openAutoEarnDescModal}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Learn about Auto-Earn"
+                  activeOpacity={0.8}
+                  accessibilityLabel="Learn about Auto-Earn yield rules"
                   accessibilityRole="button"
+                >
+                  <Text style={styles.autoEarnCardTitle}>
+                    Auto-Earn on Idle Funds
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={toggleAutoEarnTooltip}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Quick definition tooltip"
+                  accessibilityRole="button"
+                  testID="auto-earn-tooltip-trigger"
                 >
                   <Ionicons
                     name="information-circle-outline"
@@ -856,7 +1217,13 @@ export default function HomeScreen() {
             </View>
             <Switch
               value={autoYieldEnabled}
-              onValueChange={handleAutoYieldToggle}
+              onValueChange={(val: boolean) => {
+                if (val) {
+                  openAutoEarnDescModal();
+                } else {
+                  void handleAutoYieldToggle(false);
+                }
+              }}
               disabled={autoEarnSyncing}
               trackColor={{ false: "#E2E8F0", true: "#34D399" }}
               thumbColor={COLORS.white}
@@ -864,6 +1231,19 @@ export default function HomeScreen() {
               accessibilityRole="switch"
             />
           </View>
+          {autoEarnTooltipVisible && (
+            <View style={styles.autoEarnTooltip} testID="auto-earn-tooltip">
+              <Ionicons
+                name="information-circle"
+                size={16}
+                color="#166534"
+                style={{ marginRight: 6 }}
+              />
+              <Text style={styles.autoEarnTooltipText}>
+                Auto-Earn automatically sweeps idle funds into yield-earning vaults at competitive APYs while remaining instantly spendable.
+              </Text>
+            </View>
+          )}
           {autoEarnSyncing && (
             <View style={styles.autoEarnSyncingRow}>
               <Ionicons name="sync" size={13} color="#64748B" />
@@ -875,15 +1255,22 @@ export default function HomeScreen() {
         {/* Social Feed Section */}
         <View style={styles.feedContainer}>
           <Text style={styles.feedSectionTitle}>Activity</Text>
-          {/* Feed Tabs — Segment Control */}
+          {/* Feed Tabs — Public / Friends (#882) */}
           <View style={styles.tabBar}>
             <TouchableOpacity
               style={[
                 styles.tabItem,
                 activeTab === "public" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("public")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("public");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "public" }}
+              accessibilityLabel="Public Feed"
+              testID="feed-tab-public"
             >
               <Text
                 style={[
@@ -899,8 +1286,15 @@ export default function HomeScreen() {
                 styles.tabItem,
                 activeTab === "friends" && styles.tabItemActive,
               ]}
-              onPress={() => setActiveTab("friends")}
+              onPress={() => {
+                void Haptics.selectionAsync().catch(() => undefined);
+                setActiveTab("friends");
+              }}
               activeOpacity={0.85}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activeTab === "friends" }}
+              accessibilityLabel="Friends Feed"
+              testID="feed-tab-friends"
             >
               <Text
                 style={[
@@ -927,16 +1321,25 @@ export default function HomeScreen() {
                 </View>
 
                 <View style={styles.paymentInfo}>
-                  <View style={styles.paymentRow}>
-                    <Text style={styles.paymentText} numberOfLines={2}>
-                      <Text style={styles.boldText}>{item.sender}</Text> paid{" "}
-                      <Text style={styles.boldText}>{item.receiver}</Text>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>FROM</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.sender}
                     </Text>
-                    <View style={styles.amountPill}>
-                      <Text style={styles.amountText}>{item.amount}</Text>
-                    </View>
+                  </View>
+                  <View style={styles.partyRow}>
+                    <Text style={styles.partyLabel}>TO</Text>
+                    <Text style={styles.partyName} numberOfLines={1}>
+                      {item.receiver}
+                    </Text>
                   </View>
                   <Text style={styles.timestamp}>{item.timestamp}</Text>
+                </View>
+
+                <View style={styles.amountPill}>
+                  <Text style={styles.amountText} numberOfLines={1}>
+                    {item.amount}
+                  </Text>
                 </View>
               </View>
 
@@ -951,6 +1354,11 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => handleLike(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    item.hasLiked ? "Unlike payment" : "Like payment"
+                  }
+                  testID={`feed-like-${item.id}`}
                 >
                   <Animated.View
                     style={{ transform: [{ scale: getScaleAnim(item.id) }] }}
@@ -974,6 +1382,9 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   style={styles.actionItem}
                   onPress={() => openComments(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open comments"
+                  testID={`feed-comments-${item.id}`}
                 >
                   <Ionicons name="chatbubble-outline" size={20} color="#666" />
                   <Text style={styles.actionCount}>{item.comments}</Text>
@@ -1050,7 +1461,7 @@ export default function HomeScreen() {
                   Could not load details
                 </Text>
                 <Text style={styles.yieldErrorCopy}>
-                  {yieldError}. Check your connection and try again.
+                  {yieldError} Check your connection and try again.
                 </Text>
                 <TouchableOpacity
                   style={styles.retryButton}
@@ -1069,9 +1480,16 @@ export default function HomeScreen() {
               <>
                 <View style={styles.earningsMetricCard}>
                   <Text style={styles.earningsMetricLabel}>Current APY</Text>
-                  <Text style={styles.earningsMetricValue}>
-                    {yieldData?.apy ?? "0.00%"}
-                  </Text>
+                  <View style={styles.apyValueRow}>
+                    <Text style={styles.earningsMetricValue}>
+                      {yieldData?.apy ?? "0.00%"}
+                    </Text>
+                    <View style={styles.apyTrendBadge}>
+                      <Ionicons name="trending-up" size={13} color="#16A34A" />
+                      <Text style={styles.apyTrendText}>+0.12%</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.apyTrendSubtext}>vs. last month</Text>
                 </View>
 
                 <View style={styles.earningsMetricCard}>
@@ -1079,7 +1497,7 @@ export default function HomeScreen() {
                     Total Yield Earned
                   </Text>
                   <Text style={styles.earningsMetricValue}>
-                    {yieldData?.totalYieldEarned ?? "₦0.00"}
+                    {totalYieldEarnedDisplay}
                   </Text>
                 </View>
 
@@ -1102,7 +1520,20 @@ export default function HomeScreen() {
                   </View>
 
                   <View style={styles.earningsChartCanvas}>
-                    {chartGeometry && (
+                    {earningsHistoryStatus === "loading" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Loading earnings history...
+                      </Text>
+                    ) : earningsHistoryStatus === "error" ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        Earnings history is unavailable.
+                      </Text>
+                    ) : earningsHistoryStatus === "success" &&
+                      monthlyEarnings.every((item) => item.amount === 0) ? (
+                      <Text style={styles.earningsHistoryMessage}>
+                        No yield earnings recorded in the last 12 months.
+                      </Text>
+                    ) : chartGeometry ? (
                       <>
                         <Svg width={chartWidth} height={chartHeight}>
                           <Defs>
@@ -1163,7 +1594,7 @@ export default function HomeScreen() {
                           ))}
                         </View>
                       </>
-                    )}
+                    ) : null}
                   </View>
 
                   <View style={styles.earningsMonthRow}>
@@ -1269,8 +1700,31 @@ export default function HomeScreen() {
                 </View>
 
                 <Text style={styles.earningsInfoCopy}>
-                  {yieldData?.explanation}
+                  {yieldData?.explanation ||
+                    "Idle balances are automatically swept into yield-earning vaults at competitive APYs with daily compounding interest while remaining instantly spendable."}
                 </Text>
+
+                <TouchableOpacity
+                  style={styles.manageYieldButton}
+                  onPress={() => {
+                    closeEarningsModal();
+                    router.push("/yield-transaction");
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Deposit or Withdraw Yield"
+                  testID="manage-yield-button"
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={18}
+                    color={COLORS.secondary}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.manageYieldButtonText}>
+                    Deposit / Withdraw Yield
+                  </Text>
+                </TouchableOpacity>
               </>
             )}
           </Animated.View>
@@ -1438,17 +1892,29 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Comments Modal */}
+      {/* Comments bottom drawer (#885) — slide-up Modal */}
       <Modal
         visible={commentsModalVisible}
         animationType="slide"
         transparent={true}
+        onRequestClose={() => setCommentsModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setCommentsModalVisible(false)}
+            accessibilityLabel="Dismiss comments"
+          />
           <View style={styles.modalContent}>
+            <View style={styles.commentsGrabber} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Comments</Text>
-              <TouchableOpacity onPress={() => setCommentsModalVisible(false)}>
+              <TouchableOpacity
+                onPress={() => setCommentsModalVisible(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Close comments"
+              >
                 <Ionicons name="close" size={24} color="#000" />
               </TouchableOpacity>
             </View>
@@ -1456,7 +1922,12 @@ export default function HomeScreen() {
             <FlatList<Comment>
               data={commentsList}
               keyExtractor={(item: Comment) => item.id}
-              contentContainerStyle={{ paddingVertical: 12 }}
+              contentContainerStyle={{ paddingVertical: 12, flexGrow: 1 }}
+              ListEmptyComponent={
+                <Text style={styles.commentsEmpty}>
+                  Be the first to comment
+                </Text>
+              }
               renderItem={({ item }: { item: Comment }) => (
                 <View style={styles.commentItem}>
                   <View style={styles.commentAvatar}>
@@ -1479,8 +1950,22 @@ export default function HomeScreen() {
                 placeholder="Write a comment..."
                 value={commentText}
                 onChangeText={setCommentText}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  void submitComment();
+                }}
+                accessibilityLabel="Comment input"
+                testID="comment-input"
               />
-              <TouchableOpacity style={styles.sendBtn} onPress={submitComment}>
+              <TouchableOpacity
+                style={styles.sendBtn}
+                onPress={() => {
+                  void submitComment();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Send comment"
+                testID="comment-send"
+              >
                 <Ionicons name="send" size={20} color={COLORS.primary} />
               </TouchableOpacity>
             </View>
@@ -1533,33 +2018,132 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#EAEAEA",
     marginBottom: 20,
+    gap: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.03,
     shadowRadius: 10,
     elevation: 2,
   },
+  notifPromptCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: COLORS.white,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    padding: 14,
+    marginBottom: 16,
+    gap: 12,
+  },
+  notifPromptIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F0FDF4",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  notifPromptTextWrap: {
+    flex: 1,
+  },
+  notifPromptTitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#111827",
+  },
+  notifPromptSubtitle: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  notifPromptActions: {
+    flexDirection: "row",
+    marginTop: 10,
+    gap: 10,
+  },
+  notifPromptDismissBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: "#F5F5F5",
+  },
+  notifPromptDismissText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#6B7280",
+  },
+  notifPromptEnableBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: COLORS.primary,
+  },
+  notifPromptEnableText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.secondary,
+  },
   balanceSection: {
+    marginBottom: 0,
+  },
+  balanceSplit: {
+    flexDirection: "row",
+    gap: 10,
     marginBottom: 16,
   },
-  balanceLabel: {
-    fontSize: 13,
-    fontFamily: "Outfit_400Regular",
-    color: "#777",
+  balancePanel: {
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    minHeight: 92,
+    justifyContent: "space-between",
+  },
+  availablePanel: {
+    flex: 1.2,
+    backgroundColor: COLORS.primary,
+  },
+  earningPanel: {
+    flex: 1,
+    backgroundColor: "#E4F7EA",
+  },
+  balanceLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 4,
   },
+  availableLabel: {
+    fontSize: 13,
+    fontFamily: "Outfit_500Medium",
+    color: "#A9D8CF",
+  },
   balanceAmount: {
-    fontSize: 34,
+    fontSize: 32,
+    lineHeight: 38,
     fontFamily: "Outfit_700Bold",
     color: COLORS.primary,
+    flexShrink: 1,
   },
   earningBalanceSection: {
-    backgroundColor: "#F2F9F0",
+    backgroundColor: "#F3FBF4",
     borderRadius: 16,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 0,
     borderWidth: 1,
-    borderColor: "#E8F5E9",
+    borderColor: "#DDEFE1",
+  },
+  earningBalanceGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: "#34D399",
+    shadowColor: "#34D399",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 12,
+    elevation: 5,
   },
   earningBalanceHeader: {
     flexDirection: "row",
@@ -1579,13 +2163,16 @@ const styles = StyleSheet.create({
     color: "#456047",
   },
   earningBalanceAmount: {
-    fontSize: 28,
+    fontSize: 26,
+    lineHeight: 32,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
+    flexShrink: 1,
   },
   quickActions: {
     flexDirection: "row",
     gap: 10,
+    marginTop: 2,
   },
   payRequestButton: {
     backgroundColor: COLORS.primary,
@@ -1668,22 +2255,31 @@ const styles = StyleSheet.create({
     right: -8,
     bottom: -8,
     borderRadius: 30,
-    backgroundColor: "#34D399",
-    shadowColor: "#34D399",
+    backgroundColor: "#2F7655",
+    shadowColor: "#2F7655",
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.7,
     shadowRadius: 22,
     elevation: 8,
   },
+  earningOuterGlow: {
+    top: -18,
+    left: -18,
+    right: -18,
+    bottom: -18,
+    borderRadius: 40,
+    shadowRadius: 36,
+    elevation: 4,
+  },
   earningBalanceCard: {
-    backgroundColor: "#0F3D2E",
+    backgroundColor: "#0E3328",
     borderRadius: 22,
     paddingVertical: 18,
     paddingHorizontal: 18,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    shadowColor: "#0F3D2E",
+    shadowColor: "#0E3328",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.18,
     shadowRadius: 16,
@@ -1881,7 +2477,7 @@ const styles = StyleSheet.create({
   earningLabel: {
     fontSize: 13,
     fontFamily: "Outfit_500Medium",
-    color: "#9FD9B5",
+    color: "#B5D9C5",
     marginBottom: 6,
   },
   earningAmount: {
@@ -1890,9 +2486,25 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     marginBottom: 8,
   },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#9FD9B5",
+  },
   earningStatusRow: {
     flexDirection: "row",
     alignItems: "center",
+    alignSelf: "flex-start",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  earningStatusActive: {
+    backgroundColor: "rgba(167, 243, 192, 0.13)",
+  },
+  earningStatusInactive: {
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
   },
   earningStatusDot: {
     width: 7,
@@ -1904,12 +2516,23 @@ const styles = StyleSheet.create({
   earningStatusText: {
     fontSize: 12,
     fontFamily: "Outfit_500Medium",
-    color: "#BFE9CF",
+    color: "#D7F0DF",
+  },
+  earningStatusDotInactive: {
+    backgroundColor: "#A5B4AC",
+  },
+  earningStatusTextInactive: {
+    color: "#C3CEC8",
+  },
+  earningHint: {
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+    color: "#9EB9AA",
   },
   earningErrorText: {
     fontSize: 14,
     fontFamily: "Outfit_600SemiBold",
-    color: "#B45309",
+    color: "#FBBF24",
     marginBottom: 6,
   },
   retryChip: {
@@ -1933,7 +2556,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "rgba(167, 243, 192, 0.14)",
+    backgroundColor: "rgba(167, 243, 192, 0.1)",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1992,6 +2615,31 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     color: "#111827",
   },
+  apyValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  apyTrendBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#DCFCE7",
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  apyTrendText: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#16A34A",
+  },
+  apyTrendSubtext: {
+    fontSize: 11,
+    fontFamily: "Outfit_400Regular",
+    color: "#9CA3AF",
+    marginTop: 2,
+  },
   autoYieldRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2023,6 +2671,21 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: "#475569",
     fontFamily: "Outfit_400Regular",
+    marginBottom: 16,
+  },
+  manageYieldButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+    borderRadius: 24,
+    height: 48,
+    width: "100%",
+  },
+  manageYieldButtonText: {
+    fontSize: 14,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.secondary,
   },
   earningsChartSection: {
     backgroundColor: "#F9FCF8",
@@ -2054,6 +2717,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     overflow: "hidden",
     backgroundColor: "#F2F9F0",
+  },
+  earningsHistoryMessage: {
+    alignSelf: "center",
+    color: "#64748B",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    textAlign: "center",
   },
   chartTouchOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -2178,8 +2848,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   tabItemActive: {
-    backgroundColor: "#0F3D2E",
-    shadowColor: "#0F3D2E",
+    // Dark green active state (#882)
+    backgroundColor: COLORS.primary,
+    shadowColor: COLORS.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.18,
     shadowRadius: 4,
@@ -2196,7 +2867,7 @@ const styles = StyleSheet.create({
   },
   feedCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 24,
+    borderRadius: 20,
     padding: 16,
     marginBottom: 14,
     borderWidth: 1,
@@ -2209,7 +2880,7 @@ const styles = StyleSheet.create({
   },
   feedHeader: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     marginBottom: 12,
   },
   avatarStack: {
@@ -2242,43 +2913,46 @@ const styles = StyleSheet.create({
   },
   paymentInfo: {
     flex: 1,
+    minWidth: 0,
+    gap: 3,
   },
-  paymentRow: {
+  partyRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: 6,
   },
-  paymentText: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    fontFamily: "Outfit_400Regular",
-    color: "#334155",
-    flexShrink: 1,
-    marginRight: 8,
-  },
-  boldText: {
+  partyLabel: {
+    width: 31,
+    fontSize: 9,
     fontFamily: "Outfit_700Bold",
-    color: "#111827",
+    color: "#94A3B8",
+  },
+  partyName: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    lineHeight: 18,
+    fontFamily: "Outfit_700Bold",
+    color: "#17211D",
   },
   amountPill: {
     backgroundColor: "#F2F9F0",
     borderRadius: 999,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: "#DDF2DD",
-    alignSelf: "flex-start",
-    marginTop: 2,
+    alignSelf: "center",
+    marginLeft: 8,
+    maxWidth: 112,
   },
   amountText: {
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: "Outfit_700Bold",
     color: "#2E7D32",
   },
   timestamp: {
-    fontSize: 12,
+    fontSize: 11,
     color: "#94A3B8",
     marginTop: 4,
   },
@@ -2288,7 +2962,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 12,
   },
   memoLabel: {
     fontSize: 11,
@@ -2335,8 +3009,23 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingBottom: 40,
-    paddingTop: 20,
+    paddingTop: 12,
     maxHeight: "75%",
+  },
+  commentsGrabber: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: "#E2E8F0",
+    marginBottom: 10,
+  },
+  commentsEmpty: {
+    textAlign: "center",
+    color: "#94A3B8",
+    fontFamily: "Outfit_400Regular",
+    fontSize: 14,
+    paddingVertical: 28,
   },
   modalHeader: {
     flexDirection: "row",

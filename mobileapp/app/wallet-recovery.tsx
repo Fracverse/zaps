@@ -31,7 +31,10 @@ import {
   validateMnemonic,
   restoreWalletFromMnemonic,
   clearClipboard,
+  generateMnemonic,
 } from "../src/services/walletSecurity";
+import { recoverWalletViaPrivy, getSessionToken } from "../src/services/api";
+import { PrivySocialButtons } from "../src/components/PrivySocialButtons";
 
 // ── Word count selector ───────────────────────────────────────────────────────
 
@@ -107,6 +110,8 @@ export default function WalletRecoveryScreen() {
   const [pasteText, setPasteText] = useState("");
   const [loading, setLoading] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [socialRecoveryLoading, setSocialRecoveryLoading] = useState(false);
+  const [socialRecoveryError, setSocialRecoveryError] = useState<string | null>(null);
 
   // Refs for sequential focus
   const inputRefs = useRef<React.RefObject<TextInput | null>[]>(
@@ -250,6 +255,52 @@ export default function WalletRecoveryScreen() {
       setLoading(false);
     }
   }, [words, wordCount, router]);
+
+  // ── Social auth recovery fallback ─────────────────────────────────────────
+
+  const handleSocialRecover = useCallback(async () => {
+    setSocialRecoveryError(null);
+    setSocialRecoveryLoading(true);
+    try {
+      const token = await getSessionToken();
+      if (!token) {
+        setSocialRecoveryError(
+          "No social session found. Please sign in with a supported provider first."
+        );
+        setSocialRecoveryLoading(false);
+        return;
+      }
+
+      const result = await recoverWalletViaPrivy(token);
+
+      // Generate a new keypair for the recovered account
+      const mnemonic = generateMnemonic(24);
+      await restoreWalletFromMnemonic(mnemonic);
+
+      // Clear sensitive state
+      setWords(Array(24).fill(""));
+      setPasteText("");
+
+      Alert.alert(
+        "Account Recovered",
+        `Your Zaps account @${result.username} has been linked to a new wallet.`,
+        [
+          {
+            text: "Continue",
+            onPress: () => router.replace("/account-type"),
+          },
+        ]
+      );
+    } catch (err) {
+      setSocialRecoveryError(
+        err instanceof Error
+          ? err.message
+          : "Social recovery failed. Please try again."
+      );
+    } finally {
+      setSocialRecoveryLoading(false);
+    }
+  }, [router]);
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -407,6 +458,48 @@ export default function WalletRecoveryScreen() {
               server.
             </Text>
           </View>
+
+          {/* Social auth fallback — Issue #706 */}
+          {!pasteMode && (
+            <View style={styles.socialRecoverySection}>
+              <Text style={styles.socialRecoveryTitle}>
+                Lost your recovery phrase?
+              </Text>
+              <Text style={styles.socialRecoverySubtitle}>
+                Recover your account using the social login linked to your Zaps
+                profile.
+              </Text>
+
+              <PrivySocialButtons
+                testIDPrefix="recovery"
+                onSuccess={handleSocialRecover}
+                nextRoute={undefined}
+              />
+
+              {socialRecoveryLoading && (
+                <View style={styles.socialRecoveryLoading}>
+                  <ActivityIndicator color={COLORS.primary} />
+                  <Text style={styles.socialRecoveryLoadingText}>
+                    Verifying social identity…
+                  </Text>
+                </View>
+              )}
+
+              {socialRecoveryError && (
+                <View style={styles.socialRecoveryError}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={18}
+                    color="#C53030"
+                    style={{ marginRight: 8, flexShrink: 0 }}
+                  />
+                  <Text style={styles.socialRecoveryErrorText}>
+                    {socialRecoveryError}
+                  </Text>
+                </View>
+              )}
+            </View>
+          )}
         </ScrollView>
 
         {/* Footer */}
@@ -599,6 +692,54 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Outfit_400Regular",
     color: COLORS.primary,
+    lineHeight: 19,
+  },
+  socialRecoverySection: {
+    marginTop: 24,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: "#F0F0F0",
+  },
+  socialRecoveryTitle: {
+    fontSize: 16,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+    marginBottom: 6,
+  },
+  socialRecoverySubtitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_400Regular",
+    color: "#666",
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  socialRecoveryLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginTop: 12,
+  },
+  socialRecoveryLoadingText: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: COLORS.primary,
+  },
+  socialRecoveryError: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#FFF5F5",
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#FEB2B2",
+  },
+  socialRecoveryErrorText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_400Regular",
+    color: "#C53030",
     lineHeight: 19,
   },
   footer: {

@@ -4,9 +4,12 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{env, error::Error, time::Duration};
 use uuid::Uuid;
 
-use super::parser::{parse_zaps_event, ZapsEvent, TokenSalvagedEvent, UserRegisteredEvent};
+use super::parser::{parse_zaps_event, TokenSalvagedEvent, UserRegisteredEvent, ZapsEvent};
 use crate::api::r#yield::{invalidate_platform_yield_cache, YieldCache};
-use crate::db::r#yield::{process_yield_deposit_tx, process_yield_withdrawal_tx, log_yield_rate_update, log_yield_rate_update_tx};
+use crate::db::r#yield::{
+    log_yield_rate_update, log_yield_rate_update_tx, process_yield_deposit_tx,
+    process_yield_withdrawal_tx,
+};
 
 const INDEXER_CURSOR_KEY: &str = "stellar_event_cursor";
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(3);

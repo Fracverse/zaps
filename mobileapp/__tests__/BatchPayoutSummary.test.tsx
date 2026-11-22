@@ -143,4 +143,28 @@ describe("BatchPayoutSummary", () => {
 
     expect(getByText("1 item")).toBeTruthy();
   });
+
+  it("exposes test IDs for summary metrics, item rows, and status badges", () => {
+    const mixedItems: BatchPayoutItem[] = [
+      { ...baseItems[0], status: "completed" },
+      { ...baseItems[1], status: "failed" },
+      { ...baseItems[2], status: "pending" },
+    ];
+    const summary = { ...baseSummary, completedCount: 1, failedCount: 1 };
+    const { getByTestId } = render(
+      <BatchPayoutSummary summary={summary} items={mixedItems} />
+    );
+
+    expect(getByTestId("batch-payout-total")).toHaveTextContent("45,000.00");
+    expect(getByTestId("batch-payout-item-count")).toHaveTextContent("3 items");
+    expect(getByTestId("batch-payout-completed-count")).toHaveTextContent(
+      "1 completed"
+    );
+    expect(getByTestId("batch-payout-failed-count")).toHaveTextContent("1 failed");
+    expect(getByTestId("batch-payout-pending-count")).toHaveTextContent("1 pending");
+    expect(getByTestId("batch-payout-item-item-1")).toBeTruthy();
+    expect(getByTestId("batch-payout-status-item-1")).toHaveTextContent("Completed");
+    expect(getByTestId("batch-payout-status-item-2")).toHaveTextContent("Failed");
+    expect(getByTestId("batch-payout-status-item-3")).toHaveTextContent("Pending");
+  });
 });

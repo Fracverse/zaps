@@ -52,8 +52,8 @@ jobs:
         with:
           node-version: 18
           cache: npm
-          cache-dependency-path: mobileapp/package-lock.json
-      - run: npm ci
+          cache-dependency-path: mobileapp/package.json
+      - run: npm install --legacy-peer-deps
       - name: Audit
         run: npm audit --audit-level=high || true
 

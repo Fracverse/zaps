@@ -115,6 +115,22 @@ describe("api client", () => {
       });
     });
 
+    it("retries the original request with the new Authorization header", async () => {
+      storeSession("stale-access", "refresh-1");
+
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse({}, 401))
+        .mockResolvedValueOnce(
+          jsonResponse({ token: "fresh-access", refresh_token: "refresh-2" }),
+        )
+        .mockResolvedValueOnce(jsonResponse({ total_users: 3 }));
+
+      await api.dashboardStats();
+
+      expect(authHeaderOf(fetchMock.mock.calls[0])).toBe("Bearer stale-access");
+      expect(authHeaderOf(fetchMock.mock.calls[2])).toBe("Bearer fresh-access");
+    });
+
     it("replays the original request unchanged apart from the new token", async () => {
       storeSession("stale-access", "refresh-1");
 

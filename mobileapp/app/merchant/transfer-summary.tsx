@@ -9,7 +9,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
@@ -20,9 +20,30 @@ export default function TransferSummaryScreen() {
 
   const { theme } = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    amount?: string;
+    accountName?: string;
+    accountNumberLast4?: string;
+    bankCode?: string;
+    bankName?: string;
+    destinationId?: string;
+  }>();
+  const amount = Number(params.amount);
+  const accountName = params.accountName ?? "";
+  const accountNumberLast4 = params.accountNumberLast4 ?? "";
+  const bankCode = params.bankCode ?? "";
+  const bankName = params.bankName ?? "";
+  const destinationId = params.destinationId ?? "";
+  const valid =
+    Number.isFinite(amount) &&
+    amount > 0 &&
+    accountNumberLast4 &&
+    bankCode &&
+    bankName;
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handleConfirm = () => {
+    if (!valid) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Button press animation
@@ -38,7 +59,15 @@ export default function TransferSummaryScreen() {
         useNativeDriver: true,
       }),
     ]).start(() => {
-      router.push("/merchant/success");
+      const confirmationParams = new URLSearchParams({
+        amount: amount.toFixed(2),
+        accountName,
+        accountNumberLast4,
+        bankCode,
+        bankName,
+        destinationId,
+      });
+      router.push(`/merchant/transfer-confirmation?${confirmationParams.toString()}`);
     });
   };
 
@@ -83,7 +112,7 @@ export default function TransferSummaryScreen() {
           </View>
 
           <ThemedText style={styles.amountText}>
-            ${formatCurrency(15046.12)}
+            ${valid ? formatCurrency(amount) : "Invalid"}
           </ThemedText>
 
           <View style={styles.recipientRow}>
@@ -95,7 +124,7 @@ export default function TransferSummaryScreen() {
                 Recipient bank account
               </ThemedText>
               <ThemedText style={styles.recipientNumber}>
-                91235704180
+                {accountNumberLast4 ? `•••• ${accountNumberLast4}` : "Missing destination"}
               </ThemedText>
             </View>
           </View>
@@ -105,7 +134,7 @@ export default function TransferSummaryScreen() {
           <View style={styles.dateRow}>
             <ThemedText style={styles.dateLabel}>Date</ThemedText>
             <ThemedText style={styles.dateValue}>
-              Nov 12 2025, 8.12 AM
+              {new Date().toLocaleString()}
             </ThemedText>
           </View>
         </View>
@@ -124,11 +153,13 @@ export default function TransferSummaryScreen() {
         >
           <Pressable
             onPress={handleConfirm}
+            disabled={!valid}
+            testID="confirm-withdrawal"
             style={({ pressed }) => [
               styles.confirmButton,
               {
                 backgroundColor: theme.primary,
-                opacity: pressed ? 0.9 : 1,
+                opacity: !valid ? 0.5 : pressed ? 0.9 : 1,
               },
             ]}
           >

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   StyleSheet,
@@ -14,47 +14,17 @@ import { useRouter } from "expo-router";
 import { ThemedText } from "@/src/components/ThemedText";
 import { useTheme } from "@/src/hooks/useTheme";
 import { Spacing, BorderRadius } from "@/src/constants/theme";
-
-const MOCK_BALANCE = 15046.12;
-const MOCK_BANK = {
-  accountName: "Ebube One",
-  accountNumber: "91235704180",
-  bankName: "Opay",
-};
+import {
+  fetchAuthenticatedBalance,
+  fetchLinkedBankDestination,
+  fetchWithdrawalHistory,
+  validateWithdrawalAmount,
+  WithdrawalError,
+  type LinkedBankDestination,
+  type WithdrawalHistoryItem,
+} from "@/src/services/withdrawalService";
 
 type TabType = "withdraw" | "history";
-
-interface Transaction {
-  id: string;
-  amount: number;
-  bankName: string;
-  date: string;
-  status: "completed" | "pending" | "failed";
-}
-
-const MOCK_TRANSACTIONS: Transaction[] = [
-  {
-    id: "1",
-    amount: 500.0,
-    bankName: "Opay",
-    date: "Jan 28, 2026",
-    status: "completed",
-  },
-  {
-    id: "2",
-    amount: 1200.0,
-    bankName: "Opay",
-    date: "Jan 25, 2026",
-    status: "completed",
-  },
-  {
-    id: "3",
-    amount: 350.0,
-    bankName: "Opay",
-    date: "Jan 20, 2026",
-    status: "pending",
-  },
-];
 
 export default function WithdrawScreen() {
   const insets = useSafeAreaInsets();
@@ -62,6 +32,34 @@ export default function WithdrawScreen() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabType>("withdraw");
   const [amount, setAmount] = useState("");
+  const [balance, setBalance] = useState<number>(0);
+  const [bank, setBank] = useState<LinkedBankDestination | null>(null);
+  const [history, setHistory] = useState<WithdrawalHistoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [nextBalance, nextBank, nextHistory] = await Promise.all([
+        fetchAuthenticatedBalance(),
+        fetchLinkedBankDestination(),
+        fetchWithdrawalHistory(),
+      ]);
+      setBalance(nextBalance);
+      setBank(nextBank);
+      setHistory(nextHistory);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load withdrawal details.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const handleTabPress = (tab: TabType) => {
     Haptics.selectionAsync();
@@ -70,13 +68,29 @@ export default function WithdrawScreen() {
 
   const handleMaxPress = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setAmount(MOCK_BALANCE.toFixed(2));
+    setAmount(balance.toFixed(2));
+    setError("");
   };
 
   const handleWithdraw = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    // Navigate to summary/confirmation screen
-    router.push("/merchant/transfer-summary");
+    try {
+      const validated = validateWithdrawalAmount(amount, balance);
+      if (!bank) throw new WithdrawalError("Link a bank account before withdrawing.", "NO_DESTINATION");
+      const params = new URLSearchParams({
+        amount: validated.toFixed(2),
+        accountName: bank.accountName,
+        accountNumberLast4: bank.accountNumberLast4,
+        bankCode: bank.bankCode ?? "",
+        bankName: bank.bankName,
+        destinationId: bank.id ?? "",
+      });
+      setError("");
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      router.push(`/merchant/transfer-summary?${params.toString()}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invalid withdrawal.");
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    }
   };
 
   const formatCurrency = (value: number) => {
@@ -103,7 +117,7 @@ export default function WithdrawScreen() {
           Available Balance
         </ThemedText>
         <ThemedText style={[styles.balanceAmount, { color: theme.text }]}>
-          ${formatCurrency(MOCK_BALANCE)}
+          ${loading ? "—" : formatCurrency(balance)}
         </ThemedText>
       </View>
 
@@ -169,7 +183,7 @@ export default function WithdrawScreen() {
             Account name
           </ThemedText>
           <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
-            {MOCK_BANK.accountName}
+            {bank?.accountName ?? "No linked account"}
           </ThemedText>
         </View>
 
@@ -180,7 +194,7 @@ export default function WithdrawScreen() {
             Account number
           </ThemedText>
           <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
-            {MOCK_BANK.accountNumber}
+            {bank ? `•••• ${bank.accountNumberLast4}` : "—"}
           </ThemedText>
         </View>
 
@@ -191,7 +205,7 @@ export default function WithdrawScreen() {
             Bank name
           </ThemedText>
           <ThemedText style={[styles.bankDetailValue, { color: "#333" }]}>
-            {MOCK_BANK.bankName}
+            {bank?.bankName ?? "—"}
           </ThemedText>
         </View>
       </View>
@@ -200,8 +214,8 @@ export default function WithdrawScreen() {
 
   const renderHistoryTab = () => (
     <View style={styles.tabContent}>
-      {MOCK_TRANSACTIONS.length > 0 ? (
-        MOCK_TRANSACTIONS.map((transaction) => (
+      {history.length > 0 ? (
+        history.map((transaction) => (
           <View
             key={transaction.id}
             style={[
@@ -217,22 +231,18 @@ export default function WithdrawScreen() {
 
             <View style={styles.historyMainInfo}>
               <ThemedText style={styles.historyAccountNumber}>
-                91235704180
+                {transaction.accountNumber}
               </ThemedText>
               <ThemedText style={styles.historyDateTime}>
-                14:03:23pm , Nov 12
+                {transaction.date || "—"}
               </ThemedText>
             </View>
 
             <View style={styles.historyAmountInfo}>
               <ThemedText style={styles.historyUsdAmount}>
-                ${formatCurrency(transaction.amount)}
-              </ThemedText>
-              <ThemedText style={styles.historyNgnAmount}>
-                ₦
-                {(transaction.amount * 1500).toLocaleString("en-NG", {
-                  minimumFractionDigits: 2,
-                })}
+                {transaction.currency
+                  ? `${transaction.currency} ${formatCurrency(transaction.amount)}`
+                  : formatCurrency(transaction.amount)}
               </ThemedText>
             </View>
           </View>
@@ -319,6 +329,15 @@ export default function WithdrawScreen() {
             </ThemedText>
           </Pressable>
         </View>
+
+        {error ? (
+          <View style={styles.errorCard} testID="withdraw-error">
+            <ThemedText style={styles.errorText}>{error}</ThemedText>
+            <Pressable onPress={load} hitSlop={8} testID="withdraw-retry">
+              <ThemedText style={styles.retryText}>Retry</ThemedText>
+            </Pressable>
+          </View>
+        ) : null}
 
         {activeTab === "withdraw" ? renderWithdrawTab() : renderHistoryTab()}
       </ScrollView>
@@ -422,6 +441,23 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_700Bold",
     letterSpacing: -1,
   },
+  errorCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderRadius: BorderRadius.lg,
+    backgroundColor: "#FFF1F0",
+    padding: Spacing.lg,
+  },
+  errorText: {
+    flex: 1,
+    color: "#B42318",
+    fontFamily: "Outfit_500Medium",
+  },
+  retryText: {
+    color: "#1A4B4A",
+    fontFamily: "Outfit_700Bold",
+  },
   amountInputCard: {
     borderRadius: BorderRadius.xl,
     borderWidth: 1,
@@ -514,11 +550,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Outfit_600SemiBold",
     color: "#333",
-  },
-  historyNgnAmount: {
-    fontSize: 13,
-    fontFamily: "Outfit_400Regular",
-    color: "#999",
   },
   emptyState: {
     alignItems: "center",

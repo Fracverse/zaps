@@ -3,9 +3,11 @@ import * as Notifications from "expo-notifications";
 import * as Linking from "expo-linking";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
+import { apiFetch } from "./api";
 
 const NOTIFICATION_PREFERENCE_KEY = "zaps_notifications_enabled";
 const PUSH_TOKEN_KEY = "zaps_push_token";
+const NOTIFICATION_PROMPT_DISMISSED_KEY = "zaps_notifications_prompt_dismissed";
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "https://api.zaps.app";
 
 export const NOTIFICATION_CATEGORIES = {
@@ -81,25 +83,73 @@ export async function removeStoredPushToken(): Promise<void> {
   }
 }
 
-async function sendDeviceTokenToBackend(token: string): Promise<void> {
-  if (!token) {
-    return;
+/** Whether the user has already dismissed the in-app "enable notifications" prompt. */
+export async function getHasDismissedNotificationPrompt(): Promise<boolean> {
+  try {
+    return (
+      (await AsyncStorage.getItem(NOTIFICATION_PROMPT_DISMISSED_KEY)) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Records that the user tapped "Not now" (or "Enable") so we don't nag again. */
+export async function markNotificationPromptDismissed(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(NOTIFICATION_PROMPT_DISMISSED_KEY, "true");
+  } catch {
+    // ignore write failures
+  }
+}
+
+/**
+ * Gate for the Home screen's soft-ask notification banner: only show it when
+ * permission genuinely hasn't been decided yet and the user hasn't already
+ * dismissed it once. Physical device + native-only, same constraints as
+ * `registerForPushNotificationsAsync`.
+ */
+export async function shouldShowNotificationConsentPrompt(): Promise<boolean> {
+  if (Platform.OS === "web" || !Constants.isDevice) {
+    return false;
   }
 
   try {
-    await fetch(`${API_BASE}/notifications/register`, {
+    const [current, dismissed] = await Promise.all([
+      Notifications.getPermissionsAsync(),
+      getHasDismissedNotificationPrompt(),
+    ]);
+    return (
+      current.status === Notifications.PermissionStatus.UNDETERMINED &&
+      !dismissed
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function sendDeviceTokenToBackend(token: string): Promise<boolean> {
+  if (!token) {
+    return false;
+  }
+
+  try {
+    // Authenticated via apiFetch (Bearer token) so the backend can associate
+    // this Expo push token with the signed-in user rather than just a device.
+    const response = await apiFetch(`${API_BASE}/api/notifications/register`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({
         token,
         platform: Platform.OS,
         appId: Constants.manifest?.slug || Constants.expoConfig?.slug || "ZAPS",
       }),
     });
-  } catch {
-    // Backend registration is optional during local development.
+    return response.ok;
+  } catch (error) {
+    // Local dev / flaky network shouldn't block the rest of the app —
+    // the token stays cached locally and a later app start will retry.
+    console.warn("sendDeviceTokenToBackend error", error);
+    return false;
   }
 }
 
@@ -133,15 +183,24 @@ export async function requestNotificationPermissionsAsync(): Promise<Notificatio
   }
 }
 
-export async function registerForPushNotificationsAsync(): Promise<
-  string | null
-> {
+export async function registerForPushNotificationsAsync(
+  options: { requestIfUndetermined?: boolean } = {}
+): Promise<string | null> {
+  const { requestIfUndetermined = true } = options;
+
   if (!Constants.isDevice) {
     console.warn("Push notifications require a physical device.");
     return null;
   }
 
-  const status = await requestNotificationPermissionsAsync();
+  // By default this may trigger the native OS permission dialog. Callers
+  // that only want to silently refresh a token the user has already
+  // consented to (e.g. app boot) should pass `requestIfUndetermined: false`
+  // so an undetermined status is left untouched rather than re-prompted.
+  const status = requestIfUndetermined
+    ? await requestNotificationPermissionsAsync()
+    : (await Notifications.getPermissionsAsync()).status;
+
   if (status !== Notifications.PermissionStatus.GRANTED) {
     return null;
   }
