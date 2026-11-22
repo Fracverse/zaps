@@ -88,6 +88,7 @@ use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::circle_audit;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
+use crate::services::circle_payout_execution as payout_execution;
 use crate::services::circle_scheduler::{self, UpdateReminderPreferencesRequest};
 use crate::services::circle_sharing;
 use axum::http::HeaderMap;
@@ -2487,53 +2488,63 @@ pub async fn execute_payout(
     if let Err(response) = require_audit_access(&state.pool, circle_id, &auth.address).await {
         return response.into_response();
     }
-    if req.tx_hash.trim().is_empty() || req.tx_hash.len() > 128 {
-        return err("invalid_tx_hash").into_response();
-    }
-
-    let row = sqlx::query(
-        "SELECT status, is_executed FROM circle_payout_requests WHERE circle_id = $1 AND request_id = $2",
+    let execution = match payout_execution::execute_approved_payout(
+        &state.pool,
+        circle_id,
+        req_id,
+        &auth.address,
+        &req.tx_hash,
     )
-    .bind(circle_id)
-    .bind(req_id)
-    .fetch_optional(&state.pool)
-    .await;
-
-    let row = match row {
-        Ok(Some(r)) => r,
-        Ok(None) => return not_found("payout_not_found").into_response(),
-        Err(_) => return internal().into_response(),
+    .await
+    {
+        Ok(execution) => execution,
+        Err(e) => {
+            let code = e.code();
+            return match e {
+                payout_execution::PayoutError::AlreadyExecuted => (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "error": code })),
+                )
+                    .into_response(),
+                payout_execution::PayoutError::PayoutNotFound => not_found(code).into_response(),
+                payout_execution::PayoutError::Internal => internal().into_response(),
+                _ => err(code).into_response(),
+            };
+        }
     };
-    if row.get::<bool, _>("is_executed") {
-        return err("already_executed").into_response();
-    }
 
-    let updated = sqlx::query(
-        r#"
-        UPDATE circle_payout_requests
-           SET status = 'executed', is_executed = TRUE, tx_hash = $3
-         WHERE circle_id = $1 AND request_id = $2 AND is_executed = FALSE
-        "#,
-    )
-    .bind(circle_id)
-    .bind(req_id)
-    .bind(req.tx_hash.trim())
-    .execute(&state.pool)
-    .await;
+    // On-chain confirmation is best-effort and asynchronous; the immutable
+    // submission record above exists even if the RPC is temporarily down.
+    let verify_pool = state.pool.clone();
+    let verify_id = execution.id;
+    let verify_hash = execution.tx_hash.clone();
+    tokio::spawn(async move {
+        if let Err(e) =
+            payout_execution::verify_on_chain(&verify_pool, verify_id, &verify_hash).await
+        {
+            tracing::warn!(execution_id = %verify_id, error = %e, "payout on-chain verification failed");
+        }
+    });
 
-    if updated.is_err() {
-        return internal().into_response();
-    }
     audit(
         &state.pool,
         circle_id,
         &auth.address,
         "payout_executed",
         &format!("payout:{req_id}"),
-        serde_json::json!({ "tx_hash": req.tx_hash.trim() }),
+        serde_json::json!({
+            "execution_id": execution.id,
+            "tx_hash": execution.tx_hash,
+            "status": execution.status,
+        }),
     )
     .await;
-    Json(serde_json::json!({ "status": "executed" })).into_response()
+    Json(serde_json::json!({
+        "status": execution.status,
+        "execution_id": execution.id,
+        "tx_hash": execution.tx_hash,
+    }))
+    .into_response()
 }
 
 // ── #1221: Circle sharing and deep links ─────────────────────────────────────
