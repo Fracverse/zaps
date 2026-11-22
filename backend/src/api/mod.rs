@@ -331,6 +331,10 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
             "/:id/invitations/:inv_id",
             delete(circle_invitations::revoke_invitation),
         )
+        .route(
+            "/:id/settings",
+            get(circles::get_circle_settings).patch(circles::update_circle_settings),
+        )
         .route("/:id/goals", get(circles::list_goals).post(circles::create_goal))
         // #1224: idempotent financial operations (inner layer, so the rate
         // limiter still sees every attempt).

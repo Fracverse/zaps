@@ -17,6 +17,8 @@
 //! | DELETE | /api/circles/:id/members/:address         | ✓    | Remove a member / exit                |
 //! | GET    | /api/circles/:id/goals                    | ✓    | List savings goals                    |
 //! | POST   | /api/circles/:id/goals                    | ✓    | Create a savings goal                 |
+//! | GET    | /api/circles/:id/settings                 | ✓    | View circle settings (#1202)          |
+//! | PATCH  | /api/circles/:id/settings                 | ✓    | Update circle settings (#1202)        |
 //!
 //! # Request / Response shapes
 //!
@@ -89,6 +91,7 @@ use crate::services::circle_audit;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
 use crate::services::circle_scheduler::{self, UpdateReminderPreferencesRequest};
+use crate::services::circle_settings::{self, UpdateCircleSettingsRequest};
 use crate::services::circle_sharing;
 use axum::http::HeaderMap;
 use axum::{
@@ -2309,6 +2312,70 @@ pub async fn create_goal(
         )
             .into_response(),
         Err(_) => internal().into_response(),
+    }
+}
+
+// ── #1202: Circle settings ────────────────────────────────────────────────────
+
+fn service_error(code: &'static str) -> axum::response::Response {
+    let status = match code {
+        "circle_not_found" | "goal_not_found" => StatusCode::NOT_FOUND,
+        "not_member" | "permission_denied" => StatusCode::FORBIDDEN,
+        "active_goal_limit_reached" | "goal_already_completed" | "goal_target_not_reached" => {
+            StatusCode::CONFLICT
+        }
+        "internal_error" => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (status, Json(serde_json::json!({ "error": code }))).into_response()
+}
+
+/// GET /api/circles/:id/settings — any member may view.
+pub async fn get_circle_settings(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match circle_settings::get_settings(&state.pool, id, &auth.address).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(e) => service_error(e),
+    }
+}
+
+/// PATCH /api/circles/:id/settings — owner / admin only.
+///
+/// Returns the persisted settings plus the list of fields that changed.
+pub async fn update_circle_settings(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateCircleSettingsRequest>,
+) -> impl IntoResponse {
+    match circle_settings::update_settings(&state.pool, id, &auth.address, req).await {
+        Ok((settings, changes)) => {
+            if !changes.is_empty() {
+                audit(
+                    &state.pool,
+                    id,
+                    &auth.address,
+                    "settings_updated",
+                    &id.to_string(),
+                    serde_json::json!({ "changes": changes }),
+                )
+                .await;
+                state.hub.publish(
+                    id,
+                    "circle.settings_updated",
+                    serde_json::json!({
+                        "circle_id": id,
+                        "fields": changes.iter().map(|c| c.field).collect::<Vec<_>>(),
+                    }),
+                    false,
+                );
+            }
+            Json(serde_json::json!({ "settings": settings, "changes": changes })).into_response()
+        }
+        Err(e) => service_error(e),
     }
 }
 
