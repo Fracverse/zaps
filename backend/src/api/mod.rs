@@ -237,6 +237,11 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         // Static endpoints registered before /:id to prevent UUID parse collisions
         .route("/discover", get(circles::discover_circles))
         .route("/search", get(circles::search_circles))
+        // #1217 — notification inbox (static paths before /:id)
+        .route("/notifications", get(circles::list_notifications))
+        .route("/notifications/unread-count", get(circles::notification_unread_count))
+        .route("/notifications/read-all", post(circles::mark_all_notifications_read))
+        .route("/notifications/:id/read", post(circles::mark_notification_read))
         .route("/:id", get(circles::get_circle))
         .route("/:id/join", post(circles::join_circle))
         .route("/:id/leave", post(circles::leave_circle))

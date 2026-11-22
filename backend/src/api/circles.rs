@@ -88,6 +88,7 @@ use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::circle_membership::{
     self, CirclePermission, CircleRole, MemberRoleEntry,
 };
+use crate::services::circle_notifications as circle_notifier;
 use crate::services::circle_scheduler::{
     self, UpdateReminderPreferencesRequest,
 };
@@ -2155,6 +2156,74 @@ pub async fn create_goal(
             Json(serde_json::json!({ "id": row.id, "created_at": row.created_at })),
         )
             .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+// ── #1217: Circle notifications ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct NotificationListQuery {
+    pub unread_only: Option<bool>,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+/// GET /api/circles/notifications — the authenticated user's notification inbox.
+pub async fn list_notifications(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Query(q): Query<NotificationListQuery>,
+) -> impl IntoResponse {
+    let per_page = q.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
+    let page = q.page.unwrap_or(1);
+    if page < 1 {
+        return err("invalid_page").into_response();
+    }
+    let offset = (page - 1) * per_page;
+
+    match circle_notifier::list(&state.pool, &auth.address, q.unread_only.unwrap_or(false), per_page, offset).await {
+        Ok(notifications) => Json(serde_json::json!({
+            "notifications": notifications,
+            "page": page,
+            "per_page": per_page,
+        }))
+        .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/notifications/unread-count
+pub async fn notification_unread_count(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+) -> impl IntoResponse {
+    match circle_notifier::unread_count(&state.pool, &auth.address).await {
+        Ok(count) => Json(serde_json::json!({ "unread_count": count })).into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/notifications/:id/read — recipients only.
+pub async fn mark_notification_read(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match circle_notifier::mark_read(&state.pool, &auth.address, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("notification_not_found").into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/notifications/read-all
+pub async fn mark_all_notifications_read(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+) -> impl IntoResponse {
+    match circle_notifier::mark_all_read(&state.pool, &auth.address).await {
+        Ok(updated) => Json(serde_json::json!({ "updated": updated })).into_response(),
         Err(_) => internal().into_response(),
     }
 }

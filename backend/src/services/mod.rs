@@ -1,6 +1,7 @@
 pub mod allbridge;
 pub mod auth;
 pub mod circle_membership;
+pub mod circle_notifications;
 pub mod circle_scheduler;
 pub mod disbursement_worker;
 pub mod notifications;
