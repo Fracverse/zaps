@@ -349,7 +349,11 @@ pub async fn create_invitation(
     } else {
         InviteType::Link
     };
-    let invitee = input.invitee.as_deref().map(normalize_address).transpose()?;
+    let invitee = input
+        .invitee
+        .as_deref()
+        .map(normalize_address)
+        .transpose()?;
     let max_uses = validate_max_uses(invite_type, input.max_uses)?;
     if invitee.as_deref() == Some(inviter) {
         return Err("cannot_invite_self");
@@ -367,7 +371,10 @@ pub async fn create_invitation(
     .map_err(|_| "internal_error")?
     .ok_or("circle_not_found")?;
 
-    let hours = resolve_expiry_hours(input.expires_in_hours, circle.get("invitation_expiry_hours"))?;
+    let hours = resolve_expiry_hours(
+        input.expires_in_hours,
+        circle.get("invitation_expiry_hours"),
+    )?;
     let member_limit: Option<i32> = circle.get("member_limit");
     if let Some(limit) = member_limit {
         if member_count(&mut tx, circle_id).await? >= limit as i64 {
@@ -519,13 +526,14 @@ pub async fn list_circle_invitations(
     "#;
     let status = status.map(InvitationStatus::as_str);
 
-    let total: i64 =
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM circle_invitations WHERE {filter}"))
-            .bind(circle_id)
-            .bind(status)
-            .fetch_one(pool)
-            .await
-            .map_err(|_| "internal_error")?;
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM circle_invitations WHERE {filter}"
+    ))
+    .bind(circle_id)
+    .bind(status)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| "internal_error")?;
 
     let rows = sqlx::query(&format!(
         "SELECT {INVITATION_COLUMNS} FROM circle_invitations WHERE {filter}
@@ -656,10 +664,10 @@ pub async fn respond(
 
     let invitation_id: Uuid = row.get("id");
     let circle_id: Uuid = row.get("circle_id");
-    let invite_type = InviteType::parse(row.get::<String, _>("invite_type").as_str())
-        .ok_or("internal_error")?;
-    let stored_status = InvitationStatus::parse(row.get::<String, _>("status").as_str())
-        .ok_or("internal_error")?;
+    let invite_type =
+        InviteType::parse(row.get::<String, _>("invite_type").as_str()).ok_or("internal_error")?;
+    let stored_status =
+        InvitationStatus::parse(row.get::<String, _>("status").as_str()).ok_or("internal_error")?;
     let invitee: Option<String> = row.get("invitee_address");
     let responded_by: Option<String> = row.get("responded_by");
 
@@ -741,11 +749,21 @@ pub async fn respond(
             Ok(outcome(InvitationStatus::Declined, false, false))
         }
         Decision::AcceptNew => {
-            let membership_created =
-                accept_in_tx(&mut tx, circle_id, invitation_id, invite_type, caller, &snapshot)
-                    .await?;
+            let membership_created = accept_in_tx(
+                &mut tx,
+                circle_id,
+                invitation_id,
+                invite_type,
+                caller,
+                &snapshot,
+            )
+            .await?;
             tx.commit().await.map_err(|_| "internal_error")?;
-            Ok(outcome(InvitationStatus::Accepted, false, membership_created))
+            Ok(outcome(
+                InvitationStatus::Accepted,
+                false,
+                membership_created,
+            ))
         }
     }
 }
@@ -923,7 +941,10 @@ mod tests {
             Err("max_uses_not_allowed")
         );
         assert_eq!(validate_max_uses(InviteType::Link, Some(10)), Ok(Some(10)));
-        assert_eq!(validate_max_uses(InviteType::Link, Some(0)), Err("invalid_max_uses"));
+        assert_eq!(
+            validate_max_uses(InviteType::Link, Some(0)),
+            Err("invalid_max_uses")
+        );
         assert_eq!(
             validate_max_uses(InviteType::Link, Some(MAX_LINK_USES + 1)),
             Err("invalid_max_uses")

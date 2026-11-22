@@ -288,12 +288,14 @@ pub async fn get_settings(
     circle_id: Uuid,
     viewer: &str,
 ) -> Result<CircleSettings, &'static str> {
-    let row = sqlx::query(&format!("SELECT {SETTINGS_COLUMNS} FROM circles WHERE id = $1"))
-        .bind(circle_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|_| "internal_error")?
-        .ok_or("circle_not_found")?;
+    let row = sqlx::query(&format!(
+        "SELECT {SETTINGS_COLUMNS} FROM circles WHERE id = $1"
+    ))
+    .bind(circle_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| "internal_error")?
+    .ok_or("circle_not_found")?;
 
     circle_membership::require_circle_permission(
         pool,
@@ -435,13 +437,19 @@ mod tests {
             name: Some("   ".into()),
             ..Default::default()
         };
-        assert_eq!(apply_update(&settings(), blank, 1).unwrap_err(), "name_required");
+        assert_eq!(
+            apply_update(&settings(), blank, 1).unwrap_err(),
+            "name_required"
+        );
 
         let long = UpdateCircleSettingsRequest {
             name: Some("x".repeat(MAX_NAME_LEN + 1)),
             ..Default::default()
         };
-        assert_eq!(apply_update(&settings(), long, 1).unwrap_err(), "name_too_long");
+        assert_eq!(
+            apply_update(&settings(), long, 1).unwrap_err(),
+            "name_too_long"
+        );
     }
 
     #[test]
@@ -466,7 +474,10 @@ mod tests {
             visibility: Some("secret".into()),
             ..Default::default()
         };
-        assert_eq!(apply_update(&settings(), bad, 1).unwrap_err(), "invalid_visibility");
+        assert_eq!(
+            apply_update(&settings(), bad, 1).unwrap_err(),
+            "invalid_visibility"
+        );
 
         let private = UpdateCircleSettingsRequest {
             visibility: Some("Private".into()),
@@ -510,16 +521,31 @@ mod tests {
     #[test]
     fn image_url_must_be_https() {
         assert!(validate_image_url("https://cdn.zaps.app/a.png").is_ok());
-        assert_eq!(validate_image_url("http://cdn.zaps.app/a.png"), Err("invalid_image_url"));
-        assert_eq!(validate_image_url("https:///a.png"), Err("invalid_image_url"));
-        assert_eq!(validate_image_url("https://user@evil.test/"), Err("invalid_image_url"));
-        assert_eq!(validate_image_url("https://a.b/x y"), Err("invalid_image_url"));
+        assert_eq!(
+            validate_image_url("http://cdn.zaps.app/a.png"),
+            Err("invalid_image_url")
+        );
+        assert_eq!(
+            validate_image_url("https:///a.png"),
+            Err("invalid_image_url")
+        );
+        assert_eq!(
+            validate_image_url("https://user@evil.test/"),
+            Err("invalid_image_url")
+        );
+        assert_eq!(
+            validate_image_url("https://a.b/x y"),
+            Err("invalid_image_url")
+        );
     }
 
     #[test]
     fn category_is_normalized() {
         assert_eq!(validate_category(" Savings "), Ok("savings".to_string()));
-        assert_eq!(validate_category("high-yield_2"), Ok("high-yield_2".to_string()));
+        assert_eq!(
+            validate_category("high-yield_2"),
+            Ok("high-yield_2".to_string())
+        );
         assert_eq!(validate_category("bad category"), Err("invalid_category"));
         assert_eq!(validate_category(""), Err("invalid_category"));
     }

@@ -164,8 +164,7 @@ pub async fn revoke_invitation(
     auth: AuthenticatedUser,
     Path((circle_id, invitation_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    match invitations::revoke_invitation(&state.pool, circle_id, invitation_id, &auth.address)
-        .await
+    match invitations::revoke_invitation(&state.pool, circle_id, invitation_id, &auth.address).await
     {
         Ok(()) => {
             audit(
@@ -211,7 +210,11 @@ async fn respond(
     }
 }
 
-async fn record_response(state: &CirclesState, auth: &AuthenticatedUser, outcome: &ResponseOutcome) {
+async fn record_response(
+    state: &CirclesState,
+    auth: &AuthenticatedUser,
+    outcome: &ResponseOutcome,
+) {
     let action = match outcome.status {
         InvitationStatus::Accepted => "invitation_accepted",
         _ => "invitation_declined",
@@ -289,14 +292,26 @@ mod tests {
 
     #[test]
     fn error_codes_map_to_expected_statuses() {
-        assert_eq!(error_response("invitation_not_found").status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            error_response("invitation_not_found").status(),
+            StatusCode::NOT_FOUND
+        );
         assert_eq!(
             error_response("not_invitation_recipient").status(),
             StatusCode::FORBIDDEN
         );
-        assert_eq!(error_response("invitation_expired").status(), StatusCode::GONE);
-        assert_eq!(error_response("member_limit_reached").status(), StatusCode::CONFLICT);
-        assert_eq!(error_response("invalid_expiry").status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error_response("invitation_expired").status(),
+            StatusCode::GONE
+        );
+        assert_eq!(
+            error_response("member_limit_reached").status(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            error_response("invalid_expiry").status(),
+            StatusCode::BAD_REQUEST
+        );
         assert_eq!(
             error_response("internal_error").status(),
             StatusCode::INTERNAL_SERVER_ERROR
