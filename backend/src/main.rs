@@ -271,9 +271,7 @@ async fn main() {
                 Some(lock)
             }
             Err(e) => {
-                tracing::error!(
-                    "Failed to initialize BatchLock, continuing without it: {e}"
-                );
+                tracing::error!("Failed to initialize BatchLock, continuing without it: {e}");
                 None
             }
         },
@@ -475,6 +473,16 @@ async fn main() {
         services::disbursement_worker::run(disbursement_pool, disbursement_config, shutdown_rx)
             .await;
     });
+
+    // #1217: Retry failed circle notification push deliveries with backoff.
+    let circle_notification_pool = pool.clone();
+    worker_handles.push(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            ticker.tick().await;
+            services::circle_notifications::retry_due_deliveries(&circle_notification_pool).await;
+        }
+    }));
 
     // #1219: Hourly circle contribution reminder scheduler.
     let reminder_pool = pool.clone();
@@ -773,7 +781,12 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
 #[cfg(test)]
 mod health_tests {
     use super::liveness_probe;
-    use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
     use tower::ServiceExt;
 
     fn liveness_router() -> Router {
@@ -832,7 +845,10 @@ mod health_tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
 
-        assert!(content_type.contains("application/json"), "expected JSON content-type, got {content_type}");
+        assert!(
+            content_type.contains("application/json"),
+            "expected JSON content-type, got {content_type}"
+        );
     }
 }
 
