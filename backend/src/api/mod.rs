@@ -10,6 +10,7 @@ pub mod auth;
 pub mod bank_accounts;
 pub mod circles;
 pub mod circle_comments;
+pub mod circle_announcements;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
 pub mod circle_events;
@@ -291,6 +292,18 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
             post(circles::review_membership_request),
         )
         .route("/:id/roles", get(circles::list_roles))
+        // #1216 — circle announcements (moderator publish, member history).
+        .route(
+            "/:id/announcements",
+            get(circle_announcements::list_announcements)
+                .post(circle_announcements::create_announcement),
+        )
+        .route(
+            "/:id/announcements/:announcement_id",
+            get(circle_announcements::get_announcement)
+                .put(circle_announcements::update_announcement)
+                .delete(circle_announcements::delete_announcement),
+        )
         // #1222 — permission-controlled, append-only audit trail
         .route("/:id/audit", get(circles::list_audit_log))
         .route("/:id/audit/verify", get(circles::verify_audit_log))

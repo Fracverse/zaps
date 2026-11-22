@@ -24,6 +24,7 @@ pub enum CircleNotificationType {
     PayoutRequest,
     PayoutApproval,
     GoalCompleted,
+    Announcement,
 }
 
 impl CircleNotificationType {
@@ -37,6 +38,7 @@ impl CircleNotificationType {
             Self::PayoutRequest => "payout_request",
             Self::PayoutApproval => "payout_approval",
             Self::GoalCompleted => "goal_completed",
+            Self::Announcement => "announcement",
         }
     }
 
@@ -50,6 +52,7 @@ impl CircleNotificationType {
             "payout_request",
             "payout_approval",
             "goal_completed",
+            "announcement",
         ]
     }
 }
@@ -365,10 +368,10 @@ mod tests {
     #[test]
     fn all_notification_types_are_unique_and_standardized() {
         let all = CircleNotificationType::all();
-        assert_eq!(all.len(), 8);
+        assert_eq!(all.len(), 9);
         assert_eq!(
             all.iter().collect::<std::collections::HashSet<_>>().len(),
-            8
+            9
         );
         for (i, name) in all.iter().enumerate() {
             assert_eq!(
