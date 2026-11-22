@@ -13,7 +13,9 @@ pub mod circle_rate_limit;
 pub mod circle_idempotency;
 pub mod circle_events;
 pub mod auth_middleware;
+pub mod bank_accounts;
 pub mod bridge;
+pub mod circles;
 pub mod feed;
 pub mod payouts;
 pub mod privy_jwks;
@@ -124,7 +126,9 @@ pub fn user_routes_with_state(state: user::UserState) -> Router {
     Router::new()
         .route(
             "/profile",
-            get(user::get_profile).post(user::update_profile).put(user::update_profile),
+            get(user::get_profile)
+                .post(user::update_profile)
+                .put(user::update_profile),
         )
         .route("/profile/avatar", post(user::upload_avatar))
         .route("/search", get(user::search_users))
@@ -242,19 +246,53 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         // Static endpoints registered before /:id to prevent UUID parse collisions
         .route("/discover", get(circles::discover_circles))
         .route("/search", get(circles::search_circles))
+        // #1220 — authorized user search for circle invitations
+        .route("/users/search", get(circles::search_users_for_circle))
+        // #1221 — secure share links / deep links (static before /:id)
+        .route("/share", post(circles::create_share_link))
+        .route("/share/:token", get(circles::resolve_share_link))
+        .route("/share/:id/revoke", post(circles::revoke_share_link))
+        // #1217 — notification inbox (static paths before /:id)
+        .route("/notifications", get(circles::list_notifications))
+        .route(
+            "/notifications/unread-count",
+            get(circles::notification_unread_count),
+        )
+        .route(
+            "/notifications/read-all",
+            post(circles::mark_all_notifications_read),
+        )
+        .route(
+            "/notifications/:id/read",
+            post(circles::mark_notification_read),
+        )
         .route("/:id", get(circles::get_circle))
         .route("/:id/join", post(circles::join_circle))
         .route("/:id/leave", post(circles::leave_circle))
         // #1225: authenticated SSE subscription for circle members.
         .route("/:id/events", get(circle_events::circle_event_stream))
         .route("/:id/eligibility", get(circles::check_eligibility))
-        .route("/:id/membership/history", get(circles::get_membership_history))
+        .route(
+            "/:id/membership/history",
+            get(circles::get_membership_history),
+        )
         .route(
             "/:id/members/requests/:req_id/review",
             post(circles::review_membership_request),
         )
         .route("/:id/roles", get(circles::list_roles))
-        .route("/:id/members/:address/role", put(circles::update_member_role))
+        // #1222 — permission-controlled, append-only audit trail
+        .route("/:id/audit", get(circles::list_audit_log))
+        .route("/:id/audit/verify", get(circles::verify_audit_log))
+        .route(
+            "/:id/contribution-rules",
+            put(circles::update_contribution_rule),
+        )
+        .route("/:id/payout/:req_id/execute", post(circles::execute_payout))
+        .route(
+            "/:id/members/:address/role",
+            put(circles::update_member_role),
+        )
         .route(
             "/:id/reminders/preferences",
             get(circles::get_reminder_preferences).put(circles::update_reminder_preferences),
@@ -267,7 +305,10 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route("/:id/payout", post(circles::request_payout))
         .route("/:id/payout/:req_id", get(circles::get_payout_status))
         .route("/:id/payout/:req_id/approve", post(circles::approve_payout))
-        .route("/:id/members", get(circles::list_members).post(circles::add_member))
+        .route(
+            "/:id/members",
+            get(circles::list_members).post(circles::add_member),
+        )
         .route("/:id/members/:address", delete(circles::remove_member))
         .route("/:id/goals", get(circles::list_goals).post(circles::create_goal))
         // #1224: idempotent financial operations (inner layer, so the rate
