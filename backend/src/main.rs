@@ -351,7 +351,8 @@ async fn main() {
                     yield_cache.clone(),
                 )),
             )
-            .nest("/api/payouts", api::payout_routes(bridge_state.clone())),
+            .nest("/api/payouts", api::payout_routes(bridge_state.clone()))
+            .nest("/api/circles", api::circle_routes(pool.clone())),
         pool.clone(),
         auth_cache.clone(),
         privy_jwks,
@@ -474,6 +475,12 @@ async fn main() {
         services::disbursement_worker::run(disbursement_pool, disbursement_config, shutdown_rx)
             .await;
     });
+
+    // #1219: Hourly circle contribution reminder scheduler.
+    let reminder_pool = pool.clone();
+    worker_handles.push(tokio::spawn(async move {
+        services::circle_scheduler::run(reminder_pool, std::time::Duration::from_secs(3600)).await;
+    }));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("Listening on {}", addr);

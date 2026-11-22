@@ -85,6 +85,12 @@
 //! | 500         | `internal_error`          | Unexpected server error                |
 
 use crate::api::auth_middleware::AuthenticatedUser;
+use crate::services::circle_membership::{
+    self, CirclePermission, CircleRole, MemberRoleEntry,
+};
+use crate::services::circle_scheduler::{
+    self, UpdateReminderPreferencesRequest,
+};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -281,7 +287,46 @@ pub struct GoalEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// #1197 — Query parameters for circle search.
+#[derive(Debug, Deserialize)]
+pub struct SearchCirclesQuery {
+    pub q: Option<String>,
+    pub category: Option<String>,
+    pub visibility: Option<String>,
+    pub min_target: Option<i64>,
+    pub max_target: Option<i64>,
+    pub has_space: Option<bool>,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+/// #1201 — Request body to update a member's role.
+#[derive(Debug, Deserialize)]
+pub struct UpdateRoleRequest {
+    pub role: String,
+}
+
+/// #1198 — Review membership request body.
+#[derive(Debug, Deserialize)]
+pub struct ReviewMembershipRequest {
+    pub approve: bool,
+    pub reason: Option<String>,
+}
+
+/// Pagination query parameters.
+#[derive(Debug, Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn escape_like_pattern(term: &str) -> String {
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
 
 fn err(msg: &'static str) -> (StatusCode, Json<serde_json::Value>) {
     (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": msg })))
@@ -402,7 +447,19 @@ pub async fn create_circle(
 
     // Creator is automatically the admin/owner member.
     let _ = sqlx::query!(
-        "INSERT INTO circle_members (circle_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO circle_members (circle_id, address, role) VALUES ($1, $2, 'owner') ON CONFLICT (circle_id, address) DO UPDATE SET role = 'owner'",
+        id,
+        auth.address
+    )
+    .execute(&state.pool)
+    .await;
+
+    // Record membership history
+    let _ = sqlx::query!(
+        r#"
+        INSERT INTO circle_membership_history (circle_id, member_address, action, actor_address, new_role)
+        VALUES ($1, $2, 'joined', $2, 'owner')
+        "#,
         id,
         auth.address
     )
@@ -665,6 +722,210 @@ struct DiscoverRow {
     pub is_discoverable: bool,
     pub created_at: DateTime<Utc>,
     pub member_count: Option<i64>,
+}
+
+/// GET /api/circles/search — #1197: Search circles by name, description, category.
+///
+/// Features:
+/// - Supports partial matching across `name`, `description`, and `category` (using ILIKE with trigram indexes).
+/// - Sanitizes and validates queries (trimming, max 100 chars, escaping LIKE meta-characters).
+/// - Privacy permissions enforced:
+///     * Public circles: visible to all users.
+///     * Invite-only circles: visible if `is_discoverable` or caller is a member.
+///     * Private circles: visible ONLY if caller is a member.
+/// - Pagination: page, per_page (default 20, max 100).
+/// - Empty results: returns HTTP 200 with `{ "circles": [], "total": 0, "page": page, "per_page": per_page }`.
+pub async fn search_circles(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Query(q): Query<SearchCirclesQuery>,
+) -> impl IntoResponse {
+    let per_page = q.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
+    let page = q.page.unwrap_or(1);
+    if page < 1 {
+        return err("invalid_page").into_response();
+    }
+    let offset = (page - 1) * per_page;
+
+    if let Some(ref vis) = q.visibility {
+        if !VALID_VISIBILITIES.contains(&vis.as_str()) {
+            return err("invalid_visibility").into_response();
+        }
+    }
+
+    let term = q.q.as_deref().unwrap_or("").trim();
+    if term.chars().count() > 100 {
+        return err("query_too_long").into_response();
+    }
+
+    let escaped_term = escape_like_pattern(term).to_lowercase();
+    let has_search_term = !escaped_term.is_empty();
+    let pattern = if has_search_term {
+        Some(format!("%{escaped_term}%"))
+    } else {
+        None
+    };
+
+    // Build privacy and search clauses
+    // $1 = auth.address
+    let mut where_clauses: Vec<String> = vec![
+        r#"(
+            c.visibility = 'public'
+            OR (c.visibility = 'invite_only' AND c.is_discoverable = TRUE)
+            OR EXISTS (SELECT 1 FROM circle_members cm WHERE cm.circle_id = c.id AND cm.address = $1)
+        )"#.into()
+    ];
+    let mut bind_index: i32 = 1;
+
+    let mut pattern_val: Option<String> = None;
+    let mut category_val: Option<String> = None;
+    let mut visibility_val: Option<String> = None;
+    let mut min_target_val: Option<i64> = None;
+    let mut max_target_val: Option<i64> = None;
+
+    if let Some(pat) = pattern {
+        bind_index += 1;
+        where_clauses.push(format!(
+            "(LOWER(c.name) LIKE ${bind_index} ESCAPE '\\' OR LOWER(COALESCE(c.description, '')) LIKE ${bind_index} ESCAPE '\\' OR LOWER(c.category) LIKE ${bind_index} ESCAPE '\\')"
+        ));
+        pattern_val = Some(pat);
+    }
+
+    if let Some(cat) = q.category.as_deref() {
+        bind_index += 1;
+        where_clauses.push(format!("c.category = ${bind_index}"));
+        category_val = Some(cat.to_lowercase());
+    }
+
+    if let Some(vis) = q.visibility.as_deref() {
+        bind_index += 1;
+        where_clauses.push(format!("c.visibility = ${bind_index}"));
+        visibility_val = Some(vis.to_string());
+    }
+
+    if let Some(min) = q.min_target {
+        bind_index += 1;
+        where_clauses.push(format!("c.target_amount >= ${bind_index}"));
+        min_target_val = Some(min);
+    }
+
+    if let Some(max) = q.max_target {
+        bind_index += 1;
+        where_clauses.push(format!("c.target_amount <= ${bind_index}"));
+        max_target_val = Some(max);
+    }
+
+    if q.has_space.unwrap_or(false) {
+        where_clauses.push(
+            "(c.member_limit IS NULL OR (SELECT COUNT(*) FROM circle_members WHERE circle_id = c.id) < c.member_limit)".into()
+        );
+    }
+
+    let where_sql = where_clauses.join(" AND ");
+
+    let count_sql = format!("SELECT COUNT(*) FROM circles c WHERE {where_sql}");
+
+    let data_sql = format!(
+        r#"
+        SELECT
+            c.id, c.name, c.description, c.category, c.visibility,
+            c.image_url, c.target_amount, c.balance, c.token_address,
+            c.is_discoverable, c.created_at,
+            COUNT(cm.address) AS member_count
+        FROM circles c
+        LEFT JOIN circle_members cm ON cm.circle_id = c.id
+        WHERE {where_sql}
+        GROUP BY c.id
+        ORDER BY c.created_at DESC
+        LIMIT ${limit_idx} OFFSET ${offset_idx}
+        "#,
+        limit_idx = bind_index + 1,
+        offset_idx = bind_index + 2,
+    );
+
+    // Bind count query
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(&auth.address);
+    if let Some(ref p) = pattern_val {
+        count_q = count_q.bind(p.clone());
+    }
+    if let Some(ref cat) = category_val {
+        count_q = count_q.bind(cat.clone());
+    }
+    if let Some(ref vis) = visibility_val {
+        count_q = count_q.bind(vis.clone());
+    }
+    if let Some(min) = min_target_val {
+        count_q = count_q.bind(min);
+    }
+    if let Some(max) = max_target_val {
+        count_q = count_q.bind(max);
+    }
+
+    let total: i64 = match count_q.fetch_one(&state.pool).await {
+        Ok(n) => n,
+        Err(_) => return internal().into_response(),
+    };
+
+    // If total == 0, return valid empty result right away (O(1))
+    if total == 0 {
+        return Json(serde_json::json!({
+            "circles": Vec::<CircleSummary>::new(),
+            "total": 0,
+            "page": page,
+            "per_page": per_page,
+        }))
+        .into_response();
+    }
+
+    // Bind data query
+    let mut data_q = sqlx::query_as::<_, DiscoverRow>(&data_sql).bind(&auth.address);
+    if let Some(ref p) = pattern_val {
+        data_q = data_q.bind(p.clone());
+    }
+    if let Some(ref cat) = category_val {
+        data_q = data_q.bind(cat.clone());
+    }
+    if let Some(ref vis) = visibility_val {
+        data_q = data_q.bind(vis.clone());
+    }
+    if let Some(min) = min_target_val {
+        data_q = data_q.bind(min);
+    }
+    if let Some(max) = max_target_val {
+        data_q = data_q.bind(max);
+    }
+    data_q = data_q.bind(per_page).bind(offset);
+
+    match data_q.fetch_all(&state.pool).await {
+        Ok(rows) => {
+            let circles: Vec<CircleSummary> = rows
+                .into_iter()
+                .map(|r| CircleSummary {
+                    id: r.id,
+                    name: r.name,
+                    description: r.description,
+                    category: r.category,
+                    visibility: r.visibility,
+                    image_url: r.image_url,
+                    target_amount: r.target_amount.to_string(),
+                    balance: r.balance.to_string(),
+                    token: r.token_address,
+                    member_count: r.member_count.unwrap_or(0),
+                    is_discoverable: r.is_discoverable,
+                    created_at: r.created_at,
+                })
+                .collect();
+
+            Json(serde_json::json!({
+                "circles": circles,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
+            }))
+            .into_response()
+        }
+        Err(_) => internal().into_response(),
+    }
 }
 
 /// GET /api/circles/:id — #1195: Retrieve complete circle information.
@@ -1200,15 +1461,366 @@ pub async fn list_members(
     }
 }
 
-/// POST /api/circles/:id/members
-pub async fn add_member(
+/// POST /api/circles/:id/join — #1198: Join a circle.
+pub async fn join_circle(
     State(state): State<CirclesState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<AddMemberRequest>,
 ) -> impl IntoResponse {
-    let is_admin = sqlx::query_scalar!(
-        "SELECT 1 FROM circles WHERE id = $1 AND admin_address = $2",
+    match circle_membership::join_circle(&state.pool, id, &auth.address).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "joined",
+                "circle_id": id,
+                "address": auth.address,
+                "role": "member",
+            })),
+        )
+            .into_response(),
+        Err("already_member") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "already_member" })),
+        )
+            .into_response(),
+        Err("member_limit_reached") => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "member_limit_reached" })),
+        )
+            .into_response(),
+        Err("private_circle_direct_join_disabled") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "private_circle_direct_join_disabled" })),
+        )
+            .into_response(),
+        Err("invitation_required") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "invitation_required" })),
+        )
+            .into_response(),
+        Err("circle_not_found") => not_found("circle_not_found").into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/:id/leave — #1198: Leave a circle.
+pub async fn leave_circle(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match circle_membership::leave_circle(&state.pool, id, &auth.address).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "left", "circle_id": id })),
+        )
+            .into_response(),
+        Err("not_member") => forbidden("not_member").into_response(),
+        Err("owner_cannot_leave_must_transfer") => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "owner_cannot_leave_must_transfer" })),
+        )
+            .into_response(),
+        Err("pending_obligations") => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "pending_obligations" })),
+        )
+            .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/:id/eligibility — #1198: Check if caller is eligible to join.
+pub async fn check_eligibility(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match circle_membership::check_eligibility(&state.pool, id, &auth.address).await {
+        Ok(eligibility) => Json(eligibility).into_response(),
+        Err("circle_not_found") => not_found("circle_not_found").into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/:id/membership/history — #1198: View circle membership history.
+pub async fn get_membership_history(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Query(q): Query<PaginationQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        id,
+        &auth.address,
+        CirclePermission::ViewFinancialInfo,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    let page = q.page.unwrap_or(1).max(1);
+    let per_page = q.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
+
+    match circle_membership::get_membership_history(&state.pool, id, page, per_page).await {
+        Ok((history, total)) => Json(serde_json::json!({
+            "history": history,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+        }))
+        .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/:id/members/requests/:req_id/review — #1198: Approve or reject join request.
+pub async fn review_membership_request(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((circle_id, req_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<ReviewMembershipRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        circle_id,
+        &auth.address,
+        CirclePermission::ManageMembers,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    let request = sqlx::query!(
+        "SELECT requester_address, status FROM circle_membership_requests WHERE id = $1 AND circle_id = $2",
+        req_id,
+        circle_id
+    )
+    .fetch_optional(&state.pool)
+    .await;
+
+    let r = match request {
+        Ok(Some(r)) => r,
+        Ok(None) => return not_found("request_not_found").into_response(),
+        Err(_) => return internal().into_response(),
+    };
+
+    if r.status != "pending" {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "request_already_reviewed" })),
+        )
+            .into_response();
+    }
+
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(_) => return internal().into_response(),
+    };
+
+    let new_status = if req.approve { "approved" } else { "rejected" };
+
+    if req.approve {
+        // Enforce membership limit
+        let count: i64 = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM circle_members WHERE circle_id = $1",
+            circle_id
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(0);
+
+        let limit = sqlx::query_scalar!(
+            "SELECT member_limit FROM circles WHERE id = $1",
+            circle_id
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(limit) = limit {
+            if count >= limit as i64 {
+                let _ = tx.rollback().await;
+                return err("member_limit_reached").into_response();
+            }
+        }
+
+        let insert = sqlx::query!(
+            "INSERT INTO circle_members (circle_id, address, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING",
+            circle_id,
+            r.requester_address
+        )
+        .execute(&mut *tx)
+        .await;
+
+        if insert.is_err() {
+            let _ = tx.rollback().await;
+            return internal().into_response();
+        }
+
+        let _ = sqlx::query!(
+            r#"
+            INSERT INTO circle_membership_history (circle_id, member_address, action, actor_address, new_role, reason)
+            VALUES ($1, $2, 'approved', $3, 'member', $4)
+            "#,
+            circle_id,
+            r.requester_address,
+            auth.address,
+            req.reason
+        )
+        .execute(&mut *tx)
+        .await;
+    } else {
+        let _ = sqlx::query!(
+            r#"
+            INSERT INTO circle_membership_history (circle_id, member_address, action, actor_address, reason)
+            VALUES ($1, $2, 'rejected', $3, $4)
+            "#,
+            circle_id,
+            r.requester_address,
+            auth.address,
+            req.reason
+        )
+        .execute(&mut *tx)
+        .await;
+    }
+
+    let _ = sqlx::query!(
+        "UPDATE circle_membership_requests SET status = $1, reviewed_by = $2, reviewed_at = NOW() WHERE id = $3",
+        new_status,
+        auth.address,
+        req_id
+    )
+    .execute(&mut *tx)
+    .await;
+
+    if tx.commit().await.is_err() {
+        return internal().into_response();
+    }
+
+    Json(serde_json::json!({ "request_id": req_id, "status": new_status })).into_response()
+}
+
+/// GET /api/circles/:id/roles — #1201: List member roles.
+pub async fn list_roles(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        id,
+        &auth.address,
+        CirclePermission::ViewFinancialInfo,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    let rows = sqlx::query!(
+        "SELECT address, role, joined_at, total_contributed FROM circle_members WHERE circle_id = $1 ORDER BY joined_at",
+        id
+    )
+    .fetch_all(&state.pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let roles: Vec<_> = rows
+                .into_iter()
+                .map(|r| MemberRoleEntry {
+                    address: r.address,
+                    role: r.role,
+                    joined_at: r.joined_at,
+                    total_contributed: r.total_contributed.to_string(),
+                })
+                .collect();
+            Json(serde_json::json!({ "roles": roles })).into_response()
+        }
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// PUT /api/circles/:id/members/:address/role — #1201: Update a member's role with RBAC enforcement.
+pub async fn update_member_role(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((circle_id, address)): Path<(Uuid, String)>,
+    Json(req): Json<UpdateRoleRequest>,
+) -> impl IntoResponse {
+    let new_role = match CircleRole::from_str(&req.role) {
+        Some(r) => r,
+        None => return err("invalid_role").into_response(),
+    };
+
+    match circle_membership::update_member_role(
+        &state.pool,
+        circle_id,
+        &auth.address,
+        &address,
+        new_role,
+    )
+    .await
+    {
+        Ok(()) => Json(serde_json::json!({
+            "address": address,
+            "new_role": new_role.as_str(),
+        }))
+        .into_response(),
+        Err("not_member") => forbidden("not_member").into_response(),
+        Err("member_not_found") => not_found("member_not_found").into_response(),
+        Err("cannot_modify_own_role") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_modify_own_role" })),
+        )
+            .into_response(),
+        Err("insufficient_permission") => forbidden("permission_denied").into_response(),
+        Err("cannot_modify_owner") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_modify_owner" })),
+        )
+            .into_response(),
+        Err("only_owner_can_transfer_ownership") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "only_owner_can_transfer_ownership" })),
+        )
+            .into_response(),
+        Err("cannot_grant_role_equal_or_higher_than_own") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_grant_role_equal_or_higher_than_own" })),
+        )
+            .into_response(),
+        Err("cannot_modify_equal_or_higher_role") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_modify_equal_or_higher_role" })),
+        )
+            .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/:id/reminders/preferences — #1219: Get reminder preferences.
+pub async fn get_reminder_preferences(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
         id,
         auth.address
     )
@@ -1217,81 +1829,226 @@ pub async fn add_member(
     .unwrap_or(None)
     .is_some();
 
-    if !is_admin {
-        return forbidden("not_admin").into_response();
+    if !is_member {
+        return forbidden("not_member").into_response();
     }
 
-    let result = sqlx::query!(
-        "INSERT INTO circle_members (circle_id, address) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        id,
-        req.address
-    )
-    .execute(&state.pool)
-    .await;
-
-    match result {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "address": req.address })),
-        )
-            .into_response(),
+    match circle_scheduler::get_reminder_preferences(&state.pool, id, &auth.address).await {
+        Ok(prefs) => Json(prefs).into_response(),
         Err(_) => internal().into_response(),
     }
 }
 
-/// DELETE /api/circles/:id/members/:address
+/// PUT /api/circles/:id/reminders/preferences — #1219: Configure reminder preferences.
+pub async fn update_reminder_preferences(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateReminderPreferencesRequest>,
+) -> impl IntoResponse {
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        id,
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    if !is_member {
+        return forbidden("not_member").into_response();
+    }
+
+    match circle_scheduler::update_reminder_preferences(&state.pool, id, &auth.address, req).await {
+        Ok(prefs) => Json(prefs).into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/:id/reminders/trigger — #1219: Trigger on-demand contribution reminder evaluation.
+pub async fn trigger_contribution_reminders(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        id,
+        &auth.address,
+        CirclePermission::ManageSettings,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    match circle_scheduler::process_contribution_reminders(&state.pool, Utc::now()).await {
+        Ok(metrics) => Json(metrics).into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// POST /api/circles/:id/members — #1198 / #1201: Add a member (permission checked).
+pub async fn add_member(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<AddMemberRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        id,
+        &auth.address,
+        CirclePermission::ManageMembers,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    let is_already = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        id,
+        req.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    if is_already {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "already_member" })),
+        )
+            .into_response();
+    }
+
+    let limit = sqlx::query_scalar!("SELECT member_limit FROM circles WHERE id = $1", id)
+        .fetch_one(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(limit) = limit {
+        let count: i64 = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM circle_members WHERE circle_id = $1",
+            id
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+
+        if count >= limit as i64 {
+            return err("member_limit_reached").into_response();
+        }
+    }
+
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(_) => return internal().into_response(),
+    };
+
+    let result = sqlx::query!(
+        "INSERT INTO circle_members (circle_id, address, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING",
+        id,
+        req.address
+    )
+    .execute(&mut *tx)
+    .await;
+
+    if result.is_err() {
+        let _ = tx.rollback().await;
+        return internal().into_response();
+    }
+
+    let _ = sqlx::query!(
+        r#"
+        INSERT INTO circle_membership_history (circle_id, member_address, action, actor_address, new_role)
+        VALUES ($1, $2, 'joined', $3, 'member')
+        "#,
+        id,
+        req.address,
+        auth.address
+    )
+    .execute(&mut *tx)
+    .await;
+
+    let _ = sqlx::query!(
+        r#"
+        INSERT INTO circle_activities (circle_id, actor_address, activity_type, metadata)
+        VALUES ($1, $2, 'member_joined', json_build_object('target', $3::text))
+        "#,
+        id,
+        auth.address,
+        req.address
+    )
+    .execute(&mut *tx)
+    .await;
+
+    if tx.commit().await.is_err() {
+        return internal().into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "address": req.address, "role": "member" })),
+    )
+        .into_response()
+}
+
+/// DELETE /api/circles/:id/members/:address — #1198 / #1201: Remove a member or leave circle.
 pub async fn remove_member(
     State(state): State<CirclesState>,
     auth: AuthenticatedUser,
     Path((circle_id, address)): Path<(Uuid, String)>,
 ) -> impl IntoResponse {
     let is_self = auth.address == address;
-    if !is_self {
-        let is_admin = sqlx::query_scalar!(
-            "SELECT 1 FROM circles WHERE id = $1 AND admin_address = $2",
+    let res = if is_self {
+        circle_membership::leave_circle(&state.pool, circle_id, &address).await
+    } else {
+        circle_membership::remove_member_authorized(
+            &state.pool,
             circle_id,
-            auth.address
+            &auth.address,
+            &address,
+            None,
         )
-        .fetch_optional(&state.pool)
         .await
-        .unwrap_or(None)
-        .is_some();
-        if !is_admin {
-            return forbidden("not_admin").into_response();
-        }
-    }
+    };
 
-    let pending: i64 = sqlx::query_scalar!(
-        r#"
-        SELECT COUNT(*) FROM circle_payout_requests
-        WHERE circle_id = $1 AND requester_address = $2 AND status = 'pending'
-        "#,
-        circle_id,
-        address
-    )
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
-
-    if pending > 0 {
-        return (
+    match res {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err("not_member") => forbidden("not_member").into_response(),
+        Err("permission_denied") => forbidden("permission_denied").into_response(),
+        Err("member_not_found") => not_found("member_not_found").into_response(),
+        Err("owner_cannot_leave_must_transfer") => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "owner_cannot_leave_must_transfer" })),
+        )
+            .into_response(),
+        Err("cannot_remove_owner") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_remove_owner" })),
+        )
+            .into_response(),
+        Err("cannot_remove_equal_or_higher_role") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "cannot_remove_equal_or_higher_role" })),
+        )
+            .into_response(),
+        Err("pending_obligations") => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "pending_obligations" })),
         )
-            .into_response();
-    }
-
-    let result = sqlx::query!(
-        "DELETE FROM circle_members WHERE circle_id = $1 AND address = $2",
-        circle_id,
-        address
-    )
-    .execute(&state.pool)
-    .await;
-
-    match result {
-        Ok(r) if r.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
-        Ok(_) => not_found("member_not_found").into_response(),
+            .into_response(),
         Err(_) => internal().into_response(),
     }
 }
@@ -1418,5 +2175,17 @@ mod tests {
         let _ = std::mem::size_of::<ContributeRequest>();
         let _ = std::mem::size_of::<PayoutRequest>();
         let _ = std::mem::size_of::<PayoutStatus>();
+        let _ = std::mem::size_of::<SearchCirclesQuery>();
+        let _ = std::mem::size_of::<UpdateRoleRequest>();
+        let _ = std::mem::size_of::<ReviewMembershipRequest>();
+        let _ = std::mem::size_of::<PaginationQuery>();
+    }
+
+    #[test]
+    fn test_escape_like_pattern() {
+        assert_eq!(escape_like_pattern("simple"), "simple");
+        assert_eq!(escape_like_pattern("100% savings"), "100\\% savings");
+        assert_eq!(escape_like_pattern("user_circle"), "user\\_circle");
+        assert_eq!(escape_like_pattern("path\\name"), "path\\\\name");
     }
 }
