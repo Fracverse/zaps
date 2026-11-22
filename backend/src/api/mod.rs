@@ -9,6 +9,7 @@ pub use admin::admin_routes;
 pub mod auth;
 pub mod bank_accounts;
 pub mod circles;
+pub mod circle_comments;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
 pub mod circle_events;
@@ -271,6 +272,15 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route("/:id/leave", post(circles::leave_circle))
         // #1225: authenticated SSE subscription for circle members.
         .route("/:id/events", get(circle_events::circle_event_stream))
+        // #1214 — activity comments (member write, author/moderator moderation).
+        .route(
+            "/:id/activities/:activity_id/comments",
+            get(circle_comments::list_comments).post(circle_comments::create_comment),
+        )
+        .route(
+            "/:id/comments/:comment_id",
+            put(circle_comments::update_comment).delete(circle_comments::delete_comment),
+        )
         .route("/:id/eligibility", get(circles::check_eligibility))
         .route(
             "/:id/membership/history",
