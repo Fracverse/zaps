@@ -476,6 +476,9 @@ async fn main() {
             .await;
     });
 
+    // #1224: Expire old circle idempotency records.
+    api::circle_idempotency::spawn_cleanup(pool.clone());
+
     // #1219: Hourly circle contribution reminder scheduler.
     let reminder_pool = pool.clone();
     worker_handles.push(tokio::spawn(async move {

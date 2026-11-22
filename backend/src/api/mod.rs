@@ -10,6 +10,7 @@ pub mod auth;
 pub mod bank_accounts;
 pub mod circles;
 pub mod circle_rate_limit;
+pub mod circle_idempotency;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
@@ -232,7 +233,7 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
 
 /// Circles API routes (#1193, #1194, #1195, #1196, #1197, #1198, #1201, #1219).
 pub fn circle_routes(pool: sqlx::PgPool) -> Router {
-    let state = circles::CirclesState::new(pool);
+    let state = circles::CirclesState::new(pool.clone());
     // #1223: user-scoped, configurable limits with stricter financial buckets.
     let limiter = circle_rate_limit::CircleRateLimiter::from_env();
     Router::new()
@@ -266,6 +267,12 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route("/:id/members", get(circles::list_members).post(circles::add_member))
         .route("/:id/members/:address", delete(circles::remove_member))
         .route("/:id/goals", get(circles::list_goals).post(circles::create_goal))
+        // #1224: idempotent financial operations (inner layer, so the rate
+        // limiter still sees every attempt).
+        .layer(middleware::from_fn_with_state(
+            pool.clone(),
+            circle_idempotency::circle_idempotency,
+        ))
         .layer(middleware::from_fn_with_state(
             limiter,
             circle_rate_limit::circle_rate_limit,
