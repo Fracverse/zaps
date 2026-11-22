@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 
@@ -229,15 +229,33 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .with_state(state)
 }
 
-/// Circles API routes (#1193, #1194, #1195, #1196).
+/// Circles API routes (#1193, #1194, #1195, #1196, #1197, #1198, #1201, #1219).
 pub fn circle_routes(pool: sqlx::PgPool) -> Router {
     let state = circles::CirclesState::new(pool);
     Router::new()
         .route("/", post(circles::create_circle).get(circles::list_circles))
-        // #1196: Discovery endpoint must be registered before /:id to avoid
-        // "discover" being parsed as a UUID path segment.
+        // Static endpoints registered before /:id to prevent UUID parse collisions
         .route("/discover", get(circles::discover_circles))
+        .route("/search", get(circles::search_circles))
         .route("/:id", get(circles::get_circle))
+        .route("/:id/join", post(circles::join_circle))
+        .route("/:id/leave", post(circles::leave_circle))
+        .route("/:id/eligibility", get(circles::check_eligibility))
+        .route("/:id/membership/history", get(circles::get_membership_history))
+        .route(
+            "/:id/members/requests/:req_id/review",
+            post(circles::review_membership_request),
+        )
+        .route("/:id/roles", get(circles::list_roles))
+        .route("/:id/members/:address/role", put(circles::update_member_role))
+        .route(
+            "/:id/reminders/preferences",
+            get(circles::get_reminder_preferences).put(circles::update_reminder_preferences),
+        )
+        .route(
+            "/:id/reminders/trigger",
+            post(circles::trigger_contribution_reminders),
+        )
         .route("/:id/contribute", post(circles::contribute))
         .route("/:id/payout", post(circles::request_payout))
         .route("/:id/payout/:req_id", get(circles::get_payout_status))

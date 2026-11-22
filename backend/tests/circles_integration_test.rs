@@ -24,11 +24,27 @@ use zaps_backend::api::circles::{self, CirclesState};
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn circles_router(pool: sqlx::PgPool) -> Router {
-    use axum::routing::{delete, get, post};
+    use axum::routing::{delete, get, post, put};
     let state = CirclesState::new(pool);
     Router::new()
         .route("/circles", post(circles::create_circle).get(circles::list_circles))
+        .route("/circles/discover", get(circles::discover_circles))
+        .route("/circles/search", get(circles::search_circles))
         .route("/circles/:id", get(circles::get_circle))
+        .route("/circles/:id/join", post(circles::join_circle))
+        .route("/circles/:id/leave", post(circles::leave_circle))
+        .route("/circles/:id/eligibility", get(circles::check_eligibility))
+        .route("/circles/:id/membership/history", get(circles::get_membership_history))
+        .route("/circles/:id/roles", get(circles::list_roles))
+        .route("/circles/:id/members/:address/role", put(circles::update_member_role))
+        .route(
+            "/circles/:id/reminders/preferences",
+            get(circles::get_reminder_preferences).put(circles::update_reminder_preferences),
+        )
+        .route(
+            "/circles/:id/reminders/trigger",
+            post(circles::trigger_contribution_reminders),
+        )
         .route("/circles/:id/contribute", post(circles::contribute))
         .route("/circles/:id/payout", post(circles::request_payout))
         .route("/circles/:id/payout/:req_id", get(circles::get_payout_status))
@@ -518,4 +534,410 @@ async fn create_goal_requires_admin(pool: sqlx::PgPool) {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn search_circles_partial_match_and_privacy(pool: sqlx::PgPool) {
+    let app = circles_router(pool);
+    let token = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    let admin_a = "GADMINA11111111111111111111111111111111111111111111111111";
+    let user_b = "GUSERB111111111111111111111111111111111111111111111111111";
+
+    // 1. Create public circle: "Lagos Traders Club"
+    let _ = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            "/circles",
+            json!({
+                "name": "Lagos Traders Club",
+                "description": "Weekly savings for marketplace vendors",
+                "category": "trading",
+                "visibility": "public",
+                "token": token,
+                "threshold": 1,
+                "approvers": []
+            }),
+            admin_a,
+        ))
+        .await
+        .unwrap();
+
+    // 2. Create private circle: "Secret Wealth Group"
+    let _ = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            "/circles",
+            json!({
+                "name": "Secret Wealth Group",
+                "description": "Private syndicate",
+                "category": "wealth",
+                "visibility": "private",
+                "token": token,
+                "threshold": 1,
+                "approvers": []
+            }),
+            admin_a,
+        ))
+        .await
+        .unwrap();
+
+    // 3. User B searches for partial match "traders" -> should find "Lagos Traders Club"
+    let resp = app
+        .clone()
+        .oneshot(authed(
+            Method::GET,
+            "/circles/search?q=traders",
+            json!(null),
+            user_b,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["total"].as_i64().unwrap(), 1);
+    assert_eq!(body["circles"][0]["name"].as_str().unwrap(), "Lagos Traders Club");
+
+    // 4. User B searches for "secret" -> non-member should see 0 results (privacy enforced)
+    let resp = app
+        .clone()
+        .oneshot(authed(
+            Method::GET,
+            "/circles/search?q=secret",
+            json!(null),
+            user_b,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["total"].as_i64().unwrap(), 0);
+
+    // 5. Admin A searches for "secret" -> member sees 1 result
+    let resp = app
+        .oneshot(authed(
+            Method::GET,
+            "/circles/search?q=secret",
+            json!(null),
+            admin_a,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["total"].as_i64().unwrap(), 1);
+    assert_eq!(body["circles"][0]["name"].as_str().unwrap(), "Secret Wealth Group");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn search_circles_empty_and_pagination(pool: sqlx::PgPool) {
+    let app = circles_router(pool);
+    let user = "GUSER1111111111111111111111111111111111111111111111111111";
+
+    let resp = app
+        .oneshot(authed(
+            Method::GET,
+            "/circles/search?q=nonexistentpatternxyz123",
+            json!(null),
+            user,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = json_body(resp).await;
+    assert_eq!(body["total"].as_i64().unwrap(), 0);
+    assert!(body["circles"].as_array().unwrap().is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn membership_service_join_limits_and_duplicates(pool: sqlx::PgPool) {
+    let app = circles_router(pool.clone());
+    let token = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    let owner = "GOWNER11111111111111111111111111111111111111111111111111";
+    let user1 = "GUSER111111111111111111111111111111111111111111111111111";
+    let user2 = "GUSER222222222222222222222222222222222222222222222222222";
+
+    // Create circle with member_limit = 2 (owner + 1 other member)
+    let create_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            "/circles",
+            json!({
+                "name": "Limited Circle",
+                "visibility": "public",
+                "token": token,
+                "threshold": 1,
+                "approvers": []
+            }),
+            owner,
+        ))
+        .await
+        .unwrap();
+    let body = json_body(create_resp).await;
+    let circle_id = body["id"].as_str().unwrap().to_string();
+
+    // Set member_limit to 2 directly on the circle
+    let _ = sqlx::query!(
+        "UPDATE circles SET member_limit = 2 WHERE id = $1::uuid",
+        Uuid::parse_str(&circle_id).unwrap()
+    )
+    .execute(&pool)
+    .await;
+
+    // Check eligibility for user1
+    let elig_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::GET,
+            &format!("/circles/{circle_id}/eligibility"),
+            json!(null),
+            user1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(elig_resp.status(), StatusCode::OK);
+    let elig_body = json_body(elig_resp).await;
+    assert_eq!(elig_body["eligible"].as_bool().unwrap(), true);
+
+    // User 1 joins -> 200 OK
+    let join_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/join"),
+            json!(null),
+            user1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(join_resp.status(), StatusCode::OK);
+
+    // User 1 attempts to join again -> 409 Conflict (cannot join twice)
+    let dup_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/join"),
+            json!(null),
+            user1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(dup_resp.status(), StatusCode::CONFLICT);
+
+    // User 2 attempts to join -> 400 Bad Request (member limit reached)
+    let limit_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/join"),
+            json!(null),
+            user2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(limit_resp.status(), StatusCode::BAD_REQUEST);
+
+    // User 1 leaves circle -> 200 OK
+    let leave_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/leave"),
+            json!(null),
+            user1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(leave_resp.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn roles_and_permissions_rbac_enforcement(pool: sqlx::PgPool) {
+    let app = circles_router(pool);
+    let token = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    let owner = "GOWNER11111111111111111111111111111111111111111111111111";
+    let member_a = "GMEMBERA111111111111111111111111111111111111111111111111";
+    let member_b = "GMEMBERB111111111111111111111111111111111111111111111111";
+
+    let circle_id = json_body(
+        app.clone()
+            .oneshot(authed(
+                Method::POST,
+                "/circles",
+                json!({ "name": "RBAC Test", "token": token, "threshold": 1, "approvers": [] }),
+                owner,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Owner adds member_a and member_b
+    let _ = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/members"),
+            json!({ "address": member_a }),
+            owner,
+        ))
+        .await
+        .unwrap();
+
+    let _ = app
+        .clone()
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/members"),
+            json!({ "address": member_b }),
+            owner,
+        ))
+        .await
+        .unwrap();
+
+    // 1. Owner promotes member_a to admin -> 200 OK
+    let promote_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::PUT,
+            &format!("/circles/{circle_id}/members/{member_a}/role"),
+            json!({ "role": "admin" }),
+            owner,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(promote_resp.status(), StatusCode::OK);
+
+    // 2. Member tries to modify their own role -> 403 Forbidden (cannot self-elevate)
+    let self_elevate = app
+        .clone()
+        .oneshot(authed(
+            Method::PUT,
+            &format!("/circles/{circle_id}/members/{member_b}/role"),
+            json!({ "role": "admin" }),
+            member_b,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(self_elevate.status(), StatusCode::FORBIDDEN);
+
+    // 3. Admin tries to make member_b an Owner -> 403 Forbidden (only owner can transfer ownership)
+    let admin_make_owner = app
+        .clone()
+        .oneshot(authed(
+            Method::PUT,
+            &format!("/circles/{circle_id}/members/{member_b}/role"),
+            json!({ "role": "owner" }),
+            member_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(admin_make_owner.status(), StatusCode::FORBIDDEN);
+
+    // 4. Admin appoints member_b to moderator -> 200 OK
+    let admin_appoint_mod = app
+        .clone()
+        .oneshot(authed(
+            Method::PUT,
+            &format!("/circles/{circle_id}/members/{member_b}/role"),
+            json!({ "role": "moderator" }),
+            member_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(admin_appoint_mod.status(), StatusCode::OK);
+
+    // 5. Verify member list returns roles
+    let roles_resp = app
+        .oneshot(authed(
+            Method::GET,
+            &format!("/circles/{circle_id}/roles"),
+            json!(null),
+            member_a,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(roles_resp.status(), StatusCode::OK);
+    let roles_body = json_body(roles_resp).await;
+    assert_eq!(roles_body["roles"].as_array().unwrap().len(), 3);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reminder_preferences_and_scheduler_lifecycle(pool: sqlx::PgPool) {
+    let app = circles_router(pool);
+    let token = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+    let owner = "GOWNER11111111111111111111111111111111111111111111111111";
+
+    let circle_id = json_body(
+        app.clone()
+            .oneshot(authed(
+                Method::POST,
+                "/circles",
+                json!({ "name": "Reminder Test", "token": token, "threshold": 1, "approvers": [] }),
+                owner,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 1. Get default reminder preferences
+    let prefs_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::GET,
+            &format!("/circles/{circle_id}/reminders/preferences"),
+            json!(null),
+            owner,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(prefs_resp.status(), StatusCode::OK);
+    let prefs_body = json_body(prefs_resp).await;
+    assert_eq!(prefs_body["enabled"].as_bool().unwrap(), true);
+    assert_eq!(prefs_body["lead_time_hours"].as_i64().unwrap(), 24);
+
+    // 2. Update preferences: 48h lead time
+    let update_resp = app
+        .clone()
+        .oneshot(authed(
+            Method::PUT,
+            &format!("/circles/{circle_id}/reminders/preferences"),
+            json!({
+                "enabled": true,
+                "lead_time_hours": 48,
+                "channels": ["in_app", "push"]
+            }),
+            owner,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(update_resp.status(), StatusCode::OK);
+    let updated_body = json_body(update_resp).await;
+    assert_eq!(updated_body["lead_time_hours"].as_i64().unwrap(), 48);
+
+    // 3. Trigger reminder check
+    let trigger_resp = app
+        .oneshot(authed(
+            Method::POST,
+            &format!("/circles/{circle_id}/reminders/trigger"),
+            json!(null),
+            owner,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(trigger_resp.status(), StatusCode::OK);
 }
