@@ -350,6 +350,22 @@ async fn main() {
                 )),
             )
             .nest("/api/payouts", api::payout_routes(bridge_state.clone()))
+            // #1218 — authenticated device token registration + preferences.
+            .nest(
+                "/api/notifications",
+                Router::new()
+                    .route(
+                        "/device-tokens",
+                        post(api::push_notifications::register_device)
+                            .delete(api::push_notifications::unregister_device),
+                    )
+                    .route(
+                        "/preferences",
+                        get(api::push_notifications::get_preferences)
+                            .put(api::push_notifications::update_preferences),
+                    )
+                    .with_state(api::push_notifications::PushState::new(pool.clone())),
+            )
             .nest("/api/circles", api::circle_routes(pool.clone())),
         pool.clone(),
         auth_cache.clone(),

@@ -9,6 +9,8 @@ pub use admin::admin_routes;
 pub mod auth;
 pub mod bank_accounts;
 pub mod circles;
+pub mod circle_comments;
+pub mod circle_announcements;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
 pub mod circle_events;
@@ -18,6 +20,7 @@ pub mod bridge;
 pub mod circles;
 pub mod feed;
 pub mod payouts;
+pub mod push_notifications;
 pub mod privy_jwks;
 pub mod social;
 pub mod transactions;
@@ -271,6 +274,15 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route("/:id/leave", post(circles::leave_circle))
         // #1225: authenticated SSE subscription for circle members.
         .route("/:id/events", get(circle_events::circle_event_stream))
+        // #1214 — activity comments (member write, author/moderator moderation).
+        .route(
+            "/:id/activities/:activity_id/comments",
+            get(circle_comments::list_comments).post(circle_comments::create_comment),
+        )
+        .route(
+            "/:id/comments/:comment_id",
+            put(circle_comments::update_comment).delete(circle_comments::delete_comment),
+        )
         .route("/:id/eligibility", get(circles::check_eligibility))
         .route(
             "/:id/membership/history",
@@ -281,6 +293,18 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
             post(circles::review_membership_request),
         )
         .route("/:id/roles", get(circles::list_roles))
+        // #1216 — circle announcements (moderator publish, member history).
+        .route(
+            "/:id/announcements",
+            get(circle_announcements::list_announcements)
+                .post(circle_announcements::create_announcement),
+        )
+        .route(
+            "/:id/announcements/:announcement_id",
+            get(circle_announcements::get_announcement)
+                .put(circle_announcements::update_announcement)
+                .delete(circle_announcements::delete_announcement),
+        )
         // #1222 — permission-controlled, append-only audit trail
         .route("/:id/audit", get(circles::list_audit_log))
         .route("/:id/audit/verify", get(circles::verify_audit_log))
