@@ -271,9 +271,7 @@ async fn main() {
                 Some(lock)
             }
             Err(e) => {
-                tracing::error!(
-                    "Failed to initialize BatchLock, continuing without it: {e}"
-                );
+                tracing::error!("Failed to initialize BatchLock, continuing without it: {e}");
                 None
             }
         },
@@ -783,7 +781,12 @@ async fn probe_redis(redis_url: Option<&str>) -> RedisHealth {
 #[cfg(test)]
 mod health_tests {
     use super::liveness_probe;
-    use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
     use tower::ServiceExt;
 
     fn liveness_router() -> Router {
@@ -842,7 +845,10 @@ mod health_tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
 
-        assert!(content_type.contains("application/json"), "expected JSON content-type, got {content_type}");
+        assert!(
+            content_type.contains("application/json"),
+            "expected JSON content-type, got {content_type}"
+        );
     }
 }
 

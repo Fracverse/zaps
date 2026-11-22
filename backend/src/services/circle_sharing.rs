@@ -9,11 +9,7 @@ use uuid::Uuid;
 
 /// 244 bits of entropy from two UUIDv4 values (OS-backed RNG).
 pub fn generate_token() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 pub fn hash_token(token: &str) -> String {

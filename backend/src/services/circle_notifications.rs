@@ -366,7 +366,10 @@ mod tests {
     fn all_notification_types_are_unique_and_standardized() {
         let all = CircleNotificationType::all();
         assert_eq!(all.len(), 8);
-        assert_eq!(all.iter().collect::<std::collections::HashSet<_>>().len(), 8);
+        assert_eq!(
+            all.iter().collect::<std::collections::HashSet<_>>().len(),
+            8
+        );
         for (i, name) in all.iter().enumerate() {
             assert_eq!(
                 CircleNotificationType::all()[i],
