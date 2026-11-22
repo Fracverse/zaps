@@ -238,7 +238,7 @@ pub async fn check_eligibility(
 
     let has_invitation = if circle.visibility == "invite_only" {
         sqlx::query_scalar!(
-            "SELECT 1 FROM circle_invitations WHERE circle_id = $1 AND invitee_address = $2 AND status = 'pending'",
+            "SELECT 1 FROM circle_invitations WHERE circle_id = $1 AND invitee_address = $2 AND invite_type = 'direct' AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())",
             circle_id,
             address
         )
@@ -333,7 +333,7 @@ pub async fn join_circle(
         return Err("private_circle_direct_join_disabled");
     } else if circle.visibility == "invite_only" {
         let invite = sqlx::query!(
-            "SELECT id FROM circle_invitations WHERE circle_id = $1 AND invitee_address = $2 AND status = 'pending'",
+            "SELECT id FROM circle_invitations WHERE circle_id = $1 AND invitee_address = $2 AND invite_type = 'direct' AND status = 'pending' AND (expires_at IS NULL OR expires_at > NOW()) FOR UPDATE",
             circle_id,
             address
         )
@@ -344,8 +344,9 @@ pub async fn join_circle(
         match invite {
             Some(inv) => {
                 let _ = sqlx::query!(
-                    "UPDATE circle_invitations SET status = 'accepted' WHERE id = $1",
-                    inv.id
+                    "UPDATE circle_invitations SET status = 'accepted', responded_by = $2, responded_at = NOW(), updated_at = NOW() WHERE id = $1",
+                    inv.id,
+                    address
                 )
                 .execute(&mut *tx)
                 .await;
