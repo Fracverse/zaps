@@ -39,6 +39,19 @@ pub enum Error {
     ContributionRuleViolation = 27,
     InvalidConfiguration = 28,
     MembershipLimitReached = 29,
+    // Emergency pause errors (#1250)
+    EmergencyPaused = 30,
+    EmergencyAdminRequired = 31,
+    // Recovery mechanism errors (#1251)
+    RecoveryThresholdNotMet = 32,
+    RecoveryNotAuthorized = 33,
+    UnauthorizedRecoveryAttempt = 34,
+    RecoveryInProgress = 35,
+    InvalidRecoveryTarget = 36,
+    // Rule versioning errors (#1252)
+    InvalidRuleVersion = 37,
+    RuleVersionMismatch = 38,
+    UnauthorizedRuleChange = 39,
 }
 
 #[contracttype]
@@ -65,6 +78,18 @@ pub struct Circle {
     pub next_request: u32,
     pub total_contributed: i128,
     pub total_paid: i128,
+    /// Emergency pause state (#1250)
+    pub paused: bool,
+    /// Emergency admin address (separate from regular admin)
+    pub emergency_admin: Address,
+    /// Recovery threshold - number of backup admins required for recovery (#1251)
+    pub recovery_threshold: u32,
+    /// Backup admin addresses for recovery
+    pub backup_admins: Vec<Address>,
+    /// Flag indicating if a recovery is in progress
+    pub recovery_in_progress: bool,
+    /// Current contribution rules version (#1252)
+    pub rules_version: u32,
 }
 
 #[contracttype]
@@ -76,6 +101,17 @@ pub struct ContributionRules {
     pub min_amount: i128,
     /// Maximum amount per contribution; 0 disables the maximum.
     pub max_amount: i128,
+}
+
+/// Versioned contribution rules for audit trail (#1252)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionedContributionRules {
+    pub version: u32,
+    pub rules: ContributionRules,
+    pub created_at: u64,
+    pub created_by: Address,
+    pub circle_id: u32,
 }
 
 #[contracttype]
@@ -104,6 +140,8 @@ pub struct Payout {
     pub threshold: u32,
     pub approvals: Vec<Address>,
     pub executed: bool,
+    /// Rules version in force when request was made (#1252)
+    pub rules_version: u32,
 }
 
 #[contracttype]
@@ -214,6 +252,29 @@ enum Key {
     Record(u32),
     CircleRecordCount(u32),
     CircleRecordAt(u32, u32),
+    // Emergency pause keys (#1250)
+    GlobalPause,
+    CirclePause(u32),
+    // Recovery mechanism keys (#1251)
+    RecoveryApproval(u32, Address),
+    RecoveryAttemptCount(u32),
+    // Rule version keys (#1252)
+    RulesVersion(u32),
+    RulesHistory(u32, u32),
+    RulesVersionCount(u32),
+}
+
+// Helper to check if circle is paused (#1250)
+fn check_not_paused(env: &Env, circle_id: u32) -> Result<(), Error> {
+    let paused: bool = env
+        .storage()
+        .persistent()
+        .get(&Key::CirclePause(circle_id))
+        .unwrap_or(false);
+    if paused {
+        return Err(Error::EmergencyPaused);
+    }
+    Ok(())
 }
 
 #[contract]
@@ -519,7 +580,29 @@ impl CircleContract {
             next_request: 0,
             total_contributed: 0,
             total_paid: 0,
+            paused: false,
+            emergency_admin: admin.clone(),
+            recovery_threshold: 1,
+            backup_admins: Vec::new(&env),
+            recovery_in_progress: false,
+            rules_version: 1,
         };
+
+        // Initialize rule version history (#1252)
+        env.storage().persistent().set(&Key::RulesVersionCount(id), &1u32);
+        let initial_rules = VersionedContributionRules {
+            version: 1,
+            rules: ContributionRules {
+                fixed_amount: 0,
+                min_amount: 0,
+                max_amount: 0,
+            },
+            created_at: env.ledger().timestamp(),
+            created_by: admin.clone(),
+            circle_id: id,
+        };
+        env.storage().persistent().set(&Key::RulesHistory(id, 1), &initial_rules);
+        env.storage().persistent().set(&Key::RulesVersion(id), &1u32);
         save(&env, id, &c);
         env.storage().persistent().set(&Key::Member(id, admin.clone()), &true);
         env.storage().persistent().set(&Key::MaxMembers(id), &0u32);
@@ -557,6 +640,8 @@ impl CircleContract {
 
     pub fn contribute(env: Env, id: u32, member: Address, amount: i128) -> Result<(), Error> {
         member.require_auth();
+        // Emergency pause check - read-only queries remain available (#1250)
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
@@ -597,6 +682,8 @@ impl CircleContract {
     /// Contributes funds and returns the unique contribution record identifier.
     pub fn contribute_with_record(env: Env, id: u32, member: Address, amount: i128) -> Result<u32, Error> {
         member.require_auth();
+        // Emergency pause check
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
@@ -650,8 +737,245 @@ impl CircleContract {
         Ok(())
     }
 
-    /// Admin-only. Configures per-contribution fixed, minimum, and maximum amounts.
-    /// A value of 0 disables that individual rule.
+    // ── Emergency Pause Mechanism (#1250) ────────────────────────────────
+
+    /// Emergency-only pause. Stops contributions, withdrawals, and governance changes.
+    /// Only the designated emergency admin can pause.
+    pub fn emergency_pause(env: Env, circle_id: u32, emergency_admin: Address) -> Result<(), Error> {
+        emergency_admin.require_auth();
+        let c = load(&env, circle_id)?;
+        if emergency_admin != c.emergency_admin && emergency_admin != c.admin {
+            return Err(Error::EmergencyAdminRequired);
+        }
+
+        let mut circle = c;
+        circle.paused = true;
+        save(&env, circle_id, &circle);
+
+        env.storage().persistent().set(&Key::CirclePause(circle_id), &true);
+        env.events().publish((symbol_short!("emrg_pause"), circle_id), emergency_admin);
+        Ok(())
+    }
+
+    /// Emergency-only unpause. Only emergency admin can unpause.
+    pub fn emergency_unpause(env: Env, circle_id: u32, emergency_admin: Address) -> Result<(), Error> {
+        emergency_admin.require_auth();
+        let c = load(&env, circle_id)?;
+        if emergency_admin != c.emergency_admin && emergency_admin != c.admin {
+            return Err(Error::EmergencyAdminRequired);
+        }
+
+        let mut circle = c;
+        circle.paused = false;
+        save(&env, circle_id, &circle);
+
+        env.storage().persistent().set(&Key::CirclePause(circle_id), &false);
+        env.events().publish((symbol_short!("emrg_unp"), circle_id), emergency_admin);
+        Ok(())
+    }
+
+    /// Queries whether a circle is currently paused.
+    pub fn is_paused(env: Env, circle_id: u32) -> Result<bool, Error> {
+        load(&env, circle_id)?;
+        Ok(env.storage().persistent().get(&Key::CirclePause(circle_id)).unwrap_or(false))
+    }
+
+    /// Sets the designated emergency admin (only current emergency admin or regular admin can set).
+    pub fn set_emergency_admin(env: Env, circle_id: u32, admin: Address, new_emergency_admin: Address) -> Result<(), Error> {
+        admin.require_auth();
+        let mut c = load(&env, circle_id)?;
+        if admin != c.admin && admin != c.emergency_admin {
+            return Err(Error::Unauthorized);
+        }
+        c.emergency_admin = new_emergency_admin;
+        save(&env, circle_id, &c);
+        env.events().publish((symbol_short!("emrg_adm"), circle_id), new_emergency_admin);
+        Ok(())
+    }
+
+    /// Queries the emergency admin address.
+    pub fn get_emergency_admin(env: Env, circle_id: u32) -> Result<Address, Error> {
+        let c = load(&env, circle_id)?;
+        Ok(c.emergency_admin)
+    }
+
+    // ── Recovery Mechanism (#1251) ────────────────────────────────────────
+
+    /// Sets backup admins and recovery threshold (only regular admin can configure).
+    pub fn configure_recovery(
+        env: Env,
+        circle_id: u32,
+        admin: Address,
+        backup_admins: Vec<Address>,
+        recovery_threshold: u32,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        let mut c = load(&env, circle_id)?;
+        if admin != c.admin {
+            return Err(Error::Unauthorized);
+        }
+        if recovery_threshold > backup_admins.len() {
+            return Err(Error::RecoveryThresholdNotMet);
+        }
+
+        c.backup_admins = backup_admins;
+        c.recovery_threshold = recovery_threshold;
+        save(&env, circle_id, &c);
+
+        env.events().publish((symbol_short!("rcvry_cfg"), circle_id), recovery_threshold);
+        Ok(())
+    }
+
+    /// Initiates recovery by setting recovery_in_progress flag.
+    /// Requires multi-signature: backup admins must approve.
+    pub fn initiate_recovery(env: Env, circle_id: u32, initiator: Address) -> Result<(), Error> {
+        initiator.require_auth();
+        let c = load(&env, circle_id)?;
+
+        if !c.backup_admins.contains(&initiator) {
+            return Err(Error::RecoveryNotAuthorized);
+        }
+
+        let mut circle = c;
+        if circle.recovery_in_progress {
+            return Err(Error::RecoveryInProgress);
+        }
+        circle.recovery_in_progress = true;
+        save(&env, circle_id, &circle);
+
+        // Record this backup admin's approval
+        env.storage().persistent().set(&Key::RecoveryApproval(circle_id, initiator.clone()), &true);
+
+        env.events().publish((symbol_short!("rcvry_init"), circle_id), initiator);
+        Ok(())
+    }
+
+    /// Approves recovery by another backup admin (accumulates approvals).
+    pub fn approve_recovery(env: Env, circle_id: u32, approver: Address) -> Result<bool, Error> {
+        approver.require_auth();
+        let c = load(&env, circle_id)?;
+
+        if !c.backup_admins.contains(&approver) {
+            return Err(Error::RecoveryNotAuthorized);
+        }
+
+        // Check if already approved by this approver
+        let already_approved: bool = env
+            .storage()
+            .persistent()
+            .get(&Key::RecoveryApproval(circle_id, approver.clone()))
+            .unwrap_or(false);
+
+        if already_approved {
+            return Ok(false);
+        }
+
+        env.storage().persistent().set(&Key::RecoveryApproval(circle_id, approver.clone()), &true);
+
+        // Count total approvals
+        let mut approval_count: u32 = 0;
+        for backup in c.backup_admins.iter() {
+            let approved: bool = env
+                .storage()
+                .persistent()
+                .get(&Key::RecoveryApproval(circle_id, backup))
+                .unwrap_or(false);
+            if approved {
+                approval_count += 1;
+            }
+        }
+
+        env.events().publish((symbol_short!("rcvry_appr"), circle_id), approval_count);
+
+        // Check if threshold met
+        Ok(approval_count >= c.recovery_threshold)
+    }
+
+    /// Executes recovery action (transfers admin rights to specified new admin).
+    /// Requires recovery threshold to be met.
+    pub fn execute_recovery(
+        env: Env,
+        circle_id: u32,
+        approver: Address,
+        new_admin: Address,
+    ) -> Result<(), Error> {
+        approver.require_auth();
+        let mut c = load(&env, circle_id)?;
+
+        if !c.backup_admins.contains(&approver) && approver != c.admin {
+            return Err(Error::UnauthorizedRecoveryAttempt);
+        }
+
+        if !c.recovery_in_progress {
+            return Err(Error::RecoveryNotAuthorized);
+        }
+
+        // Count approvals
+        let mut approval_count: u32 = 0;
+        for backup in c.backup_admins.iter() {
+            let approved: bool = env
+                .storage()
+                .persistent()
+                .get(&Key::RecoveryApproval(circle_id, backup))
+                .unwrap_or(false);
+            if approved {
+                approval_count += 1;
+            }
+        }
+
+        if approval_count < c.recovery_threshold {
+            return Err(Error::RecoveryThresholdNotMet);
+        }
+
+        // Execute recovery: transfer admin rights
+        let old_admin = c.admin;
+        c.admin = new_admin;
+        c.recovery_in_progress = false;
+        save(&env, circle_id, &c);
+
+        // Clear approvals
+        for backup in c.backup_admins.iter() {
+            env.storage().persistent().remove(&Key::RecoveryApproval(circle_id, backup));
+        }
+
+        env.events().publish((symbol_short!("rcvry_exec"), circle_id), (old_admin, new_admin));
+        Ok(())
+    }
+
+    /// Cancels an in-progress recovery (only current admin can cancel).
+    pub fn cancel_recovery(env: Env, circle_id: u32, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
+        let mut c = load(&env, circle_id)?;
+        if admin != c.admin {
+            return Err(Error::Unauthorized);
+        }
+
+        if !c.recovery_in_progress {
+            return Ok(());
+        }
+
+        c.recovery_in_progress = false;
+        save(&env, circle_id, &c);
+
+        // Clear approvals
+        for backup in c.backup_admins.iter() {
+            env.storage().persistent().remove(&Key::RecoveryApproval(circle_id, backup));
+        }
+
+        env.events().publish((symbol_short!("rcvry_cnl"), circle_id), admin);
+        Ok(())
+    }
+
+    /// Queries recovery configuration.
+    pub fn get_recovery_config(env: Env, circle_id: u32) -> Result<(u32, Vec<Address>, bool), Error> {
+        let c = load(&env, circle_id)?;
+        Ok((c.recovery_threshold, c.backup_admins.clone(), c.recovery_in_progress))
+    }
+
+    // ── Rule Versioning (#1252) ───────────────────────────────────────────
+
+    /// Updates contribution rules and creates a new version.
+    /// Existing requests retain their agreed rule context.
     pub fn set_contribution_rules(
         env: Env,
         id: u32,
@@ -659,7 +983,7 @@ impl CircleContract {
         fixed_amount: i128,
         min_amount: i128,
         max_amount: i128,
-    ) -> Result<(), Error> {
+    ) -> Result<u32, Error> {
         admin.require_auth();
         let circle = load(&env, id)?;
         if admin != circle.admin {
@@ -667,22 +991,92 @@ impl CircleContract {
         }
         validate_contribution_rules(fixed_amount, min_amount, max_amount)?;
 
-        let rules = ContributionRules {
-            fixed_amount,
-            min_amount,
-            max_amount,
+        // Get current version and increment
+        let current_version: u32 = env.storage().persistent().get(&Key::RulesVersion(id)).unwrap_or(1);
+        let new_version = current_version.checked_add(1).ok_or(Error::Overflow)?;
+
+        // Store new versioned rules
+        let new_rules = VersionedContributionRules {
+            version: new_version,
+            rules: ContributionRules {
+                fixed_amount,
+                min_amount,
+                max_amount,
+            },
+            created_at: env.ledger().timestamp(),
+            created_by: admin.clone(),
+            circle_id: id,
         };
+        env.storage().persistent().set(&Key::RulesHistory(id, new_version), &new_rules);
+        env.storage().persistent().set(&Key::RulesVersion(id), &new_version);
+
+        // Update version count
+        let count: u32 = env.storage().persistent().get(&Key::RulesVersionCount(id)).unwrap_or(1);
+        env.storage().persistent().set(&Key::RulesVersionCount(id), &count.saturating_add(1));
+
+        // Also update current rules for efficient lookup
         env.storage()
             .persistent()
-            .set(&Key::ContributionRules(id), &rules);
-        env.events().publish((symbol_short!("rules_set"), id), rules);
-        Ok(())
+            .set(&Key::ContributionRules(id), &ContributionRules {
+                fixed_amount,
+                min_amount,
+                max_amount,
+            });
+
+        env.events().publish((symbol_short!("rules_v"),), new_version);
+        Ok(new_version)
     }
 
     /// Queries the circle's contribution rules; unset rules are returned as zeros.
     pub fn get_contribution_rules(env: Env, id: u32) -> Result<ContributionRules, Error> {
         load(&env, id)?;
         Ok(load_contribution_rules(&env, id))
+    }
+
+    /// Queries the current rule version number.
+    pub fn get_rules_version(env: Env, id: u32) -> Result<u32, Error> {
+        load(&env, id)?;
+        Ok(env.storage().persistent().get(&Key::RulesVersion(id)).unwrap_or(1))
+    }
+
+    /// Queries historical rules by version number.
+    pub fn get_rules_at_version(env: Env, id: u32, version: u32) -> Result<VersionedContributionRules, Error> {
+        load(&env, id)?;
+        let max_version: u32 = env.storage().persistent().get(&Key::RulesVersionCount(id)).unwrap_or(1);
+        if version == 0 || version > max_version {
+            return Err(Error::InvalidRuleVersion);
+        }
+        env.storage()
+            .persistent()
+            .get(&Key::RulesHistory(id, version))
+            .ok_or(Error::NotFound)
+    }
+
+    /// Queries all historical rule versions for a circle.
+    pub fn get_rules_history(
+        env: Env,
+        id: u32,
+        start_version: u32,
+        limit: u32,
+    ) -> Result<Vec<VersionedContributionRules>, Error> {
+        load(&env, id)?;
+        let count: u32 = env.storage().persistent().get(&Key::RulesVersionCount(id)).unwrap_or(1);
+
+        let mut versions = Vec::new(&env);
+        if start_version == 0 || start_version > count || limit == 0 {
+            return Ok(versions);
+        }
+
+        let safe_limit = if limit > 20 { 20 } else { limit };
+        let end = (start_version.saturating_add(safe_limit)).min(count);
+
+        for v in start_version..=end {
+            if let Some(rules) = env.storage().persistent().get::<_, VersionedContributionRules>(&Key::RulesHistory(id, v)) {
+                versions.push_back(rules);
+            }
+        }
+
+        Ok(versions)
     }
 
     /// Admin-only. Sets the maximum number of circle members; 0 means unlimited.
@@ -733,6 +1127,8 @@ impl CircleContract {
     /// Admin-only. Sets full governance: threshold and approvers list. Existing requests keep their snapshot threshold.
     pub fn set_governance(env: Env, id: u32, admin: Address, threshold: u32, approvers: Vec<Address>) -> Result<(), Error> {
         admin.require_auth();
+        // Emergency pause check - governance blocked during emergency
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if admin != c.admin {
             return Err(Error::Unauthorized);
@@ -748,6 +1144,8 @@ impl CircleContract {
     /// Admin-only. Configures only the approval threshold.
     pub fn set_approval_threshold(env: Env, id: u32, admin: Address, threshold: u32) -> Result<(), Error> {
         admin.require_auth();
+        // Emergency pause check - governance changes blocked during emergency
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if admin != c.admin {
             return Err(Error::Unauthorized);
@@ -762,6 +1160,8 @@ impl CircleContract {
     /// Admin-only. Adds an approver.
     pub fn add_approver(env: Env, id: u32, admin: Address, approver: Address) -> Result<(), Error> {
         admin.require_auth();
+        // Emergency pause check - governance changes blocked
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if admin != c.admin {
             return Err(Error::Unauthorized);
@@ -777,6 +1177,8 @@ impl CircleContract {
     /// Admin-only. Removes an approver if remaining approvers count satisfies threshold.
     pub fn remove_approver(env: Env, id: u32, admin: Address, approver: Address) -> Result<(), Error> {
         admin.require_auth();
+        // Emergency pause check - governance changes blocked
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if admin != c.admin {
             return Err(Error::Unauthorized);
@@ -798,6 +1200,8 @@ impl CircleContract {
     /// Destination is validated, amount is checked against max payout and available balance.
     pub fn request_payout(env: Env, id: u32, member: Address, to: Address, amount: i128) -> Result<u32, Error> {
         member.require_auth();
+        // Emergency pause check - allows read-only queries (#1250)
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         if !is_member(&env, id, &member) {
             return Err(Error::NotMember);
@@ -825,6 +1229,13 @@ impl CircleContract {
         let ar = get_asset_res(&env, &c.token).checked_add(amount).ok_or(Error::Overflow)?;
         set_asset_res(&env, &c.token, ar);
 
+        // Get current rules version for this request (#1252)
+        let current_rules_version: u32 = env
+            .storage()
+            .persistent()
+            .get(&Key::RulesVersion(id))
+            .unwrap_or(1);
+
         let p = Payout {
             requester: member.clone(),
             to,
@@ -834,6 +1245,7 @@ impl CircleContract {
             threshold: c.threshold,
             approvals: Vec::new(&env),
             executed: false,
+            rules_version: current_rules_version,
         };
         env.storage().persistent().set(&Key::Payout(id, rid), &p);
 
@@ -876,7 +1288,10 @@ impl CircleContract {
 
     /// Executes an approved withdrawal request. Checks authorization threshold,
     /// verifies payout limit and balance, then atomically updates accounting and transfers funds.
+    /// Emergency controls cannot be abused to bypass withdrawal protections (#1250).
     pub fn execute(env: Env, id: u32, rid: u32) -> Result<(), Error> {
+        // Check if circle is paused - withdrawals protected during emergency
+        check_not_paused(&env, id)?;
         let mut c = load(&env, id)?;
         let mut p: Payout = env.storage().persistent().get(&Key::Payout(id, rid)).ok_or(Error::NotFound)?;
         if p.executed {
@@ -983,7 +1398,7 @@ impl CircleContract {
         Self::get_payout(env, id, rid)
     }
 
-    /// Queries the approval progress of a payout request.
+    /// Queries the approval progress of a payout request. Read-only - works even when paused (#1250).
     pub fn get_approval_progress(env: Env, id: u32, rid: u32) -> Result<ApprovalProgress, Error> {
         load(&env, id)?;
         let p: Payout = env.storage().persistent().get(&Key::Payout(id, rid)).ok_or(Error::NotFound)?;
@@ -1108,6 +1523,7 @@ impl CircleContract {
     // ── Savings Goal Contribution Tracking (#1240) ───────────────────────
 
     /// Creates a savings goal within a circle. Must be a circle member.
+    /// Goal creation emits events (#1240).
     pub fn create_goal(
         env: Env,
         circle_id: u32,
@@ -1116,6 +1532,8 @@ impl CircleContract {
         deadline: u64,
     ) -> Result<u32, Error> {
         creator.require_auth();
+        // Emergency pause check
+        check_not_paused(&env, circle_id)?;
         let c = load(&env, circle_id)?;
         if !is_member(&env, circle_id, &creator) {
             return Err(Error::NotMember);
@@ -1161,6 +1579,8 @@ impl CircleContract {
         amount: i128,
     ) -> Result<u32, Error> {
         member.require_auth();
+        // Emergency pause check
+        check_not_paused(&env, circle_id)?;
         let mut c = load(&env, circle_id)?;
         if !is_member(&env, circle_id, &member) {
             return Err(Error::NotMember);
