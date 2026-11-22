@@ -49,7 +49,11 @@ fn operation_for(path: &str) -> Option<&'static str> {
 }
 
 fn error(status: StatusCode, code: &'static str, message: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "error": code, "message": message }))).into_response()
+    (
+        status,
+        Json(serde_json::json!({ "error": code, "message": message })),
+    )
+        .into_response()
 }
 
 /// Periodic removal of expired idempotency records.
@@ -78,11 +82,7 @@ pub fn spawn_cleanup(pool: PgPool) {
 }
 
 /// Idempotency middleware for circle financial operations.
-pub async fn circle_idempotency(
-    State(pool): State<PgPool>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn circle_idempotency(State(pool): State<PgPool>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let operation = match operation_for(&path) {
         Some(op) => op,
@@ -174,7 +174,13 @@ pub async fn circle_idempotency(
                     .status(status)
                     .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(body))
-                    .unwrap_or_else(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "Internal server error"));
+                    .unwrap_or_else(|_| {
+                        error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            "Internal server error",
+                        )
+                    });
             }
             return error(
                 StatusCode::CONFLICT,
@@ -185,7 +191,11 @@ pub async fn circle_idempotency(
         Ok(None) => {}
         Err(e) => {
             tracing::warn!(event = "circle_idempotency_lookup_failed", error = %e, "lookup failed");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "Internal server error");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Internal server error",
+            );
         }
     }
 
@@ -215,7 +225,11 @@ pub async fn circle_idempotency(
         }
         Err(e) => {
             tracing::warn!(event = "circle_idempotency_claim_failed", error = %e, "claim failed");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", "Internal server error");
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Internal server error",
+            );
         }
     }
 
@@ -260,7 +274,10 @@ mod tests {
 
     #[test]
     fn operations_and_keys_are_scoped() {
-        assert_eq!(operation_for("/api/circles/1/contribute"), Some("contribute"));
+        assert_eq!(
+            operation_for("/api/circles/1/contribute"),
+            Some("contribute")
+        );
         assert_eq!(operation_for("/api/circles/1/payout"), Some("payout"));
         assert_eq!(
             operation_for("/api/circles/1/payout/2/approve"),

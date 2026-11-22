@@ -134,12 +134,18 @@ pub async fn circle_rate_limit(
 ) -> Response {
     // The auth middleware runs outside this router and attaches the verified
     // principal; use it as the identity whenever available.
-    let user = req.extensions().get::<AuthenticatedUser>().map(|u| u.address.clone());
+    let user = req
+        .extensions()
+        .get::<AuthenticatedUser>()
+        .map(|u| u.address.clone());
     let path = req.uri().path().to_string();
     let (operation, limit) = limiter.config.for_path(&path);
     let key = match user {
         Some(address) if !address.is_empty() => format!("user:{address}"),
-        _ => client_key(req.headers(), req.extensions().get::<ConnectInfo<SocketAddr>>().cloned()),
+        _ => client_key(
+            req.headers(),
+            req.extensions().get::<ConnectInfo<SocketAddr>>().cloned(),
+        ),
     };
     let bucket = format!("{operation}:{key}");
 
@@ -155,7 +161,12 @@ pub async fn circle_rate_limit(
             (true, 0u64)
         } else {
             let elapsed = now.duration_since(entry.0);
-            let remaining = limiter.config.window.saturating_sub(elapsed).as_secs().max(1);
+            let remaining = limiter
+                .config
+                .window
+                .saturating_sub(elapsed)
+                .as_secs()
+                .max(1);
             (false, remaining)
         }
     };

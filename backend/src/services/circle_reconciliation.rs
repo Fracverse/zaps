@@ -163,11 +163,18 @@ fn classify_rpc_response(value: &Value) -> (String, String) {
         .and_then(Value::as_str)
         .map(str::to_ascii_lowercase);
     match status.as_deref() {
-        Some("success") => ("success".to_string(), "transaction status SUCCESS".to_string()),
-        Some("failed") => ("failed".to_string(), "transaction status FAILED".to_string()),
-        Some("not_found") => {
-            ("not_found".to_string(), "transaction not found on Stellar".to_string())
-        }
+        Some("success") => (
+            "success".to_string(),
+            "transaction status SUCCESS".to_string(),
+        ),
+        Some("failed") => (
+            "failed".to_string(),
+            "transaction status FAILED".to_string(),
+        ),
+        Some("not_found") => (
+            "not_found".to_string(),
+            "transaction not found on Stellar".to_string(),
+        ),
         other => (
             "unknown".to_string(),
             format!("unexpected RPC status: {}", other.unwrap_or("none")),
@@ -196,7 +203,9 @@ async fn alert(config: &ReconciliationConfig, record_type: &str, discrepancy: &s
             .await
         {
             Ok(_) => {}
-            Err(e) => tracing::warn!(event = "circle_reconciliation_alert_failed", error = %e, "alert webhook failed"),
+            Err(e) => {
+                tracing::warn!(event = "circle_reconciliation_alert_failed", error = %e, "alert webhook failed")
+            }
         }
     }
 }
@@ -256,7 +265,10 @@ pub async fn reconcile_once(
 
         if discrepancy != "none" {
             summary.discrepancies += 1;
-            details = format!("{details}; local_state={}, duplicates={duplicates}", record.local_state);
+            details = format!(
+                "{details}; local_state={}, duplicates={duplicates}",
+                record.local_state
+            );
             alert(config, &record.record_type, discrepancy, &details).await;
         }
 
@@ -293,9 +305,18 @@ mod tests {
 
     #[test]
     fn only_explicit_success_is_confirmed() {
-        assert_eq!(classify_rpc_response(&json!({"transaction": {"status": "SUCCESS"}})).0, "success");
-        assert_eq!(classify_rpc_response(&json!({"transaction": {"status": "FAILED"}})).0, "failed");
-        assert_eq!(classify_rpc_response(&json!({"error": "not found"})).0, "unknown");
+        assert_eq!(
+            classify_rpc_response(&json!({"transaction": {"status": "SUCCESS"}})).0,
+            "success"
+        );
+        assert_eq!(
+            classify_rpc_response(&json!({"transaction": {"status": "FAILED"}})).0,
+            "failed"
+        );
+        assert_eq!(
+            classify_rpc_response(&json!({"error": "not found"})).0,
+            "unknown"
+        );
         assert_eq!(classify_rpc_response(&json!({})).0, "unknown");
     }
 }

@@ -11,6 +11,7 @@ pub mod bank_accounts;
 pub mod circles;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
+pub mod circle_events;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
@@ -244,6 +245,8 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route("/:id", get(circles::get_circle))
         .route("/:id/join", post(circles::join_circle))
         .route("/:id/leave", post(circles::leave_circle))
+        // #1225: authenticated SSE subscription for circle members.
+        .route("/:id/events", get(circle_events::circle_event_stream))
         .route("/:id/eligibility", get(circles::check_eligibility))
         .route("/:id/membership/history", get(circles::get_membership_history))
         .route(
