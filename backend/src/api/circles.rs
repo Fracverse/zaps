@@ -2160,6 +2160,135 @@ pub async fn create_goal(
     }
 }
 
+// ── #1220: Circle member search ──────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CircleUserSearchQuery {
+    /// Circle the caller is inviting into; membership is required.
+    pub circle_id: Uuid,
+    /// Username prefix, Stellar address prefix, or approved identifier.
+    pub q: String,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CircleUserSearchResult {
+    pub username: String,
+    pub address: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// GET /api/circles/users/search — find users to invite to a circle.
+///
+/// Only circle members may search. Matches usernames, Stellar addresses and
+/// verified identifiers (stored hashed), respects each user's search privacy
+/// setting, and returns no account secrets or contact details.
+pub async fn search_users_for_circle(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Query(q): Query<CircleUserSearchQuery>,
+) -> impl IntoResponse {
+    let per_page = q.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
+    let page = q.page.unwrap_or(1);
+    if page < 1 {
+        return err("invalid_page").into_response();
+    }
+    let term = q.q.trim();
+    if term.is_empty() || term.chars().count() > 64 {
+        return err("invalid_query").into_response();
+    }
+    let offset = (page - 1) * per_page;
+
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        q.circle_id,
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+    if !is_member {
+        return forbidden("not_member").into_response();
+    }
+
+    // Approved identifiers are looked up by SHA-256 of their normalized
+    // value; the raw value is never stored or logged.
+    use sha2::{Digest, Sha256};
+    let normalized = term.to_lowercase();
+    let identifier_hash = hex::encode(Sha256::digest(normalized.as_bytes()));
+    let pattern = format!("{}%", escape_like_pattern(&normalized));
+    let address_pattern = format!("{}%", escape_like_pattern(term));
+
+    let base = r#"
+        FROM users u
+        WHERE u.circle_search_enabled = TRUE
+          AND u.address <> $4
+          AND (
+                LOWER(u.username) LIKE $1 ESCAPE '\'
+             OR u.address LIKE $2 ESCAPE '\'
+             OR EXISTS (
+                  SELECT 1 FROM user_verified_identifiers vi
+                   WHERE vi.user_id = u.id AND vi.is_verified = TRUE
+                     AND vi.identifier_hash = $3
+             )
+          )
+    "#;
+
+    let total: i64 = match sqlx::query_scalar(&format!("SELECT COUNT(*) {base}"))
+        .bind(&pattern)
+        .bind(&address_pattern)
+        .bind(&identifier_hash)
+        .bind(&auth.address)
+        .fetch_one(&state.pool)
+        .await
+    {
+        Ok(n) => n,
+        Err(_) => return internal().into_response(),
+    };
+
+    let rows = match sqlx::query(&format!(
+        r#"
+        SELECT u.username, u.address, u.display_name, u.avatar_url
+        {base}
+        ORDER BY u.username ASC
+        LIMIT $5 OFFSET $6
+        "#
+    ))
+    .bind(&pattern)
+    .bind(&address_pattern)
+    .bind(&identifier_hash)
+    .bind(&auth.address)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return internal().into_response(),
+    };
+
+    let users: Vec<CircleUserSearchResult> = rows
+        .iter()
+        .map(|r| CircleUserSearchResult {
+            username: r.get("username"),
+            address: r.get("address"),
+            display_name: r.get("display_name"),
+            avatar_url: r.get("avatar_url"),
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "users": users,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+    }))
+    .into_response()
+}
+
 // ── #1217: Circle notifications ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
