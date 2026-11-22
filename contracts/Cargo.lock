@@ -1699,18 +1699,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "zaps-circle"
+name = "zaps-circles"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
-]
-
-[[package]]
-name = "zaps-circle-factory"
-version = "0.1.0"
-dependencies = [
- "soroban-sdk",
- "zaps-circle",
 ]
 
 [[package]]
