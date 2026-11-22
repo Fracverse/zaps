@@ -474,15 +474,16 @@ async fn main() {
             .await;
     });
 
-    // #1217: Retry failed circle notification push deliveries with backoff.
-    let circle_notification_pool = pool.clone();
-    worker_handles.push(tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            ticker.tick().await;
-            services::circle_notifications::retry_due_deliveries(&circle_notification_pool).await;
-        }
-    }));
+    // #1226: Reconcile local circle financial records against Stellar.
+    let reconciliation_pool = pool.clone();
+    services::circle_reconciliation::spawn(
+        reconciliation_pool,
+        config.stellar_rpc_url.clone(),
+        services::circle_reconciliation::ReconciliationConfig::from_env(),
+    );
+
+    // #1224: Expire old circle idempotency records.
+    api::circle_idempotency::spawn_cleanup(pool.clone());
 
     // #1219: Hourly circle contribution reminder scheduler.
     let reminder_pool = pool.clone();

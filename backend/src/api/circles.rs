@@ -113,11 +113,16 @@ const MAX_PER_PAGE: i64 = 100;
 #[derive(Clone)]
 pub struct CirclesState {
     pub pool: PgPool,
+    /// #1225: fan-out point for real-time circle events.
+    pub hub: crate::api::circle_events::CircleEventHub,
 }
 
 impl CirclesState {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            hub: crate::api::circle_events::CircleEventHub::default(),
+        }
     }
 }
 
@@ -1184,6 +1189,14 @@ pub async fn contribute(
         return internal().into_response();
     }
 
+    // #1225: notify authorised subscribers after the DB commit.
+    state.hub.publish(
+        id,
+        "contribution.created",
+        serde_json::json!({ "circle_id": id, "contribution_id": contribution_id, "member": auth.address }),
+        false,
+    );
+
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -1290,6 +1303,14 @@ pub async fn request_payout(
     if tx.commit().await.is_err() {
         return internal().into_response();
     }
+
+    // #1225: payout amounts are sensitive; only privileged members receive it.
+    state.hub.publish(
+        id,
+        "payout.requested",
+        serde_json::json!({ "circle_id": id, "request_id": next_req_id, "amount": amount, "status": "pending" }),
+        true,
+    );
 
     (
         StatusCode::CREATED,
