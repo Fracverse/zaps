@@ -15,8 +15,13 @@
 //! | GET    | /api/circles/:id/members                  | ✓    | List members                          |
 //! | POST   | /api/circles/:id/members                  | ✓    | Add a member (admin only)             |
 //! | DELETE | /api/circles/:id/members/:address         | ✓    | Remove a member / exit                |
-//! | GET    | /api/circles/:id/goals                    | ✓    | List savings goals                    |
-//! | POST   | /api/circles/:id/goals                    | ✓    | Create a savings goal                 |
+//! | GET    | /api/circles/:id/goals                    | ✓    | List goals (`?status=` filter)        |
+//! | POST   | /api/circles/:id/goals                    | ✓    | Create a savings goal (#1204)         |
+//! | GET    | /api/circles/:id/goals/:goal_id           | ✓    | Goal detail with verified progress    |
+//! | PATCH  | /api/circles/:id/goals/:goal_id           | ✓    | Update an open goal                   |
+//! | POST   | /api/circles/:id/goals/:goal_id/complete  | ✓    | Complete a goal that reached target   |
+//! | GET    | /api/circles/:id/settings                 | ✓    | View circle settings (#1202)          |
+//! | PATCH  | /api/circles/:id/settings                 | ✓    | Update circle settings (#1202)        |
 //!
 //! # Request / Response shapes
 //!
@@ -86,10 +91,12 @@
 
 use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::circle_audit;
+use crate::services::circle_goals;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
 use crate::services::circle_payout_execution as payout_execution;
 use crate::services::circle_scheduler::{self, UpdateReminderPreferencesRequest};
+use crate::services::circle_settings::{self, UpdateCircleSettingsRequest};
 use crate::services::circle_sharing;
 use axum::http::HeaderMap;
 use axum::{
@@ -106,8 +113,8 @@ use uuid::Uuid;
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const VALID_VISIBILITIES: &[&str] = &["public", "private", "invite_only"];
-const DEFAULT_PER_PAGE: i64 = 20;
-const MAX_PER_PAGE: i64 = 100;
+pub(crate) const DEFAULT_PER_PAGE: i64 = 20;
+pub(crate) const MAX_PER_PAGE: i64 = 100;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -275,24 +282,6 @@ pub struct MemberEntry {
     pub joined_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateGoalRequest {
-    pub name: String,
-    pub target_amount: String,
-    pub deadline: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GoalEntry {
-    pub id: Uuid,
-    pub name: String,
-    pub target_amount: String,
-    pub current_amount: String,
-    pub deadline: Option<DateTime<Utc>>,
-    pub completed: bool,
-    pub created_at: DateTime<Utc>,
-}
-
 /// #1197 — Query parameters for circle search.
 #[derive(Debug, Deserialize)]
 pub struct SearchCirclesQuery {
@@ -364,7 +353,7 @@ fn internal() -> (StatusCode, Json<serde_json::Value>) {
 
 /// Record an immutable audit entry. A failed audit write is logged loudly but
 /// does not roll back an already-committed business operation.
-async fn audit(
+pub(crate) async fn audit(
     pool: &PgPool,
     circle_id: Uuid,
     actor: &str,
@@ -2207,109 +2196,194 @@ pub async fn remove_member(
     }
 }
 
-/// GET /api/circles/:id/goals
+// ── #1204: Savings goals ──────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct GoalListQuery {
+    /// Optional derived-status filter: active | reached | completed | expired.
+    pub status: Option<String>,
+}
+
+/// GET /api/circles/:id/goals — members only.
 pub async fn list_goals(
     State(state): State<CirclesState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
+    Query(q): Query<GoalListQuery>,
 ) -> impl IntoResponse {
-    let is_member = sqlx::query_scalar!(
-        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
-        id,
-        auth.address
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None)
-    .is_some();
-
-    if !is_member {
-        return forbidden("not_member").into_response();
-    }
-
-    let rows = sqlx::query!(
-        r#"
-        SELECT id, name, target_amount, current_amount, deadline, completed, created_at
-        FROM circle_goals WHERE circle_id = $1 ORDER BY created_at
-        "#,
-        id
-    )
-    .fetch_all(&state.pool)
-    .await;
-
-    match rows {
-        Ok(rows) => {
-            let goals: Vec<_> = rows
-                .into_iter()
-                .map(|r| GoalEntry {
-                    id: r.id,
-                    name: r.name,
-                    target_amount: r.target_amount.to_string(),
-                    current_amount: r.current_amount.to_string(),
-                    deadline: r.deadline,
-                    completed: r.completed,
-                    created_at: r.created_at,
-                })
-                .collect();
-            Json(serde_json::json!({ "goals": goals })).into_response()
-        }
-        Err(_) => internal().into_response(),
+    let status = match q.status.as_deref() {
+        None => None,
+        Some(s) => match circle_goals::GoalStatus::parse(s) {
+            Some(s) => Some(s),
+            None => return err("invalid_status").into_response(),
+        },
+    };
+    match circle_goals::list_goals(&state.pool, id, &auth.address, status).await {
+        Ok(goals) => Json(serde_json::json!({ "goals": goals })).into_response(),
+        Err(e) => service_error(e),
     }
 }
 
-/// POST /api/circles/:id/goals
+/// POST /api/circles/:id/goals — owner / admin / moderator.
 pub async fn create_goal(
     State(state): State<CirclesState>,
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
-    Json(req): Json<CreateGoalRequest>,
+    Json(req): Json<circle_goals::NewGoal>,
 ) -> impl IntoResponse {
-    let is_admin = sqlx::query_scalar!(
-        "SELECT 1 FROM circles WHERE id = $1 AND admin_address = $2",
-        id,
-        auth.address
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None)
-    .is_some();
-
-    if !is_admin {
-        return forbidden("not_admin").into_response();
+    match circle_goals::create_goal(&state.pool, id, &auth.address, req).await {
+        Ok(goal) => {
+            audit(
+                &state.pool,
+                id,
+                &auth.address,
+                "goal_created",
+                &goal.id.to_string(),
+                serde_json::json!({ "target_amount": goal.target_amount, "deadline": goal.deadline }),
+            )
+            .await;
+            state.hub.publish(
+                id,
+                "goal.created",
+                serde_json::json!({ "circle_id": id, "goal_id": goal.id }),
+                false,
+            );
+            (StatusCode::CREATED, Json(goal)).into_response()
+        }
+        Err(e) => service_error(e),
     }
+}
 
-    let target: i64 = match req.target_amount.parse() {
-        Ok(v) if v > 0 => v,
-        _ => return err("invalid_amount").into_response(),
+/// GET /api/circles/:id/goals/:goal_id — members only.
+pub async fn get_goal(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((id, goal_id)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    match circle_goals::get_goal(&state.pool, id, goal_id, &auth.address).await {
+        Ok(goal) => Json(goal).into_response(),
+        Err(e) => service_error(e),
+    }
+}
+
+/// PATCH /api/circles/:id/goals/:goal_id — edit an open goal.
+pub async fn update_goal(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((id, goal_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<circle_goals::GoalUpdate>,
+) -> impl IntoResponse {
+    match circle_goals::update_goal(&state.pool, id, goal_id, &auth.address, req).await {
+        Ok(goal) => {
+            audit(
+                &state.pool,
+                id,
+                &auth.address,
+                "goal_updated",
+                &goal_id.to_string(),
+                serde_json::json!({ "target_amount": goal.target_amount, "deadline": goal.deadline }),
+            )
+            .await;
+            Json(goal).into_response()
+        }
+        Err(e) => service_error(e),
+    }
+}
+
+/// POST /api/circles/:id/goals/:goal_id/complete — requires verified progress
+/// to have reached the target. Repeating the call is an idempotent success.
+pub async fn complete_goal(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((id, goal_id)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    match circle_goals::complete_goal(&state.pool, id, goal_id, &auth.address).await {
+        Ok((goal, newly_completed)) => {
+            if newly_completed {
+                audit(
+                    &state.pool,
+                    id,
+                    &auth.address,
+                    "goal_completed",
+                    &goal_id.to_string(),
+                    serde_json::json!({ "verified_progress": goal.verified_progress }),
+                )
+                .await;
+                state.hub.publish(
+                    id,
+                    "goal.completed",
+                    serde_json::json!({ "circle_id": id, "goal_id": goal_id }),
+                    false,
+                );
+            }
+            Json(serde_json::json!({ "goal": goal, "already_completed": !newly_completed }))
+                .into_response()
+        }
+        Err(e) => service_error(e),
+    }
+}
+
+// ── #1202: Circle settings ────────────────────────────────────────────────────
+
+fn service_error(code: &'static str) -> axum::response::Response {
+    let status = match code {
+        "circle_not_found" | "goal_not_found" => StatusCode::NOT_FOUND,
+        "not_member" | "permission_denied" => StatusCode::FORBIDDEN,
+        "active_goal_limit_reached" | "goal_already_completed" | "goal_target_not_reached" => {
+            StatusCode::CONFLICT
+        }
+        "internal_error" => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
     };
+    (status, Json(serde_json::json!({ "error": code }))).into_response()
+}
 
-    if req.name.trim().is_empty() {
-        return err("name_required").into_response();
+/// GET /api/circles/:id/settings — any member may view.
+pub async fn get_circle_settings(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match circle_settings::get_settings(&state.pool, id, &auth.address).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(e) => service_error(e),
     }
+}
 
-    let goal_id = Uuid::new_v4();
-    let result = sqlx::query!(
-        r#"
-        INSERT INTO circle_goals (id, circle_id, name, target_amount, deadline)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, created_at
-        "#,
-        goal_id,
-        id,
-        req.name.trim(),
-        target,
-        req.deadline,
-    )
-    .fetch_one(&state.pool)
-    .await;
-
-    match result {
-        Ok(row) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "id": row.id, "created_at": row.created_at })),
-        )
-            .into_response(),
-        Err(_) => internal().into_response(),
+/// PATCH /api/circles/:id/settings — owner / admin only.
+///
+/// Returns the persisted settings plus the list of fields that changed.
+pub async fn update_circle_settings(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateCircleSettingsRequest>,
+) -> impl IntoResponse {
+    match circle_settings::update_settings(&state.pool, id, &auth.address, req).await {
+        Ok((settings, changes)) => {
+            if !changes.is_empty() {
+                audit(
+                    &state.pool,
+                    id,
+                    &auth.address,
+                    "settings_updated",
+                    &id.to_string(),
+                    serde_json::json!({ "changes": changes }),
+                )
+                .await;
+                state.hub.publish(
+                    id,
+                    "circle.settings_updated",
+                    serde_json::json!({
+                        "circle_id": id,
+                        "fields": changes.iter().map(|c| c.field).collect::<Vec<_>>(),
+                    }),
+                    false,
+                );
+            }
+            Json(serde_json::json!({ "settings": settings, "changes": changes })).into_response()
+        }
+        Err(e) => service_error(e),
     }
 }
 

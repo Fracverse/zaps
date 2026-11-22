@@ -1,10 +1,14 @@
 pub mod allbridge;
 pub mod auth;
 pub mod circle_audit;
+pub mod circle_goals;
+pub mod circle_invitations;
 pub mod circle_membership;
 pub mod circle_notifications;
 pub mod circle_payout_execution;
 pub mod circle_scheduler;
+pub mod circle_settings;
+pub mod circle_sharing;
 pub mod circle_reconciliation;
 pub mod disbursement_worker;
 pub mod notifications;
