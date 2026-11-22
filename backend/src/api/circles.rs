@@ -89,6 +89,8 @@ use crate::services::circle_membership::{
     self, CirclePermission, CircleRole, MemberRoleEntry,
 };
 use crate::services::circle_notifications as circle_notifier;
+use crate::services::circle_sharing as circle_sharing;
+use axum::http::HeaderMap;
 use crate::services::circle_scheduler::{
     self, UpdateReminderPreferencesRequest,
 };
@@ -2156,6 +2158,282 @@ pub async fn create_goal(
             Json(serde_json::json!({ "id": row.id, "created_at": row.created_at })),
         )
             .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+// ── #1221: Circle sharing and deep links ─────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateShareLinkRequest {
+    /// `circle` (default) or `invitation`.
+    pub scope: Option<String>,
+    /// Optional invitation this link is tied to; must belong to the circle.
+    pub invitation_id: Option<Uuid>,
+    /// Link lifetime in hours (1..=720). Defaults to 168 hours (7 days).
+    pub expires_in_hours: Option<i64>,
+}
+
+/// POST /api/circles/:id/share — create a secure, expiring share link.
+pub async fn create_share_link(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(circle_id): Path<Uuid>,
+    Json(req): Json<CreateShareLinkRequest>,
+) -> impl IntoResponse {
+    let scope = req.scope.as_deref().unwrap_or("circle");
+    if scope != "circle" && scope != "invitation" {
+        return err("invalid_scope").into_response();
+    }
+    if scope == "invitation" && req.invitation_id.is_none() {
+        return err("invitation_required").into_response();
+    }
+    let hours = req.expires_in_hours.unwrap_or(168);
+    if !(1..=720).contains(&hours) {
+        return err("invalid_expiry").into_response();
+    }
+
+    if let Err(e) = circle_membership::require_circle_permission(
+        &state.pool,
+        circle_id,
+        &auth.address,
+        CirclePermission::InviteMembers,
+    )
+    .await
+    {
+        return match e {
+            "not_member" => forbidden("not_member").into_response(),
+            _ => forbidden("permission_denied").into_response(),
+        };
+    }
+
+    if let Some(invitation_id) = req.invitation_id {
+        let belongs = sqlx::query_scalar!(
+            "SELECT 1 FROM circle_invitations WHERE id = $1 AND circle_id = $2",
+            invitation_id,
+            circle_id
+        )
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap_or(None)
+        .is_some();
+        if !belongs {
+            return not_found("invitation_not_found").into_response();
+        }
+    }
+
+    let token = circle_sharing::generate_token();
+    let token_hash = circle_sharing::hash_token(&token);
+    let id = Uuid::new_v4();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO circle_share_links
+            (id, circle_id, created_by, token_hash, scope, invitation_id, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW() + ($7::text || ' hours')::interval)
+        "#,
+    )
+    .bind(id)
+    .bind(circle_id)
+    .bind(&auth.address)
+    .bind(&token_hash)
+    .bind(scope)
+    .bind(req.invitation_id)
+    .bind(hours.to_string())
+    .execute(&state.pool)
+    .await;
+
+    match result {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "token": token,
+                "scope": scope,
+                "expires_in_hours": hours,
+                "deep_link": format!("zaps://circle/{circle_id}?invite={token}"),
+                "web_fallback": format!("https://zaps.app/circle/{circle_id}?invite={token}"),
+            })),
+        )
+            .into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/share/:token — resolve a share link into app deep links.
+///
+/// Private circles and invitation links require the caller to be a member or
+/// the named invitee. Every resolution is logged with one of the outcomes
+/// below; the raw token is never written to the log.
+pub async fn resolve_share_link(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let token = token.trim();
+    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return not_found("share_link_not_found").into_response();
+    }
+    let token_hash = circle_sharing::hash_token(token);
+
+    let row = match sqlx::query(
+        r#"
+        SELECT l.id, l.circle_id, l.scope, l.invitation_id, l.expires_at, l.revoked_at,
+               c.visibility,
+               i.status AS invitation_status, i.invitee_address, i.expires_at AS invitation_expires_at
+        FROM circle_share_links l
+        JOIN circles c ON c.id = l.circle_id
+        LEFT JOIN circle_invitations i ON i.id = l.invitation_id
+        WHERE l.token_hash = $1
+        "#,
+    )
+    .bind(&token_hash)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(row) => row,
+        Err(_) => return internal().into_response(),
+    };
+    let Some(row) = row else {
+        return not_found("share_link_not_found").into_response();
+    };
+
+    let link_id: Uuid = row.get("id");
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+
+    let deny = |outcome: &'static str, error: &'static str| async {
+        let _ = circle_sharing::log_access(
+            &state.pool,
+            link_id,
+            Some(&auth.address),
+            user_agent,
+            ip_address,
+            outcome,
+        )
+        .await;
+        (
+            if outcome == "denied_expired" {
+                StatusCode::GONE
+            } else {
+                StatusCode::FORBIDDEN
+            },
+            Json(serde_json::json!({ "error": error })),
+        )
+            .into_response()
+    };
+
+    if row.get::<Option<chrono::DateTime<Utc>>, _>("revoked_at").is_some() {
+        return deny("denied_revoked", "share_link_revoked").await;
+    }
+    if row
+        .get::<Option<chrono::DateTime<Utc>>, _>("expires_at")
+        .map(|exp| exp <= Utc::now())
+        .unwrap_or(false)
+    {
+        return deny("denied_expired", "share_link_expired").await;
+    }
+
+    let visibility: String = row.get("visibility");
+    let invitation_id: Option<Uuid> = row.get("invitation_id");
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        row.get::<Uuid, _>("circle_id"),
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    let mut is_invitee = false;
+    if let Some(invitation_id) = invitation_id {
+        let status: Option<String> = row.get("invitation_status");
+        let invitee: Option<String> = row.get("invitee_address");
+        let invitation_expires: Option<chrono::DateTime<Utc>> = row.get("invitation_expires_at");
+        is_invitee = invitee.as_deref() == Some(auth.address.as_str())
+            && status.as_deref() == Some("pending")
+            && invitation_expires.map(|e| e > Utc::now()).unwrap_or(true);
+        if !is_invitee {
+            return deny("denied_unauthorized", "invitation_invalid").await;
+        }
+    }
+
+    if visibility == "private" && !is_member && !is_invitee {
+        return deny("denied_unauthorized", "authorization_required").await;
+    }
+
+    if circle_sharing::log_access(
+        &state.pool,
+        link_id,
+        Some(&auth.address),
+        user_agent,
+        ip_address,
+        "allowed",
+    )
+    .await
+    .is_err()
+    {
+        tracing::warn!(link_id = %link_id, "Failed to log circle share link access");
+    }
+
+    let circle_id: Uuid = row.get("circle_id");
+    Json(serde_json::json!({
+        "circle_id": circle_id,
+        "scope": row.get::<String, _>("scope"),
+        "deep_link": format!("zaps://circle/{circle_id}?invite={token}"),
+        "web_fallback": format!("https://zaps.app/circle/{circle_id}?invite={token}"),
+        "install_link": "https://zaps.app/download",
+        "expires_at": row.get::<Option<chrono::DateTime<Utc>>, _>("expires_at"),
+    }))
+    .into_response()
+}
+
+/// POST /api/circles/share/:id/revoke — creator or circle admin can revoke.
+pub async fn revoke_share_link(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path(link_id): Path<Uuid>,
+) -> impl IntoResponse {
+    let link = sqlx::query(
+        "SELECT circle_id, created_by FROM circle_share_links WHERE id = $1",
+    )
+    .bind(link_id)
+    .fetch_optional(&state.pool)
+    .await;
+
+    let link = match link {
+        Ok(Some(l)) => l,
+        Ok(None) => return not_found("share_link_not_found").into_response(),
+        Err(_) => return internal().into_response(),
+    };
+
+    let is_creator = link.get::<String, _>("created_by") == auth.address;
+    if !is_creator {
+        if let Err(_) = circle_membership::require_circle_permission(
+            &state.pool,
+            link.get("circle_id"),
+            &auth.address,
+            CirclePermission::ManageMembers,
+        )
+        .await
+        {
+            return forbidden("permission_denied").into_response();
+        }
+    }
+
+    match sqlx::query(
+        "UPDATE circle_share_links SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(link_id)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => internal().into_response(),
     }
 }
