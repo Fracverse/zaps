@@ -20,6 +20,7 @@ pub mod bridge;
 pub mod circles;
 pub mod feed;
 pub mod payouts;
+pub mod push_notifications;
 pub mod privy_jwks;
 pub mod social;
 pub mod transactions;

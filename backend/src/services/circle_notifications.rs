@@ -138,20 +138,38 @@ pub async fn notify(
     .execute(&mut *tx)
     .await?;
 
-    if let Some(token) = input.push_token {
-        if !token.trim().is_empty() {
-            sqlx::query(
-                r#"
-                INSERT INTO circle_notification_deliveries
-                    (notification_id, channel, status, attempts, next_retry_at)
-                VALUES ($1, 'push', 'pending', 0, NOW())
-                ON CONFLICT (notification_id, channel) DO NOTHING
-                "#,
-            )
-            .bind(notification_id)
-            .execute(&mut *tx)
-            .await?;
-        }
+    // #1218: resolve a registered device token for the recipient and respect
+    // their circle push preference. An explicit token from the producer wins.
+    let push_token = match input.push_token {
+        Some(token) if !token.trim().is_empty() => Some(token.trim().to_string()),
+        _ => sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT t.expo_push_token
+              FROM user_push_tokens t
+              JOIN users u ON u.id = t.user_id
+             WHERE u.address = $1 AND u.circle_push_enabled
+               AND t.expo_push_token <> ''
+             ORDER BY t.updated_at DESC
+             LIMIT 1
+            "#,
+        )
+        .bind(input.recipient_address)
+        .fetch_optional(&mut *tx)
+        .await?,
+    };
+
+    if push_token.is_some() {
+        sqlx::query(
+            r#"
+            INSERT INTO circle_notification_deliveries
+                (notification_id, channel, status, attempts, next_retry_at)
+            VALUES ($1, 'push', 'pending', 0, NOW())
+            ON CONFLICT (notification_id, channel) DO NOTHING
+            "#,
+        )
+        .bind(notification_id)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
@@ -248,7 +266,8 @@ pub async fn retry_due_deliveries(pool: &PgPool) {
     let rows = match sqlx::query(
         r#"
         SELECT d.id, d.notification_id, d.attempts, n.title, n.body,
-               u.id AS user_id
+               n.notification_type, n.metadata, u.id AS user_id,
+               u.push_financial_details
         FROM circle_notification_deliveries d
         JOIN circle_notifications n ON n.id = d.notification_id
         JOIN users u ON u.address = n.recipient_address
@@ -273,10 +292,14 @@ pub async fn retry_due_deliveries(pool: &PgPool) {
         let attempts: i32 = row.get("attempts");
         let title: String = row.get("title");
         let body: String = row.get("body");
+        let kind: String = row.get("notification_type");
+        let metadata: Value = row.get("metadata");
+        let allow_financial: bool = row.get("push_financial_details");
 
         // In-app delivery is canonical. Push failures are logged and retried,
         // never dropped; the notification itself remains visible to the user.
-        let result = push_to_user(pool, row.get("user_id"), &title, &body).await;
+        let push_body = lock_screen_body(&kind, &body, &metadata, allow_financial);
+        let result = push_to_user(pool, row.get("user_id"), &title, &push_body).await;
         let failed = result.is_err();
         let next_attempts = attempts + 1;
         let exhausted = failed && next_attempts >= MAX_DELIVERY_ATTEMPTS;
@@ -328,9 +351,32 @@ pub async fn retry_due_deliveries(pool: &PgPool) {
     }
 }
 
+/// Keep amounts, addresses and transaction hashes off lock screens unless the
+/// user explicitly opted in. The full message remains in the in-app inbox.
+fn lock_screen_body(kind: &str, body: &str, metadata: &Value, allow_financial: bool) -> String {
+    let financial_kind = matches!(kind, "payout_request" | "payout_approval");
+    let has_financial_metadata = ["amount", "tx_hash", "to_address", "asset", "balance"]
+        .iter()
+        .any(|key| metadata.get(*key).is_some());
+    if !allow_financial && (financial_kind || has_financial_metadata) {
+        "You have a new circle notification. Open Zaps to view the details.".to_string()
+    } else {
+        body.to_string()
+    }
+}
+
 async fn push_to_user(pool: &PgPool, user_id: Uuid, title: &str, body: &str) -> Result<(), String> {
+    // Re-check the preference at dispatch time: users may opt out between
+    // notification creation and retry.
     let token: Option<String> = sqlx::query_scalar(
-        "SELECT expo_push_token FROM user_push_tokens WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1",
+        r#"
+        SELECT t.expo_push_token
+          FROM user_push_tokens t
+          JOIN users u ON u.id = t.user_id
+         WHERE t.user_id = $1 AND u.circle_push_enabled AND t.expo_push_token <> ''
+         ORDER BY t.updated_at DESC
+         LIMIT 1
+        "#,
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -358,6 +404,32 @@ async fn push_to_user(pool: &PgPool, user_id: Uuid, title: &str, body: &str) -> 
     if !response.status().is_success() {
         return Err(format!("Expo push returned {}", response.status()));
     }
+
+    // Expo reports per-token problems inside a successful HTTP response.
+    // DeviceNotRegistered is permanent: remove the stale token so later
+    // notifications are not blocked by it.
+    if let Ok(payload) = response.json::<serde_json::Value>().await {
+        let invalid = payload
+            .get("data")
+            .and_then(|d| d.as_array())
+            .map(|tickets| {
+                tickets.iter().any(|ticket| {
+                    ticket.get("status").and_then(|s| s.as_str()) == Some("error")
+                        && ticket
+                            .get("details")
+                            .and_then(|d| d.get("error"))
+                            .and_then(|e| e.as_str())
+                            == Some("DeviceNotRegistered")
+                })
+            })
+            .unwrap_or(false);
+        if invalid {
+            let _ = sqlx::query("DELETE FROM user_push_tokens WHERE expo_push_token = $1")
+                .bind(&token)
+                .execute(pool)
+                .await;
+        }
+    }
     Ok(())
 }
 
@@ -380,6 +452,15 @@ mod tests {
                 "type list must be stable"
             );
         }
+    }
+
+    #[test]
+    fn lock_screen_hides_financial_details_by_default() {
+        let metadata = serde_json::json!({ "amount": "1000" });
+        let safe = lock_screen_body("payout_request", "Paid 1000 stroops", &metadata, false);
+        assert!(!safe.contains("1000"));
+        let full = lock_screen_body("payout_request", "Paid 1000 stroops", &metadata, true);
+        assert!(full.contains("1000"));
     }
 
     #[test]
