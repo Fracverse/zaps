@@ -105,8 +105,8 @@ use uuid::Uuid;
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const VALID_VISIBILITIES: &[&str] = &["public", "private", "invite_only"];
-const DEFAULT_PER_PAGE: i64 = 20;
-const MAX_PER_PAGE: i64 = 100;
+pub(crate) const DEFAULT_PER_PAGE: i64 = 20;
+pub(crate) const MAX_PER_PAGE: i64 = 100;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -363,7 +363,7 @@ fn internal() -> (StatusCode, Json<serde_json::Value>) {
 
 /// Record an immutable audit entry. A failed audit write is logged loudly but
 /// does not roll back an already-committed business operation.
-async fn audit(
+pub(crate) async fn audit(
     pool: &PgPool,
     circle_id: Uuid,
     actor: &str,

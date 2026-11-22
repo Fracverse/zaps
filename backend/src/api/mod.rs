@@ -12,6 +12,7 @@ pub mod circles;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
 pub mod circle_events;
+pub mod circle_invitations;
 pub mod auth_middleware;
 pub mod bridge;
 pub mod feed;
@@ -234,7 +235,7 @@ pub fn yield_routes_with_state(state: r#yield::YieldState) -> Router {
         .with_state(state)
 }
 
-/// Circles API routes (#1193, #1194, #1195, #1196, #1197, #1198, #1201, #1219).
+/// Circles API routes (#1193-#1202, #1204, #1219).
 pub fn circle_routes(pool: sqlx::PgPool) -> Router {
     let state = circles::CirclesState::new(pool.clone());
     // #1223: user-scoped, configurable limits with stricter financial buckets.
@@ -263,6 +264,20 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route(
             "/notifications/:id/read",
             post(circles::mark_notification_read),
+        )
+        // #1199 / #1200 — invitation inbox and responses (static before /:id)
+        .route("/invitations/mine", get(circle_invitations::my_invitations))
+        .route(
+            "/invitations/redeem",
+            post(circle_invitations::redeem_invitation),
+        )
+        .route(
+            "/invitations/:inv_id/accept",
+            post(circle_invitations::accept_invitation),
+        )
+        .route(
+            "/invitations/:inv_id/decline",
+            post(circle_invitations::decline_invitation),
         )
         .route("/:id", get(circles::get_circle))
         .route("/:id/join", post(circles::join_circle))
@@ -308,6 +323,14 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
             get(circles::list_members).post(circles::add_member),
         )
         .route("/:id/members/:address", delete(circles::remove_member))
+        .route(
+            "/:id/invitations",
+            get(circle_invitations::list_invitations).post(circle_invitations::create_invitation),
+        )
+        .route(
+            "/:id/invitations/:inv_id",
+            delete(circle_invitations::revoke_invitation),
+        )
         .route("/:id/goals", get(circles::list_goals).post(circles::create_goal))
         // #1224: idempotent financial operations (inner layer, so the rate
         // limiter still sees every attempt).
