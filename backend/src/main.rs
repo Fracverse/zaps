@@ -476,6 +476,14 @@ async fn main() {
             .await;
     });
 
+    // #1226: Reconcile local circle financial records against Stellar.
+    let reconciliation_pool = pool.clone();
+    services::circle_reconciliation::spawn(
+        reconciliation_pool,
+        config.stellar_rpc_url.clone(),
+        services::circle_reconciliation::ReconciliationConfig::from_env(),
+    );
+
     // #1224: Expire old circle idempotency records.
     api::circle_idempotency::spawn_cleanup(pool.clone());
 
