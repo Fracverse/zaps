@@ -160,8 +160,11 @@ pub struct VerifyRequest {
 }
 
 /// POST /api/circles/:id/contributions/:cid/verify — check the payment on
-/// Stellar. The response `status` is `confirmed`, `failed`, or `submitted`
-/// (the network does not know the transaction yet: try again later).
+/// Stellar. Only the contributing member can send a `tx_hash`; owners and
+/// admins can re-check the hash on file. The response `outcome` is `confirmed`,
+/// `failed` (the transaction on file failed on the network), `mismatch` (the
+/// transaction does not pay this contribution, which stays open), `not_found`
+/// (the network does not know it yet: try again later) or `unavailable`.
 pub async fn verify_contribution(
     State(state): State<CirclesState>,
     Extension(auth): Extension<AuthenticatedUser>,

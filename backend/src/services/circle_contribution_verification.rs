@@ -10,8 +10,13 @@
 //! * Only an explicit match turns a contribution `confirmed`, and only then
 //!   are the circle and member totals credited (in one transaction, under a
 //!   row lock, so repeating the call can never credit twice).
-//! * A transaction that failed or does not match marks the contribution
-//!   `failed`; it never counts.
+//! * A transaction that does not match is rejected without touching the
+//!   contribution (`mismatch`): anyone's hash can be wrong, and a wrong hash
+//!   must not be able to close someone else's contribution. Only when the
+//!   transaction already on file shows as failed on the network does the
+//!   contribution become `failed`; it never counts.
+//! * Only the contributing member can submit or replace the transaction hash.
+//!   Owners / admins can re-check the hash on file.
 //! * A transaction Horizon cannot find (yet), or an unreachable Horizon,
 //!   leaves the contribution `submitted`: unconfirmed, not successful.
 //! * A transaction hash backs at most one live contribution.
@@ -257,13 +262,31 @@ pub fn match_contribution(expected: &Expected, tx: &ChainTx) -> Outcome {
     }
 }
 
+/// Where the transaction hash being checked came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashSource {
+    /// Already stored on the contribution.
+    OnFile,
+    /// Supplied with this request.
+    Supplied,
+}
+
 /// Status a contribution moves to after a verification attempt. `None` means
 /// the contribution is closed (`failed` / `expired`) and cannot be verified.
-pub fn next_status(current: &str, outcome: &Outcome) -> Option<&'static str> {
+pub fn next_status(current: &str, source: HashSource, outcome: &Outcome) -> Option<&'static str> {
     match (current, outcome) {
         ("confirmed", _) => Some("confirmed"),
         ("pending" | "submitted", Outcome::Confirmed) => Some("confirmed"),
-        ("pending" | "submitted", Outcome::Failed(_)) => Some("failed"),
+        // The transaction on file itself failed on the network: closed.
+        ("pending" | "submitted", Outcome::Failed("transaction_failed"))
+            if source == HashSource::OnFile =>
+        {
+            Some("failed")
+        }
+        // Any other mismatch (or a supplied hash that is not a valid payment)
+        // is rejected; the contribution stays as it was.
+        ("pending", Outcome::Failed(_)) => Some("pending"),
+        ("submitted", Outcome::Failed(_)) => Some("submitted"),
         ("pending" | "submitted", Outcome::NotFound | Outcome::Unavailable(_)) => Some("submitted"),
         _ => None,
     }
@@ -433,7 +456,9 @@ impl ChainSource for HorizonClient {
 #[derive(Debug, Serialize)]
 pub struct VerifyResult {
     pub contribution: Contribution,
-    /// `confirmed` | `failed` | `not_found` | `unavailable`.
+    /// What this attempt found: `confirmed` | `failed` (the contribution is
+    /// now closed) | `mismatch` (this transaction does not pay the
+    /// contribution, which stays open) | `not_found` | `unavailable`.
     pub outcome: &'static str,
     pub reason: Option<String>,
     /// True only for the call that moved the contribution to `confirmed`.
@@ -448,8 +473,8 @@ fn is_unique_violation(e: &sqlx::Error) -> bool {
 
 /// Verify `contribution_id` of `circle_id`. `tx_hash` supplies (or replaces,
 /// while still unconfirmed) the transaction to check; without it the stored
-/// hash is re-checked. Callable by the contributing member and by circle
-/// owners / admins.
+/// hash is re-checked. The contributing member can do either; circle owners /
+/// admins can only re-check the hash on file.
 pub async fn verify_contribution(
     pool: &PgPool,
     chain: &dyn ChainSource,
@@ -487,14 +512,15 @@ pub async fn verify_contribution(
         return Err("contribution_closed");
     }
 
+    let on_file = contribution.tx_hash.as_deref().and_then(normalize_tx_hash);
     let hash = match tx_hash {
         Some(raw) => normalize_tx_hash(raw).ok_or("invalid_tx_hash")?,
-        None => contribution
-            .tx_hash
-            .as_deref()
-            .and_then(normalize_tx_hash)
-            .ok_or("tx_hash_required")?,
+        None => on_file.clone().ok_or("tx_hash_required")?,
     };
+    // Only the contributor decides which transaction pays the contribution.
+    if contribution.member_address != actor && on_file.as_ref() != Some(&hash) {
+        return Err("permission_denied");
+    }
 
     // A transaction can back only one live contribution (this also covers
     // contributions recorded through the older `/contribute` endpoint).
@@ -543,19 +569,31 @@ pub async fn verify_contribution(
     };
 
     let mut db = pool.begin().await.map_err(|_| "internal_error")?;
-    let current: String =
-        sqlx::query_scalar("SELECT status FROM circle_contributions WHERE id = $1 FOR UPDATE")
+    let (current, locked_hash): (String, Option<String>) =
+        sqlx::query_as("SELECT status, tx_hash FROM circle_contributions WHERE id = $1 FOR UPDATE")
             .bind(contribution_id)
             .fetch_one(&mut *db)
             .await
             .map_err(|_| "internal_error")?;
-    let next = next_status(&current, &outcome).ok_or("contribution_closed")?;
+    // The hash on file may have been replaced while the network was queried.
+    let source = if locked_hash.as_deref().and_then(normalize_tx_hash).as_ref() == Some(&hash) {
+        HashSource::OnFile
+    } else {
+        HashSource::Supplied
+    };
+    if source == HashSource::Supplied && contribution.member_address != actor {
+        return Err("permission_denied");
+    }
+    let next = next_status(&current, source, &outcome).ok_or("contribution_closed")?;
     let newly_confirmed = next == "confirmed" && current != "confirmed";
+    // A supplied hash that does not pay the contribution is not kept.
+    let rejected = matches!(outcome, Outcome::Failed(_)) && next != "failed";
 
     if current != "confirmed" {
         let update = sqlx::query(
             "UPDATE circle_contributions \
-                SET status = $2, tx_hash = $3, failure_reason = $4, updated_at = NOW(), \
+                SET status = $2, tx_hash = CASE WHEN $5 THEN tx_hash ELSE $3 END, \
+                    failure_reason = $4, updated_at = NOW(), \
                     verified_at = CASE WHEN $2 = 'confirmed' THEN NOW() ELSE verified_at END \
               WHERE id = $1",
         )
@@ -563,9 +601,10 @@ pub async fn verify_contribution(
         .bind(next)
         .bind(&hash)
         .bind(match &outcome {
-            Outcome::Failed(reason) => Some(*reason),
+            Outcome::Failed(reason) if next == "failed" => Some(*reason),
             _ => None,
         })
+        .bind(rejected && source == HashSource::Supplied)
         .execute(&mut *db)
         .await;
         if let Err(e) = update {
@@ -622,6 +661,8 @@ pub async fn verify_contribution(
     // An earlier call may already have confirmed it; report what is true.
     let reported = if current == "confirmed" {
         "confirmed"
+    } else if rejected {
+        "mismatch"
     } else {
         outcome.as_str()
     };
@@ -777,26 +818,74 @@ mod tests {
 
     #[test]
     fn only_confirmation_credits_and_closed_contributions_stay_closed() {
-        let failed = Outcome::Failed("memo_mismatch");
+        use HashSource::{OnFile, Supplied};
         let unconfirmed = [Outcome::NotFound, Outcome::Unavailable("down".into())];
 
-        assert_eq!(
-            next_status("pending", &Outcome::Confirmed),
-            Some("confirmed")
-        );
-        assert_eq!(
-            next_status("submitted", &Outcome::Confirmed),
-            Some("confirmed")
-        );
-        assert_eq!(next_status("pending", &failed), Some("failed"));
-        for outcome in &unconfirmed {
-            assert_eq!(next_status("pending", outcome), Some("submitted"));
-            assert_eq!(next_status("submitted", outcome), Some("submitted"));
+        for source in [OnFile, Supplied] {
+            assert_eq!(
+                next_status("pending", source, &Outcome::Confirmed),
+                Some("confirmed")
+            );
+            assert_eq!(
+                next_status("submitted", source, &Outcome::Confirmed),
+                Some("confirmed")
+            );
+            for outcome in &unconfirmed {
+                assert_eq!(next_status("pending", source, outcome), Some("submitted"));
+                assert_eq!(next_status("submitted", source, outcome), Some("submitted"));
+            }
+            // Confirmed is final; failed / expired cannot be revived.
+            let mismatch = Outcome::Failed("memo_mismatch");
+            assert_eq!(
+                next_status("confirmed", source, &mismatch),
+                Some("confirmed")
+            );
+            assert_eq!(next_status("failed", source, &Outcome::Confirmed), None);
+            assert_eq!(next_status("expired", source, &Outcome::Confirmed), None);
         }
-        // Confirmed is final; failed / expired cannot be revived.
-        assert_eq!(next_status("confirmed", &failed), Some("confirmed"));
-        assert_eq!(next_status("failed", &Outcome::Confirmed), None);
-        assert_eq!(next_status("expired", &Outcome::Confirmed), None);
+    }
+
+    #[test]
+    fn a_wrong_hash_cannot_close_a_contribution() {
+        use HashSource::{OnFile, Supplied};
+        let reasons = [
+            "transaction_failed",
+            "memo_mismatch",
+            "destination_mismatch",
+            "asset_mismatch",
+            "payer_mismatch",
+            "amount_mismatch",
+        ];
+        for reason in reasons {
+            let outcome = Outcome::Failed(reason);
+            // A hash supplied with the request that does not pay the
+            // contribution (another payment, wrong amount, a failed
+            // transaction of someone else) is rejected, nothing more.
+            assert_eq!(next_status("pending", Supplied, &outcome), Some("pending"));
+            assert_eq!(
+                next_status("submitted", Supplied, &outcome),
+                Some("submitted"),
+                "{reason}"
+            );
+            // The same holds for a stored hash whose transaction exists but
+            // does not match.
+            if reason != "transaction_failed" {
+                assert_eq!(
+                    next_status("submitted", OnFile, &outcome),
+                    Some("submitted"),
+                    "{reason}"
+                );
+            }
+        }
+        // Only the transaction on file failing on the network closes it.
+        assert_eq!(
+            next_status("submitted", OnFile, &Outcome::Failed("transaction_failed")),
+            Some("failed")
+        );
+        assert_eq!(
+            next_status("failed", OnFile, &Outcome::Failed("transaction_failed")),
+            None
+        );
     }
 
     #[test]
