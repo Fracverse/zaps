@@ -16,16 +16,27 @@
 //!   leaves the contribution `submitted`: unconfirmed, not successful.
 //! * A transaction hash backs at most one live contribution.
 //! * Every attempt is persisted in `circle_contribution_verifications`.
+//!
+//! Configuration (fails closed): verification needs both `STELLAR_NETWORK`
+//! (`mainnet` | `public` | `testnet`, the variable the rest of the backend
+//! uses) and `STELLAR_HORIZON_URL` (https, or http on localhost). If either is
+//! missing or invalid, every verification returns `unavailable` and nothing is
+//! ever confirmed. The Horizon server's network passphrase is also checked
+//! against `STELLAR_NETWORK`, so a mainnet deployment cannot be verified
+//! against a testnet Horizon (or the other way round).
 
 use crate::services::circle_contributions::{fetch, Contribution};
 use crate::services::circle_membership::{self, CirclePermission};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use uuid::Uuid;
 
-const DEFAULT_HORIZON_URL: &str = "https://horizon-testnet.stellar.org";
+const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
+const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+const NOT_CONFIGURED_REASON: &str = "verification_not_configured";
 const STROOPS_PER_UNIT: i64 = 10_000_000;
 
 // ── Chain model ───────────────────────────────────────────────────────────────
@@ -260,44 +271,97 @@ pub fn next_status(current: &str, outcome: &Outcome) -> Option<&'static str> {
 
 // ── Chain access ──────────────────────────────────────────────────────────────
 
+/// Why a transaction could not be looked up.
+#[derive(Debug)]
+pub enum ChainError {
+    /// No usable network / Horizon configuration: verification is switched off.
+    NotConfigured,
+    /// The lookup failed; the text is for operators.
+    Unavailable(String),
+}
+
 /// Where verification reads transactions from. Horizon in production; tests
 /// substitute their own.
 #[axum::async_trait]
 pub trait ChainSource: Send + Sync {
     /// `Ok(None)` when the network does not know the transaction.
-    async fn fetch_transaction(&self, hash: &str) -> Result<Option<ChainTx>, String>;
+    async fn fetch_transaction(&self, hash: &str) -> Result<Option<ChainTx>, ChainError>;
+}
+
+/// A validated network + Horizon pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HorizonConfig {
+    pub base_url: String,
+    /// The network passphrase the Horizon server has to report.
+    pub passphrase: &'static str,
+}
+
+impl HorizonConfig {
+    /// Both values are required; anything unset, unknown or malformed yields
+    /// `None` (verification stays off) rather than a guessed default.
+    pub fn from_values(network: Option<&str>, horizon_url: Option<&str>) -> Option<Self> {
+        let passphrase = match network?.trim().to_ascii_lowercase().as_str() {
+            "mainnet" | "public" => MAINNET_PASSPHRASE,
+            "testnet" => TESTNET_PASSPHRASE,
+            _ => return None,
+        };
+        let url = reqwest::Url::parse(horizon_url?.trim()).ok()?;
+        let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+        let allowed = url.scheme() == "https" || (url.scheme() == "http" && local);
+        if !allowed || url.host_str().is_none() {
+            return None;
+        }
+        Some(Self {
+            base_url: url.as_str().trim_end_matches('/').to_string(),
+            passphrase,
+        })
+    }
+}
+
+/// Does Horizon's root document report the passphrase of the expected network?
+pub fn network_matches(expected: &str, root: &Value) -> bool {
+    root.get("network_passphrase").and_then(Value::as_str) == Some(expected)
 }
 
 pub struct HorizonClient {
-    base_url: String,
+    config: Option<HorizonConfig>,
     http: reqwest::Client,
+    /// Set once Horizon has reported the expected network passphrase.
+    network_checked: AtomicBool,
 }
 
 impl HorizonClient {
-    pub fn new(base_url: String) -> Self {
+    pub fn new(config: Option<HorizonConfig>) -> Self {
         Self {
-            base_url: base_url.trim().trim_end_matches('/').to_string(),
+            config,
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .expect("valid reqwest client configuration"),
+            network_checked: AtomicBool::new(false),
         }
     }
 
-    /// `STELLAR_HORIZON_URL`, defaulting to the public testnet Horizon.
+    /// Reads `STELLAR_NETWORK` and `STELLAR_HORIZON_URL`. With either missing
+    /// or invalid, the client reports every lookup as not configured.
     pub fn from_env() -> Self {
-        Self::new(
-            std::env::var("STELLAR_HORIZON_URL")
-                .ok()
-                .filter(|u| !u.trim().is_empty())
-                .unwrap_or_else(|| DEFAULT_HORIZON_URL.to_string()),
-        )
+        let config = HorizonConfig::from_values(
+            std::env::var("STELLAR_NETWORK").ok().as_deref(),
+            std::env::var("STELLAR_HORIZON_URL").ok().as_deref(),
+        );
+        if config.is_none() {
+            tracing::warn!(
+                "STELLAR_NETWORK (mainnet|testnet) and STELLAR_HORIZON_URL (https) must both be \
+                 set: contribution verification is disabled"
+            );
+        }
+        Self::new(config)
     }
 
-    async fn get(&self, path: &str) -> Result<Option<Value>, String> {
+    async fn get(&self, base_url: &str, path: &str) -> Result<Option<Value>, String> {
         let response = self
             .http
-            .get(format!("{}{}", self.base_url, path))
+            .get(format!("{base_url}{path}"))
             .send()
             .await
             .map_err(|e| format!("horizon request failed: {e}"))?;
@@ -311,22 +375,56 @@ impl HorizonClient {
             s => Err(format!("horizon returned HTTP {s}")),
         }
     }
+
+    /// Make sure the configured Horizon serves the configured network.
+    async fn ensure_network(&self, config: &HorizonConfig) -> Result<(), ChainError> {
+        if self.network_checked.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let root = self
+            .get(&config.base_url, "/")
+            .await
+            .map_err(ChainError::Unavailable)?
+            .ok_or_else(|| ChainError::Unavailable("horizon root not found".to_string()))?;
+        if !network_matches(config.passphrase, &root) {
+            return Err(ChainError::Unavailable(
+                "horizon serves a different network than STELLAR_NETWORK".to_string(),
+            ));
+        }
+        self.network_checked.store(true, Ordering::Release);
+        Ok(())
+    }
 }
 
 #[axum::async_trait]
 impl ChainSource for HorizonClient {
-    async fn fetch_transaction(&self, hash: &str) -> Result<Option<ChainTx>, String> {
+    async fn fetch_transaction(&self, hash: &str) -> Result<Option<ChainTx>, ChainError> {
+        let config = self.config.as_ref().ok_or(ChainError::NotConfigured)?;
+        self.ensure_network(config).await?;
+        let base = config.base_url.as_str();
         // `hash` is validated hex, so it is safe to put in the path.
-        let Some(tx) = self.get(&format!("/transactions/{hash}")).await? else {
+        let Some(tx) = self
+            .get(base, &format!("/transactions/{hash}"))
+            .await
+            .map_err(ChainError::Unavailable)?
+        else {
             return Ok(None);
         };
         let operations = self
-            .get(&format!(
-                "/transactions/{hash}/operations?limit=200&order=asc"
-            ))
-            .await?
-            .ok_or("horizon has the transaction but not its operations")?;
-        parse_horizon(&tx, &operations).map(Some)
+            .get(
+                base,
+                &format!("/transactions/{hash}/operations?limit=200&order=asc"),
+            )
+            .await
+            .map_err(ChainError::Unavailable)?
+            .ok_or_else(|| {
+                ChainError::Unavailable(
+                    "horizon has the transaction but not its operations".to_string(),
+                )
+            })?;
+        parse_horizon(&tx, &operations)
+            .map(Some)
+            .map_err(ChainError::Unavailable)
     }
 }
 
@@ -431,7 +529,11 @@ pub async fn verify_contribution(
 
     // The network call happens outside any database transaction.
     let (outcome, ledger) = match chain.fetch_transaction(&hash).await {
-        Err(e) => (Outcome::Unavailable(e), None),
+        Err(ChainError::NotConfigured) => (
+            Outcome::Unavailable(NOT_CONFIGURED_REASON.to_string()),
+            None,
+        ),
+        Err(ChainError::Unavailable(e)) => (Outcome::Unavailable(e), None),
         Ok(None) => (Outcome::NotFound, None),
         Ok(Some(tx)) if tx.hash != hash => (
             Outcome::Unavailable("horizon returned a different transaction".to_string()),
@@ -695,6 +797,61 @@ mod tests {
         assert_eq!(next_status("confirmed", &failed), Some("confirmed"));
         assert_eq!(next_status("failed", &Outcome::Confirmed), None);
         assert_eq!(next_status("expired", &Outcome::Confirmed), None);
+    }
+
+    #[test]
+    fn verification_needs_an_explicit_network_and_horizon_url() {
+        let cfg = |n, u| HorizonConfig::from_values(n, u);
+        let ok = cfg(
+            Some("testnet"),
+            Some("https://horizon-testnet.stellar.org/"),
+        )
+        .unwrap();
+        assert_eq!(ok.base_url, "https://horizon-testnet.stellar.org");
+        assert_eq!(ok.passphrase, TESTNET_PASSPHRASE);
+        for network in ["mainnet", "PUBLIC", " Mainnet "] {
+            let c = cfg(Some(network), Some("https://horizon.stellar.org")).unwrap();
+            assert_eq!(c.passphrase, MAINNET_PASSPHRASE, "{network}");
+        }
+        // Local http is fine for development and mocks.
+        assert!(cfg(Some("testnet"), Some("http://localhost:8000")).is_some());
+        assert!(cfg(Some("testnet"), Some("http://127.0.0.1:8000")).is_some());
+
+        // Nothing is guessed: a missing or unknown value turns verification off.
+        let url = Some("https://horizon.stellar.org");
+        assert_eq!(cfg(None, url), None);
+        assert_eq!(cfg(Some(""), url), None);
+        assert_eq!(cfg(Some("futurenet"), url), None);
+        assert_eq!(cfg(Some("mainnet"), None), None);
+        assert_eq!(cfg(Some("mainnet"), Some("")), None);
+        assert_eq!(cfg(Some("mainnet"), Some("not a url")), None);
+        assert_eq!(
+            cfg(Some("mainnet"), Some("http://horizon.stellar.org")),
+            None
+        );
+        assert_eq!(
+            cfg(Some("mainnet"), Some("ftp://horizon.stellar.org")),
+            None
+        );
+    }
+
+    #[test]
+    fn horizon_must_serve_the_configured_network() {
+        let testnet = json!({"network_passphrase": TESTNET_PASSPHRASE});
+        assert!(network_matches(TESTNET_PASSPHRASE, &testnet));
+        assert!(!network_matches(MAINNET_PASSPHRASE, &testnet));
+        assert!(!network_matches(MAINNET_PASSPHRASE, &json!({})));
+        assert!(!network_matches(
+            MAINNET_PASSPHRASE,
+            &json!({"network_passphrase": 1})
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_client_never_returns_a_transaction() {
+        let client = HorizonClient::new(None);
+        let result = client.fetch_transaction(&"a".repeat(64)).await;
+        assert!(matches!(result, Err(ChainError::NotConfigured)));
     }
 
     #[test]
