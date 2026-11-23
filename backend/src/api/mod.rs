@@ -10,6 +10,7 @@ pub mod auth;
 pub mod bank_accounts;
 pub mod circles;
 pub mod circle_comments;
+pub mod circle_contributions;
 pub mod circle_announcements;
 pub mod circle_rate_limit;
 pub mod circle_idempotency;
@@ -321,9 +322,15 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         // #1222 — permission-controlled, append-only audit trail
         .route("/:id/audit", get(circles::list_audit_log))
         .route("/:id/audit/verify", get(circles::verify_audit_log))
+        // #1203 — versioned contribution rules.
         .route(
             "/:id/contribution-rules",
-            put(circles::update_contribution_rule),
+            get(circle_contributions::get_contribution_rules)
+                .put(circle_contributions::update_contribution_rules),
+        )
+        .route(
+            "/:id/contribution-rules/versions",
+            get(circle_contributions::list_contribution_rule_versions),
         )
         .route("/:id/payout/:req_id/execute", post(circles::execute_payout))
         .route(
