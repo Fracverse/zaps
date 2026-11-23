@@ -41,7 +41,10 @@ use uuid::Uuid;
 
 const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
 const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+/// Reasons shown to clients. Details of a failed lookup (which can name the
+/// Horizon URL or internal errors) are only logged.
 const NOT_CONFIGURED_REASON: &str = "verification_not_configured";
+const UNAVAILABLE_REASON: &str = "horizon_unavailable";
 const STROOPS_PER_UNIT: i64 = 10_000_000;
 
 // ── Chain model ───────────────────────────────────────────────────────────────
@@ -86,8 +89,8 @@ pub enum Outcome {
     Failed(&'static str),
     /// The network does not know the transaction (yet).
     NotFound,
-    /// The network could not be queried.
-    Unavailable(String),
+    /// The network could not be queried. Carries a generic reason code.
+    Unavailable(&'static str),
 }
 
 impl Outcome {
@@ -102,8 +105,7 @@ impl Outcome {
 
     pub fn reason(&self) -> Option<String> {
         match self {
-            Self::Failed(reason) => Some((*reason).to_string()),
-            Self::Unavailable(reason) => Some(reason.chars().take(500).collect()),
+            Self::Failed(reason) | Self::Unavailable(reason) => Some((*reason).to_string()),
             _ => None,
         }
     }
@@ -387,14 +389,14 @@ impl HorizonClient {
             .get(format!("{base_url}{path}"))
             .send()
             .await
-            .map_err(|e| format!("horizon request failed: {e}"))?;
+            .map_err(|e| format!("horizon request failed: {}", e.without_url()))?;
         match response.status() {
             s if s == reqwest::StatusCode::NOT_FOUND => Ok(None),
             s if s.is_success() => response
                 .json()
                 .await
                 .map(Some)
-                .map_err(|e| format!("horizon returned invalid JSON: {e}")),
+                .map_err(|e| format!("horizon returned invalid JSON: {}", e.without_url())),
             s => Err(format!("horizon returned HTTP {s}")),
         }
     }
@@ -555,16 +557,16 @@ pub async fn verify_contribution(
 
     // The network call happens outside any database transaction.
     let (outcome, ledger) = match chain.fetch_transaction(&hash).await {
-        Err(ChainError::NotConfigured) => (
-            Outcome::Unavailable(NOT_CONFIGURED_REASON.to_string()),
-            None,
-        ),
-        Err(ChainError::Unavailable(e)) => (Outcome::Unavailable(e), None),
+        Err(ChainError::NotConfigured) => (Outcome::Unavailable(NOT_CONFIGURED_REASON), None),
+        Err(ChainError::Unavailable(detail)) => {
+            tracing::warn!(%contribution_id, error = %detail, "horizon lookup failed");
+            (Outcome::Unavailable(UNAVAILABLE_REASON), None)
+        }
         Ok(None) => (Outcome::NotFound, None),
-        Ok(Some(tx)) if tx.hash != hash => (
-            Outcome::Unavailable("horizon returned a different transaction".to_string()),
-            None,
-        ),
+        Ok(Some(tx)) if tx.hash != hash => {
+            tracing::warn!(%contribution_id, "horizon returned a different transaction");
+            (Outcome::Unavailable(UNAVAILABLE_REASON), None)
+        }
         Ok(Some(tx)) => (match_contribution(&expected, &tx), tx.ledger),
     };
 
@@ -819,7 +821,7 @@ mod tests {
     #[test]
     fn only_confirmation_credits_and_closed_contributions_stay_closed() {
         use HashSource::{OnFile, Supplied};
-        let unconfirmed = [Outcome::NotFound, Outcome::Unavailable("down".into())];
+        let unconfirmed = [Outcome::NotFound, Outcome::Unavailable(UNAVAILABLE_REASON)];
 
         for source in [OnFile, Supplied] {
             assert_eq!(
@@ -934,6 +936,42 @@ mod tests {
             MAINNET_PASSPHRASE,
             &json!({"network_passphrase": 1})
         ));
+    }
+
+    #[tokio::test]
+    async fn lookup_errors_do_not_expose_the_horizon_url() {
+        // Nothing listens on this loopback port, so the lookup fails in transport.
+        let config =
+            HorizonConfig::from_values(Some("testnet"), Some("http://127.0.0.1:9/internal-path"))
+                .unwrap();
+        let client = HorizonClient::new(Some(config));
+        match client.fetch_transaction(&"a".repeat(64)).await {
+            Err(ChainError::Unavailable(detail)) => {
+                assert!(
+                    !detail.contains("127.0.0.1") && !detail.contains("internal-path"),
+                    "{detail}"
+                );
+            }
+            other => panic!("expected an unavailable lookup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clients_only_see_generic_reasons_for_unavailable_lookups() {
+        assert_eq!(
+            Outcome::Unavailable(UNAVAILABLE_REASON).reason().as_deref(),
+            Some("horizon_unavailable")
+        );
+        assert_eq!(
+            Outcome::Unavailable(NOT_CONFIGURED_REASON)
+                .reason()
+                .as_deref(),
+            Some("verification_not_configured")
+        );
+        assert_eq!(
+            Outcome::Unavailable(UNAVAILABLE_REASON).as_str(),
+            "unavailable"
+        );
     }
 
     #[tokio::test]
