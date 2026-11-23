@@ -10,16 +10,23 @@
 //! * Only an explicit match turns a contribution `confirmed`, and only then
 //!   are the circle and member totals credited (in one transaction, under a
 //!   row lock, so repeating the call can never credit twice).
-//! * A transaction that does not match is rejected without touching the
-//!   contribution (`mismatch`): anyone's hash can be wrong, and a wrong hash
-//!   must not be able to close someone else's contribution. Only when the
-//!   transaction already on file shows as failed on the network does the
-//!   contribution become `failed`; it never counts.
 //! * Only the contributing member can submit or replace the transaction hash.
 //!   Owners / admins can re-check the hash on file.
+//! * A transaction that does not pay the contribution, supplied with the
+//!   request, is rejected (`mismatch`): the attempt is recorded, the hash is
+//!   not stored and the contribution is untouched. Anyone's hash can be wrong,
+//!   and a wrong or hostile hash must not close a contribution or hold a claim.
 //! * A transaction Horizon cannot find (yet), or an unreachable Horizon,
-//!   leaves the contribution `submitted`: unconfirmed, not successful.
-//! * A transaction hash backs at most one live contribution.
+//!   leaves the contribution `submitted`: unconfirmed, not successful. The
+//!   hash is kept so the payment can be re-checked.
+//! * When the hash on file turns out not to pay the contribution (it failed
+//!   on the network or is another payment), the contributor's own declared
+//!   payment is shown bad: the contribution becomes `failed` and the hash is
+//!   released. It never counts.
+//! * A hash can back at most one *confirmed* contribution. A hash stored while
+//!   still unconfirmed is only a claim and never keeps the contribution it
+//!   really pays from being verified: confirming that one closes the other
+//!   claims on the same hash.
 //! * Every attempt is persisted in `circle_contribution_verifications`.
 //!
 //! Configuration (fails closed): verification needs both `STELLAR_NETWORK`
@@ -45,6 +52,9 @@ const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
 /// Horizon URL or internal errors) are only logged.
 const NOT_CONFIGURED_REASON: &str = "verification_not_configured";
 const UNAVAILABLE_REASON: &str = "horizon_unavailable";
+/// Why an unconfirmed claim on a hash was closed when another contribution
+/// confirmed that transaction.
+const CLAIMED_ELSEWHERE_REASON: &str = "transaction_used_by_another_contribution";
 const STROOPS_PER_UNIT: i64 = 10_000_000;
 
 // ── Chain model ───────────────────────────────────────────────────────────────
@@ -279,19 +289,32 @@ pub fn next_status(current: &str, source: HashSource, outcome: &Outcome) -> Opti
     match (current, outcome) {
         ("confirmed", _) => Some("confirmed"),
         ("pending" | "submitted", Outcome::Confirmed) => Some("confirmed"),
-        // The transaction on file itself failed on the network: closed.
-        ("pending" | "submitted", Outcome::Failed("transaction_failed"))
-            if source == HashSource::OnFile =>
-        {
+        // The contributor's own declared payment (the hash on file) is shown
+        // bad: closed, which also releases the hash.
+        ("pending" | "submitted", Outcome::Failed(_)) if source == HashSource::OnFile => {
             Some("failed")
         }
-        // Any other mismatch (or a supplied hash that is not a valid payment)
-        // is rejected; the contribution stays as it was.
+        // A supplied hash that does not pay the contribution is only rejected;
+        // the contribution stays as it was.
         ("pending", Outcome::Failed(_)) => Some("pending"),
         ("submitted", Outcome::Failed(_)) => Some("submitted"),
         ("pending" | "submitted", Outcome::NotFound | Outcome::Unavailable(_)) => Some("submitted"),
         _ => None,
     }
+}
+
+/// Is the hash that was checked written to the contribution? A supplied hash
+/// that does not pay it is not: storing it would let anyone hold a claim on
+/// another member's transaction.
+pub fn stores_hash(source: HashSource, outcome: &Outcome) -> bool {
+    !(source == HashSource::Supplied && matches!(outcome, Outcome::Failed(_)))
+}
+
+/// Does a contribution in `holder_status` that carries a transaction hash
+/// stop other contributions from using that hash? Only a confirmed one does;
+/// an unconfirmed claim must never keep the real payer from verifying.
+pub fn claim_blocks_others(holder_status: &str) -> bool {
+    holder_status == "confirmed"
 }
 
 // ── Chain access ──────────────────────────────────────────────────────────────
@@ -524,18 +547,18 @@ pub async fn verify_contribution(
         return Err("permission_denied");
     }
 
-    // A transaction can back only one live contribution (this also covers
-    // contributions recorded through the older `/contribute` endpoint).
-    let used: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM circle_contributions \
-          WHERE lower(tx_hash) = $1 AND id <> $2 AND status IN ('submitted', 'confirmed'))",
+    // A transaction that already backs a confirmed contribution cannot back
+    // another (this also covers contributions recorded through the older
+    // `/contribute` endpoint). Unconfirmed claims are not counted.
+    let holders: Vec<String> = sqlx::query_scalar(
+        "SELECT status FROM circle_contributions WHERE lower(tx_hash) = $1 AND id <> $2",
     )
     .bind(&hash)
     .bind(contribution_id)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
     .map_err(|_| "internal_error")?;
-    if used {
+    if holders.iter().any(|status| claim_blocks_others(status)) {
         return Err("tx_already_used");
     }
 
@@ -588,13 +611,15 @@ pub async fn verify_contribution(
     }
     let next = next_status(&current, source, &outcome).ok_or("contribution_closed")?;
     let newly_confirmed = next == "confirmed" && current != "confirmed";
-    // A supplied hash that does not pay the contribution is not kept.
+    let store_hash = stores_hash(source, &outcome);
+    // This attempt found a transaction that does not pay the contribution,
+    // and the contribution was not closed by it.
     let rejected = matches!(outcome, Outcome::Failed(_)) && next != "failed";
 
     if current != "confirmed" {
         let update = sqlx::query(
             "UPDATE circle_contributions \
-                SET status = $2, tx_hash = CASE WHEN $5 THEN tx_hash ELSE $3 END, \
+                SET status = $2, tx_hash = CASE WHEN $5 THEN $3 ELSE tx_hash END, \
                     failure_reason = $4, updated_at = NOW(), \
                     verified_at = CASE WHEN $2 = 'confirmed' THEN NOW() ELSE verified_at END \
               WHERE id = $1",
@@ -606,7 +631,7 @@ pub async fn verify_contribution(
             Outcome::Failed(reason) if next == "failed" => Some(*reason),
             _ => None,
         })
-        .bind(rejected && source == HashSource::Supplied)
+        .bind(store_hash)
         .execute(&mut *db)
         .await;
         if let Err(e) = update {
@@ -619,6 +644,24 @@ pub async fn verify_contribution(
     }
 
     if newly_confirmed {
+        // Other contributions that merely claimed this transaction while it
+        // was unconfirmed lose the claim: it pays this one.
+        sqlx::query(
+            "WITH displaced AS ( \
+                 UPDATE circle_contributions \
+                    SET status = 'failed', failure_reason = $3, updated_at = NOW() \
+                  WHERE lower(tx_hash) = $1 AND id <> $2 AND status = 'submitted' \
+              RETURNING id, circle_id) \
+             INSERT INTO circle_contribution_verifications \
+                 (contribution_id, circle_id, tx_hash, outcome, reason) \
+             SELECT id, circle_id, $1::text, 'failed', $3::text FROM displaced",
+        )
+        .bind(&hash)
+        .bind(contribution_id)
+        .bind(CLAIMED_ELSEWHERE_REASON)
+        .execute(&mut *db)
+        .await
+        .map_err(|_| "internal_error")?;
         sqlx::query(
             "UPDATE circles SET balance = balance + $1, total_contributed = total_contributed + $1 \
               WHERE id = $2",
@@ -847,47 +890,80 @@ mod tests {
         }
     }
 
+    const MISMATCH_REASONS: [&str; 6] = [
+        "transaction_failed",
+        "memo_mismatch",
+        "destination_mismatch",
+        "asset_mismatch",
+        "payer_mismatch",
+        "amount_mismatch",
+    ];
+
     #[test]
-    fn a_wrong_hash_cannot_close_a_contribution() {
-        use HashSource::{OnFile, Supplied};
-        let reasons = [
-            "transaction_failed",
-            "memo_mismatch",
-            "destination_mismatch",
-            "asset_mismatch",
-            "payer_mismatch",
-            "amount_mismatch",
-        ];
-        for reason in reasons {
+    fn squatting_with_someone_elses_transaction_is_rejected_and_not_stored() {
+        use HashSource::Supplied;
+        for reason in MISMATCH_REASONS {
             let outcome = Outcome::Failed(reason);
-            // A hash supplied with the request that does not pay the
-            // contribution (another payment, wrong amount, a failed
-            // transaction of someone else) is rejected, nothing more.
+            // Rejected: the contribution keeps its status ...
             assert_eq!(next_status("pending", Supplied, &outcome), Some("pending"));
             assert_eq!(
                 next_status("submitted", Supplied, &outcome),
                 Some("submitted"),
                 "{reason}"
             );
-            // The same holds for a stored hash whose transaction exists but
-            // does not match.
-            if reason != "transaction_failed" {
-                assert_eq!(
-                    next_status("submitted", OnFile, &outcome),
-                    Some("submitted"),
-                    "{reason}"
-                );
-            }
+            // ... and the hash is not written, so it holds no claim.
+            assert!(!stores_hash(Supplied, &outcome), "{reason}");
         }
-        // Only the transaction on file failing on the network closes it.
+        // Hashes that may still pay the contribution are kept for a re-check.
+        for outcome in [
+            Outcome::NotFound,
+            Outcome::Unavailable(UNAVAILABLE_REASON),
+            Outcome::Confirmed,
+        ] {
+            assert!(stores_hash(Supplied, &outcome));
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_claim_never_blocks_the_real_payer() {
+        use HashSource::{OnFile, Supplied};
+        // Only a confirmed contribution keeps others off its hash.
+        assert!(claim_blocks_others("confirmed"));
+        for status in ["pending", "submitted", "failed", "expired"] {
+            assert!(!claim_blocks_others(status), "{status}");
+        }
+        // So the contribution a hash really pays can still be confirmed,
+        // whether the hash is on file or supplied.
+        for source in [OnFile, Supplied] {
+            assert_eq!(
+                next_status("pending", source, &Outcome::Confirmed),
+                Some("confirmed")
+            );
+            assert_eq!(
+                next_status("submitted", source, &Outcome::Confirmed),
+                Some("confirmed")
+            );
+            assert!(stores_hash(source, &Outcome::Confirmed));
+        }
+    }
+
+    #[test]
+    fn a_hash_on_file_that_does_not_pay_the_contribution_is_released() {
+        use HashSource::OnFile;
+        for reason in MISMATCH_REASONS {
+            let outcome = Outcome::Failed(reason);
+            // The contributor's own declared payment is shown bad: closed ...
+            assert_eq!(next_status("submitted", OnFile, &outcome), Some("failed"));
+            assert_eq!(next_status("pending", OnFile, &outcome), Some("failed"));
+            // ... and a failed contribution holds no claim on the hash.
+            assert!(!claim_blocks_others("failed"));
+        }
+        // Closed contributions cannot be revived by a later check.
         assert_eq!(
-            next_status("submitted", OnFile, &Outcome::Failed("transaction_failed")),
-            Some("failed")
-        );
-        assert_eq!(
-            next_status("failed", OnFile, &Outcome::Failed("transaction_failed")),
+            next_status("failed", OnFile, &Outcome::Failed("memo_mismatch")),
             None
         );
+        assert_eq!(next_status("failed", OnFile, &Outcome::Confirmed), None);
     }
 
     #[test]

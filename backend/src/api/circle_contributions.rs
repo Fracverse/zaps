@@ -162,9 +162,10 @@ pub struct VerifyRequest {
 /// POST /api/circles/:id/contributions/:cid/verify — check the payment on
 /// Stellar. Only the contributing member can send a `tx_hash`; owners and
 /// admins can re-check the hash on file. The response `outcome` is `confirmed`,
-/// `failed` (the transaction on file failed on the network), `mismatch` (the
-/// transaction does not pay this contribution, which stays open), `not_found`
-/// (the network does not know it yet: try again later) or `unavailable`.
+/// `failed` (the hash on file does not pay the contribution, which is now
+/// closed), `mismatch` (the supplied hash does not pay it: nothing is stored
+/// and the contribution stays open), `not_found` (the network does not know it
+/// yet: try again later) or `unavailable`.
 pub async fn verify_contribution(
     State(state): State<CirclesState>,
     Extension(auth): Extension<AuthenticatedUser>,
