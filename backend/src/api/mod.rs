@@ -322,7 +322,7 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         // #1222 — permission-controlled, append-only audit trail
         .route("/:id/audit", get(circles::list_audit_log))
         .route("/:id/audit/verify", get(circles::verify_audit_log))
-        // #1203 — versioned contribution rules.
+        // #1203 — versioned contribution rules; #1205 — contribution initiation.
         .route(
             "/:id/contribution-rules",
             get(circle_contributions::get_contribution_rules)
@@ -331,6 +331,10 @@ pub fn circle_routes(pool: sqlx::PgPool) -> Router {
         .route(
             "/:id/contribution-rules/versions",
             get(circle_contributions::list_contribution_rule_versions),
+        )
+        .route(
+            "/:id/contributions",
+            post(circle_contributions::initiate_contribution),
         )
         .route("/:id/payout/:req_id/execute", post(circles::execute_payout))
         .route(

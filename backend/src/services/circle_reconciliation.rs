@@ -89,7 +89,7 @@ async fn fetch_records(pool: &PgPool, limit: i64) -> Result<Vec<LocalRecord>, sq
         r#"SELECT c.id, c.circle_id, c.tx_hash,
                   EXTRACT(EPOCH FROM (NOW() - c.created_at))::BIGINT AS age
              FROM circle_contributions c
-            WHERE NOT EXISTS (
+            WHERE c.status = 'confirmed' AND NOT EXISTS (
                 SELECT 1 FROM circle_reconciliation_records r
                  WHERE r.record_type = 'contribution' AND r.local_record_id = c.id
                    AND r.on_chain_state = 'success'

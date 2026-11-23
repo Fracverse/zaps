@@ -1,16 +1,23 @@
-//! Circle contribution endpoints: rules (#1203).
+//! Circle contribution endpoints: rules (#1203) and
+//! initiation (#1205).
 //!
 //! | Method | Path                                          | Who                          |
 //! |--------|-----------------------------------------------|------------------------------|
 //! | GET    | /api/circles/:id/contribution-rules           | members                      |
 //! | PUT    | /api/circles/:id/contribution-rules           | owner / admin (new version)  |
 //! | GET    | /api/circles/:id/contribution-rules/versions  | members                      |
+//! | POST   | /api/circles/:id/contributions                | members                      |
 //!
-//! Errors use the circles convention: `{ "error": "<code>" }`.
+//! `POST /contributions` returns the payment instructions (destination, asset,
+//! amount and a unique text memo). Errors use the circles convention:
+//! `{ "error": "<code>" }`.
 
 use crate::api::auth_middleware::AuthenticatedUser;
 use crate::api::circles::{audit, CirclesState};
 use crate::services::circle_contribution_rules::{self as rules, RuleSpec};
+use crate::services::circle_contributions::{
+    self as contributions, InitiateError, InitiateRequest,
+};
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
@@ -22,7 +29,9 @@ use uuid::Uuid;
 
 fn error_response(code: &'static str) -> Response {
     let status = match code {
+        "circle_not_found" => StatusCode::NOT_FOUND,
         "not_member" | "permission_denied" => StatusCode::FORBIDDEN,
+        "duplicate_contribution" | "circle_not_accepting_contributions" => StatusCode::CONFLICT,
         "internal_error" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
     };
@@ -87,5 +96,45 @@ pub async fn list_contribution_rule_versions(
     match rules::list_versions(&state.pool, id, &auth.address).await {
         Ok(versions) => Json(serde_json::json!({ "versions": versions })).into_response(),
         Err(code) => error_response(code),
+    }
+}
+
+// ── Initiation (#1205) ────────────────────────────────────────────────────────
+
+/// POST /api/circles/:id/contributions — validate and record a pending
+/// contribution and return the payment instructions. Send an
+/// `Idempotency-Key` header to make client retries return the original answer.
+pub async fn initiate_contribution(
+    State(state): State<CirclesState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<InitiateRequest>,
+) -> Response {
+    match contributions::initiate(&state.pool, id, &auth.address, req, Utc::now()).await {
+        Ok(initiated) => {
+            audit(
+                &state.pool,
+                id,
+                &auth.address,
+                "contribution_initiated",
+                &initiated.contribution.id.to_string(),
+                serde_json::json!({
+                    "amount": initiated.contribution.amount,
+                    "asset": initiated.contribution.asset,
+                    "rule_version": initiated.contribution.rule_version,
+                }),
+            )
+            .await;
+            (StatusCode::CREATED, Json(initiated)).into_response()
+        }
+        Err(InitiateError::Duplicate(existing)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "duplicate_contribution",
+                "contribution": existing,
+            })),
+        )
+            .into_response(),
+        Err(InitiateError::Rejected(code)) => error_response(code),
     }
 }

@@ -244,6 +244,7 @@ pub async fn process_contribution_reminders(
                 FROM circle_contributions
                 WHERE circle_id = $1
                   AND member_address = $2
+                  AND status = 'confirmed'
                   AND created_at >= $3
                   AND created_at <= $4
                 "#,
