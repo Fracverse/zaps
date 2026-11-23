@@ -1,4 +1,4 @@
-//! #1205 contribution initiation.
+//! #1205 contribution initiation and #1208 contribution history.
 //!
 //! Initiating a contribution validates the member, asset, amount and the
 //! circle's active rule, then records a `pending` row that pins everything the
@@ -18,12 +18,15 @@ use crate::services::circle_membership::{self, CirclePermission};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::postgres::{PgPool, PgRow};
-use sqlx::Row;
+use sqlx::postgres::{PgPool, PgRow, Postgres};
+use sqlx::{QueryBuilder, Row};
 use uuid::Uuid;
 
 /// How long an initiation waits for its payment before it expires.
 pub const INITIATION_TTL_HOURS: i64 = 24;
+pub const STATUSES: &[&str] = &["pending", "submitted", "confirmed", "failed", "expired"];
+pub const DEFAULT_PER_PAGE: i64 = 20;
+pub const MAX_PER_PAGE: i64 = 100;
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
@@ -280,6 +283,182 @@ pub async fn fetch(
     .transpose()
 }
 
+// ── History ───────────────────────────────────────────────────────────────────
+
+/// Raw query-string values of `GET /contributions`.
+#[derive(Debug, Default, Deserialize)]
+pub struct HistoryQuery {
+    pub member: Option<String>,
+    /// RFC 3339, inclusive.
+    pub from: Option<String>,
+    /// RFC 3339, inclusive.
+    pub to: Option<String>,
+    pub asset: Option<String>,
+    pub status: Option<String>,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+/// Validated history filters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistoryFilter {
+    pub member: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub asset: Option<String>,
+    pub status: Option<String>,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+fn parse_timestamp(raw: &str) -> Result<DateTime<Utc>, &'static str> {
+    DateTime::parse_from_rfc3339(raw.trim())
+        .map(|d| d.with_timezone(&Utc))
+        .map_err(|_| "invalid_date")
+}
+
+impl HistoryFilter {
+    pub fn from_query(q: HistoryQuery) -> Result<Self, &'static str> {
+        let member = match q.member.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(m) if m.len() <= 128 && !m.chars().any(char::is_whitespace) => Some(m.to_string()),
+            Some(_) => return Err("invalid_member"),
+        };
+        let from = q.from.as_deref().map(parse_timestamp).transpose()?;
+        let to = q.to.as_deref().map(parse_timestamp).transpose()?;
+        if matches!((from, to), (Some(f), Some(t)) if f > t) {
+            return Err("invalid_date_range");
+        }
+        let asset = q
+            .asset
+            .as_deref()
+            .map(|a| normalize_asset(a).ok_or("invalid_asset"))
+            .transpose()?;
+        let status = match q.status.as_deref().map(|s| s.trim().to_lowercase()) {
+            None => None,
+            Some(s) if STATUSES.contains(&s.as_str()) => Some(s),
+            Some(_) => return Err("invalid_status"),
+        };
+        let page = q.page.unwrap_or(1);
+        let per_page = q.per_page.unwrap_or(DEFAULT_PER_PAGE);
+        if page < 1 || !(1..=MAX_PER_PAGE).contains(&per_page) {
+            return Err("invalid_page");
+        }
+        Ok(Self {
+            member,
+            from,
+            to,
+            asset,
+            status,
+            page,
+            per_page,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct HistoryPage {
+    pub contributions: Vec<Contribution>,
+    /// Records matching the filters (and visible to the caller).
+    pub total: i64,
+    /// Sum of the matching `confirmed` contributions.
+    pub confirmed_total: String,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+fn push_filters<'a>(
+    qb: &mut QueryBuilder<'a, Postgres>,
+    circle_id: Uuid,
+    viewer: &'a str,
+    sees_all: bool,
+    f: &'a HistoryFilter,
+) {
+    qb.push(" WHERE circle_id = ").push_bind(circle_id);
+    if !sees_all {
+        // Members see every confirmed contribution plus all of their own.
+        qb.push(" AND (status = 'confirmed' OR member_address = ")
+            .push_bind(viewer)
+            .push(")");
+    }
+    if let Some(member) = &f.member {
+        qb.push(" AND member_address = ").push_bind(member.as_str());
+    }
+    if let Some(from) = f.from {
+        qb.push(" AND created_at >= ").push_bind(from);
+    }
+    if let Some(to) = f.to {
+        qb.push(" AND created_at <= ").push_bind(to);
+    }
+    if let Some(asset) = &f.asset {
+        qb.push(" AND asset = ").push_bind(asset.as_str());
+    }
+    if let Some(status) = &f.status {
+        qb.push(" AND status = ").push_bind(status.as_str());
+    }
+}
+
+/// Paginated, filtered history of a circle's contributions. Members see all
+/// confirmed contributions and their own records of any status; owners and
+/// admins see everything.
+pub async fn list_history(
+    pool: &PgPool,
+    circle_id: Uuid,
+    viewer: &str,
+    filter: &HistoryFilter,
+) -> Result<HistoryPage, &'static str> {
+    let role = circle_membership::require_circle_permission(
+        pool,
+        circle_id,
+        viewer,
+        CirclePermission::ViewFinancialInfo,
+    )
+    .await?;
+    let sees_all = role.has_permission(CirclePermission::ManagePayouts);
+
+    let mut count = QueryBuilder::<Postgres>::new(
+        "SELECT COUNT(*)::BIGINT AS total, \
+                COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0)::BIGINT AS confirmed \
+           FROM circle_contributions",
+    );
+    push_filters(&mut count, circle_id, viewer, sees_all, filter);
+    let totals = count
+        .build()
+        .fetch_one(pool)
+        .await
+        .map_err(|_| "internal_error")?;
+
+    let mut list = QueryBuilder::<Postgres>::new(format!(
+        "SELECT {CONTRIBUTION_COLUMNS} FROM circle_contributions"
+    ));
+    push_filters(&mut list, circle_id, viewer, sees_all, filter);
+    // Stable order: records never shuffle between pages.
+    list.push(" ORDER BY created_at DESC, id DESC LIMIT ")
+        .push_bind(filter.per_page)
+        .push(" OFFSET ")
+        .push_bind((filter.page - 1) * filter.per_page);
+    let rows = list
+        .build()
+        .fetch_all(pool)
+        .await
+        .map_err(|_| "internal_error")?;
+
+    Ok(HistoryPage {
+        contributions: rows
+            .iter()
+            .map(row_to_contribution)
+            .collect::<Result<_, _>>()
+            .map_err(|_| "internal_error")?,
+        total: totals.try_get("total").map_err(|_| "internal_error")?,
+        confirmed_total: totals
+            .try_get::<i64, _>("confirmed")
+            .map_err(|_| "internal_error")?
+            .to_string(),
+        page: filter.page,
+        per_page: filter.per_page,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +483,49 @@ mod tests {
         // Stellar text memos hold at most 28 bytes.
         assert_eq!(a.len(), 26);
         assert!(a.starts_with("zc") && a[2..].bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn history_filters_are_validated() {
+        let q = |f: fn(&mut HistoryQuery)| {
+            let mut q = HistoryQuery::default();
+            f(&mut q);
+            HistoryFilter::from_query(q)
+        };
+        let ok = q(|q| {
+            q.member = Some(" GMEMBER ".into());
+            q.from = Some("2026-12-01T00:00:00Z".into());
+            q.to = Some("2026-12-31T23:59:59+01:00".into());
+            q.asset = Some("XLM".into());
+            q.status = Some("Confirmed".into());
+            q.page = Some(2);
+            q.per_page = Some(50);
+        })
+        .unwrap();
+        assert_eq!(ok.member.as_deref(), Some("GMEMBER"));
+        assert_eq!(ok.asset.as_deref(), Some("native"));
+        assert_eq!(ok.status.as_deref(), Some("confirmed"));
+        assert_eq!((ok.page, ok.per_page), (2, 50));
+
+        let defaults = q(|_| {}).unwrap();
+        assert_eq!((defaults.page, defaults.per_page), (1, DEFAULT_PER_PAGE));
+
+        assert_eq!(
+            q(|q| q.from = Some("yesterday".into())),
+            Err("invalid_date")
+        );
+        assert_eq!(
+            q(|q| {
+                q.from = Some("2026-12-02T00:00:00Z".into());
+                q.to = Some("2026-12-01T00:00:00Z".into());
+            }),
+            Err("invalid_date_range")
+        );
+        assert_eq!(q(|q| q.status = Some("done".into())), Err("invalid_status"));
+        assert_eq!(q(|q| q.asset = Some("USDC".into())), Err("invalid_asset"));
+        assert_eq!(q(|q| q.member = Some("a b".into())), Err("invalid_member"));
+        assert_eq!(q(|q| q.page = Some(0)), Err("invalid_page"));
+        assert_eq!(q(|q| q.per_page = Some(101)), Err("invalid_page"));
+        assert_eq!(q(|q| q.per_page = Some(0)), Err("invalid_page"));
     }
 }

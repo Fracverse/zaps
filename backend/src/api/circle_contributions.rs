@@ -1,5 +1,5 @@
-//! Circle contribution endpoints: rules (#1203), initiation (#1205)
-//! and on-chain verification (#1207).
+//! Circle contribution endpoints: rules (#1203), initiation (#1205),
+//! on-chain verification (#1207) and history (#1208).
 //!
 //! | Method | Path                                          | Who                          |
 //! |--------|-----------------------------------------------|------------------------------|
@@ -7,6 +7,7 @@
 //! | PUT    | /api/circles/:id/contribution-rules           | owner / admin (new version)  |
 //! | GET    | /api/circles/:id/contribution-rules/versions  | members                      |
 //! | POST   | /api/circles/:id/contributions                | members                      |
+//! | GET    | /api/circles/:id/contributions                | members (see below)          |
 //! | POST   | /api/circles/:id/contributions/:cid/verify    | the contributor, owner/admin |
 //!
 //! Flow: `POST /contributions` returns the payment instructions (destination,
@@ -20,10 +21,10 @@ use crate::api::circles::{audit, CirclesState};
 use crate::services::circle_contribution_rules::{self as rules, RuleSpec};
 use crate::services::circle_contribution_verification as verification;
 use crate::services::circle_contributions::{
-    self as contributions, InitiateError, InitiateRequest,
+    self as contributions, HistoryFilter, HistoryQuery, InitiateError, InitiateRequest,
 };
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -216,6 +217,28 @@ pub async fn verify_contribution(
             }
             Json(result).into_response()
         }
+        Err(code) => error_response(code),
+    }
+}
+
+// ── History (#1208) ───────────────────────────────────────────────────────────
+
+/// GET /api/circles/:id/contributions — filters: `member`, `from`, `to`
+/// (RFC 3339), `asset`, `status`, plus `page` / `per_page`. Members see all
+/// confirmed contributions and their own records of any status; owners and
+/// admins see everything.
+pub async fn list_contributions(
+    State(state): State<CirclesState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<HistoryQuery>,
+) -> Response {
+    let filter = match HistoryFilter::from_query(query) {
+        Ok(filter) => filter,
+        Err(code) => return error_response(code),
+    };
+    match contributions::list_history(&state.pool, id, &auth.address, &filter).await {
+        Ok(page) => Json(page).into_response(),
         Err(code) => error_response(code),
     }
 }
