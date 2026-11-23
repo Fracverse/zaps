@@ -1,5 +1,5 @@
-//! Circle contribution endpoints: rules (#1203) and
-//! initiation (#1205).
+//! Circle contribution endpoints: rules (#1203), initiation (#1205)
+//! and on-chain verification (#1207).
 //!
 //! | Method | Path                                          | Who                          |
 //! |--------|-----------------------------------------------|------------------------------|
@@ -7,14 +7,18 @@
 //! | PUT    | /api/circles/:id/contribution-rules           | owner / admin (new version)  |
 //! | GET    | /api/circles/:id/contribution-rules/versions  | members                      |
 //! | POST   | /api/circles/:id/contributions                | members                      |
+//! | POST   | /api/circles/:id/contributions/:cid/verify    | the contributor, owner/admin |
 //!
-//! `POST /contributions` returns the payment instructions (destination, asset,
-//! amount and a unique text memo). Errors use the circles convention:
-//! `{ "error": "<code>" }`.
+//! Flow: `POST /contributions` returns the payment instructions (destination,
+//! asset, amount and a unique text memo). After paying on Stellar the member
+//! calls `POST /contributions/:cid/verify` with the transaction hash; only a
+//! verified payment is credited to the circle. Errors use the circles
+//! convention: `{ "error": "<code>" }`.
 
 use crate::api::auth_middleware::AuthenticatedUser;
 use crate::api::circles::{audit, CirclesState};
 use crate::services::circle_contribution_rules::{self as rules, RuleSpec};
+use crate::services::circle_contribution_verification as verification;
 use crate::services::circle_contributions::{
     self as contributions, InitiateError, InitiateRequest,
 };
@@ -25,13 +29,17 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use serde::Deserialize;
 use uuid::Uuid;
 
 fn error_response(code: &'static str) -> Response {
     let status = match code {
-        "circle_not_found" => StatusCode::NOT_FOUND,
+        "circle_not_found" | "contribution_not_found" => StatusCode::NOT_FOUND,
         "not_member" | "permission_denied" => StatusCode::FORBIDDEN,
-        "duplicate_contribution" | "circle_not_accepting_contributions" => StatusCode::CONFLICT,
+        "duplicate_contribution"
+        | "tx_already_used"
+        | "contribution_closed"
+        | "circle_not_accepting_contributions" => StatusCode::CONFLICT,
         "internal_error" => StatusCode::INTERNAL_SERVER_ERROR,
         _ => StatusCode::BAD_REQUEST,
     };
@@ -136,5 +144,78 @@ pub async fn initiate_contribution(
         )
             .into_response(),
         Err(InitiateError::Rejected(code)) => error_response(code),
+    }
+}
+
+// ── Verification (#1207) ──────────────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyRequest {
+    /// Hash of the Stellar transaction that paid the contribution. Optional
+    /// when re-checking a contribution whose hash was already submitted.
+    #[serde(default)]
+    pub tx_hash: Option<String>,
+}
+
+/// POST /api/circles/:id/contributions/:cid/verify — check the payment on
+/// Stellar. The response `status` is `confirmed`, `failed`, or `submitted`
+/// (the network does not know the transaction yet: try again later).
+pub async fn verify_contribution(
+    State(state): State<CirclesState>,
+    Extension(auth): Extension<AuthenticatedUser>,
+    Path((id, contribution_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<VerifyRequest>,
+) -> Response {
+    let result = verification::verify_contribution(
+        &state.pool,
+        state.chain.as_ref(),
+        id,
+        contribution_id,
+        &auth.address,
+        req.tx_hash.as_deref(),
+    )
+    .await;
+    match result {
+        Ok(result) => {
+            match result.outcome {
+                "confirmed" if result.newly_confirmed => {
+                    audit(
+                        &state.pool,
+                        id,
+                        &auth.address,
+                        "contribution_confirmed",
+                        &contribution_id.to_string(),
+                        serde_json::json!({ "amount": result.contribution.amount }),
+                    )
+                    .await;
+                    // Authorised subscribers learn about the credit only now.
+                    state.hub.publish(
+                        id,
+                        "contribution.confirmed",
+                        serde_json::json!({
+                            "circle_id": id,
+                            "contribution_id": contribution_id,
+                            "member": result.contribution.member_address,
+                        }),
+                        false,
+                    );
+                }
+                "failed" => {
+                    audit(
+                        &state.pool,
+                        id,
+                        &auth.address,
+                        "contribution_failed",
+                        &contribution_id.to_string(),
+                        serde_json::json!({ "reason": result.reason }),
+                    )
+                    .await;
+                }
+                _ => {}
+            }
+            Json(result).into_response()
+        }
+        Err(code) => error_response(code),
     }
 }

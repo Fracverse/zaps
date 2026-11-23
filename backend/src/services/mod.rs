@@ -2,6 +2,7 @@ pub mod allbridge;
 pub mod auth;
 pub mod circle_audit;
 pub mod circle_contribution_rules;
+pub mod circle_contribution_verification;
 pub mod circle_contributions;
 pub mod circle_goals;
 pub mod circle_invitations;

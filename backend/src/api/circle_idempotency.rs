@@ -36,9 +36,18 @@ fn key_from_headers(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// #1205: the contribution initiation endpoint.
+/// #1205 / #1207: the contribution pipeline's write endpoints.
 fn contribution_operation(method: &Method, path: &str) -> Option<&'static str> {
-    (method == Method::POST && path.ends_with("/contributions")).then_some("contribution_initiate")
+    if method != Method::POST || !path.contains("/contributions") {
+        return None;
+    }
+    if path.ends_with("/verify") {
+        Some("contribution_verify")
+    } else if path.ends_with("/contributions") {
+        Some("contribution_initiate")
+    } else {
+        None
+    }
 }
 
 fn operation_for(path: &str) -> Option<&'static str> {
@@ -290,10 +299,14 @@ mod tests {
             Some("payout_approve")
         );
         assert_eq!(operation_for("/api/circles/search"), None);
-        // #1205: only POST /contributions is an idempotent write.
+        // #1205 / #1207: only the POST writes of the contribution pipeline.
         assert_eq!(
             contribution_operation(&Method::POST, "/api/circles/1/contributions"),
             Some("contribution_initiate")
+        );
+        assert_eq!(
+            contribution_operation(&Method::POST, "/api/circles/1/contributions/2/verify"),
+            Some("contribution_verify")
         );
         assert_eq!(
             contribution_operation(&Method::GET, "/api/circles/1/contributions"),

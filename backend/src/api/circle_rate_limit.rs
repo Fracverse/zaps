@@ -71,6 +71,8 @@ impl CircleRateLimitConfig {
             || path.contains("/payout")
             || path.contains("/approve")
             || path.contains("/transaction")
+            // #1207: every verification call queries Horizon.
+            || (path.contains("/contributions/") && path.ends_with("/verify"))
         {
             ("financial", self.financial)
         } else if path.contains("/search") || path.contains("/discover") {
@@ -207,6 +209,12 @@ mod tests {
         let config = CircleRateLimitConfig::from_env();
         assert!(config.financial <= config.general);
         assert_eq!(config.for_path("/api/circles/1/contribute").0, "financial");
+        assert_eq!(
+            config.for_path("/api/circles/1/contributions/2/verify").0,
+            "financial"
+        );
+        assert_eq!(config.for_path("/api/circles/1/audit/verify").0, "general");
+        assert_eq!(config.for_path("/api/circles/1/contributions").0, "general");
         assert_eq!(config.for_path("/api/circles/search").0, "search");
         assert_eq!(config.for_path("/api/circles/1/comments").0, "social");
         assert_eq!(config.for_path("/api/circles/1").0, "general");

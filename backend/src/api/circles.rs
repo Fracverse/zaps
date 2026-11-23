@@ -91,6 +91,7 @@
 
 use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::circle_audit;
+use crate::services::circle_contribution_verification::{ChainSource, HorizonClient};
 use crate::services::circle_goals;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
@@ -123,13 +124,20 @@ pub struct CirclesState {
     pub pool: PgPool,
     /// #1225: fan-out point for real-time circle events.
     pub hub: crate::api::circle_events::CircleEventHub,
+    /// #1207: where contribution verification reads Stellar transactions from.
+    pub chain: std::sync::Arc<dyn ChainSource>,
 }
 
 impl CirclesState {
     pub fn new(pool: PgPool) -> Self {
+        Self::with_chain(pool, std::sync::Arc::new(HorizonClient::from_env()))
+    }
+
+    pub fn with_chain(pool: PgPool, chain: std::sync::Arc<dyn ChainSource>) -> Self {
         Self {
             pool,
             hub: crate::api::circle_events::CircleEventHub::default(),
+            chain,
         }
     }
 }
