@@ -1133,10 +1133,13 @@ pub async fn contribute(
     };
 
     let contribution_id = Uuid::new_v4();
+    // Legacy behaviour, unchanged: this endpoint credits the balance below
+    // without an on-chain check. The status is stated explicitly because the
+    // column default is `pending` (new rows must be verified before they count).
     let insert = sqlx::query!(
         r#"
-        INSERT INTO circle_contributions (id, circle_id, member_address, amount, tx_hash)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO circle_contributions (id, circle_id, member_address, amount, tx_hash, status)
+        VALUES ($1, $2, $3, $4, $5, 'confirmed')
         "#,
         contribution_id,
         id,
