@@ -95,6 +95,7 @@ use crate::services::circle_goals;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
 use crate::services::circle_payout_execution as payout_execution;
+use crate::services::circle_reactions;
 use crate::services::circle_scheduler::{self, UpdateReminderPreferencesRequest};
 use crate::services::circle_settings::{self, UpdateCircleSettingsRequest};
 use crate::services::circle_sharing;
@@ -3126,6 +3127,125 @@ pub async fn mark_all_notifications_read(
 ) -> impl IntoResponse {
     match circle_notifier::mark_all_read(&state.pool, &auth.address).await {
         Ok(updated) => Json(serde_json::json!({ "updated": updated })).into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+// ── #1215: Circle reactions ──────────────────────────────────────────────────
+
+/// POST /api/circles/:id/activities/:activity_id/reactions — add or update a reaction.
+pub async fn add_reaction(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((circle_id, activity_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<circle_reactions::ReactionRequest>,
+) -> impl IntoResponse {
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        circle_id,
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    if !is_member {
+        return forbidden("not_member").into_response();
+    }
+
+    match circle_reactions::add_or_update_reaction(
+        &state.pool,
+        circle_id,
+        "activity",
+        activity_id,
+        &auth.address,
+        &req.emoji,
+    )
+    .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "ok", "emoji": req.emoji })),
+        )
+            .into_response(),
+        Err("invalid_emoji") => err("invalid_emoji").into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// DELETE /api/circles/:id/activities/:activity_id/reactions — remove a reaction.
+pub async fn remove_reaction(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((circle_id, activity_id)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        circle_id,
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    if !is_member {
+        return forbidden("not_member").into_response();
+    }
+
+    match circle_reactions::remove_reaction(
+        &state.pool,
+        circle_id,
+        "activity",
+        activity_id,
+        &auth.address,
+    )
+    .await
+    {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => not_found("reaction_not_found").into_response(),
+        Err(_) => internal().into_response(),
+    }
+}
+
+/// GET /api/circles/:id/activities/:activity_id/reactions — list reaction counts.
+pub async fn list_reactions(
+    State(state): State<CirclesState>,
+    auth: AuthenticatedUser,
+    Path((circle_id, activity_id)): Path<(Uuid, Uuid)>,
+) -> impl IntoResponse {
+    let is_member = sqlx::query_scalar!(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND address = $2",
+        circle_id,
+        auth.address
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None)
+    .is_some();
+
+    if !is_member {
+        return forbidden("not_member").into_response();
+    }
+
+    match circle_reactions::get_reaction_counts(
+        &state.pool,
+        circle_id,
+        "activity",
+        activity_id,
+        Some(&auth.address),
+    )
+    .await
+    {
+        Ok(reactions) => {
+            let total: i64 = reactions.iter().map(|r| r.count).sum();
+            Json(serde_json::json!({
+                "reactions": reactions,
+                "total": total,
+            }))
+            .into_response()
+        }
         Err(_) => internal().into_response(),
     }
 }
