@@ -497,3 +497,230 @@ fn test_claim_admin_without_proposal_fails() {
     client.claim_admin(&new_admin);
 }
 
+// ── Additional Test Coverage ────────────────────────────────────────────────
+
+/// Verify that username validation rejects various invalid formats:
+/// uppercase letters, underscores, hyphens, symbols, and lengths outside [3, 15].
+#[test]
+#[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
+fn test_username_validation_rejects_invalid_formats() {
+    let (env, client, _signing_key) = setup();
+    let user = Address::generate(&env);
+
+    // Too short (less than 3 characters)
+    let result = client.try_register_user(&user, &String::from_str(&env, "ab"));
+    assert!(result.is_err(), "username with 2 chars must be rejected");
+
+    // Too long (more than 15 characters)
+    let result = client.try_register_user(&user, &String::from_str(&env, "abcdefghijklmnop"));
+    assert!(result.is_err(), "username with 16 chars must be rejected");
+
+    // Contains uppercase letter
+    let result = client.try_register_user(&user, &String::from_str(&env, "userName"));
+    assert!(result.is_err(), "username with uppercase must be rejected");
+
+    // Contains underscore
+    let result = client.try_register_user(&user, &String::from_str(&env, "user_name"));
+    assert!(result.is_err(), "username with underscore must be rejected");
+
+    // Contains hyphen
+    let result = client.try_register_user(&user, &String::from_str(&env, "user-name"));
+    assert!(result.is_err(), "username with hyphen must be rejected");
+
+    // Contains space
+    let result = client.try_register_user(&user, &String::from_str(&env, "user name"));
+    assert!(result.is_err(), "username with space must be rejected");
+
+    // Contains special character
+    let result = client.try_register_user(&user, &String::from_str(&env, "user@name"));
+    assert!(result.is_err(), "username with @ symbol must be rejected");
+}
+
+/// Verify that admin can configure reservation token and amount,
+/// and that the config is persisted correctly.
+#[test]
+fn test_set_reservation_config_success() {
+    let (env, client, _signing_key) = setup();
+    let token_address = Address::generate(&env);
+    let amount: i128 = 1000;
+
+    // Admin must be able to set the config
+    let admin = env
+        .as_contract(&client.address, || {
+            env.storage()
+                .persistent()
+                .get::<_, Address>(&DataKey::Admin)
+                .unwrap()
+        });
+
+    client.set_reservation_config(&token_address, &amount);
+
+    // Verify the config was stored correctly
+    env.as_contract(&client.address, || {
+        let stored_token: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReservationToken)
+            .unwrap();
+        let stored_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReservationAmount)
+            .unwrap();
+
+        assert_eq!(stored_token, token_address, "reservation token must be stored");
+        assert_eq!(stored_amount, amount, "reservation amount must be stored");
+    });
+}
+
+/// Verify that profile update releases the reservation deposit on first call,
+/// and subsequent calls don't attempt to release it again.
+#[test]
+fn test_profile_update_releases_reservation_deposit_once() {
+    let (env, client, _signing_key) = setup();
+    let user = Address::generate(&env);
+    let username = String::from_str(&env, "testuser");
+    let avatar_uri = String::from_str(&env, "ipfs://avatar123");
+
+    // Set up reservation config (with zero amount to avoid token transfer)
+    let token_address = Address::generate(&env);
+    client.set_reservation_config(&token_address, &0);
+
+    // Register user (this creates a deposit entry even if amount is 0)
+    client.register_user(&user, &username);
+
+    // Manually set a non-zero deposit to simulate a real reservation
+    let deposit_amount: i128 = 500;
+    env.as_contract(&client.address, || {
+        env.storage().persistent().set(
+            &DataKey::UserDeposit(user.clone()),
+            &deposit_amount,
+        );
+    });
+
+    // First profile update should release the deposit
+    client.update_profile(&user, &avatar_uri.clone());
+
+    // Verify deposit was cleared
+    env.as_contract(&client.address, || {
+        let remaining_deposit: Option<i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::UserDeposit(user.clone()));
+        assert!(
+            remaining_deposit.is_none(),
+            "deposit must be cleared after first profile update"
+        );
+    });
+
+    // Second profile update should not panic or fail
+    let avatar_uri2 = String::from_str(&env, "ipfs://avatar456");
+    client.update_profile(&user, &avatar_uri2);
+
+    // Verify avatar was updated
+    assert_eq!(
+        client.get_avatar(&user),
+        avatar_uri2,
+        "avatar must be updated on second call"
+    );
+}
+
+/// Verify that register_privy_did rejects DIDs with invalid formats:
+/// missing prefix, too short, or containing invalid characters.
+#[test]
+#[ignore = "contract panics are non-unwinding under Soroban v20 testutils and abort the test process"]
+fn test_register_privy_did_validates_did_format() {
+    let (env, client, signing_key) = setup();
+    let wallet = Address::generate(&env);
+
+    // Invalid: missing "did:privy:" prefix
+    let invalid_did = String::from_str(&env, "privy:user123");
+    let signature = sign_did_link(&env, &signing_key, &invalid_did, &wallet);
+    let result = client.try_register_privy_did(&invalid_did, &wallet, &signature);
+    assert!(result.is_err(), "DID without proper prefix must be rejected");
+
+    // Invalid: too short (less than "did:privy:" + 1 character)
+    let short_did = String::from_str(&env, "did:privy:");
+    let signature = sign_did_link(&env, &signing_key, &short_did, &wallet);
+    let result = client.try_register_privy_did(&short_did, &wallet, &signature);
+    assert!(result.is_err(), "DID that is too short must be rejected");
+
+    // Invalid: contains invalid characters (space)
+    let invalid_chars_did = String::from_str(&env, "did:privy:user 123");
+    let signature = sign_did_link(&env, &signing_key, &invalid_chars_did, &wallet);
+    let result = client.try_register_privy_did(&invalid_chars_did, &wallet, &signature);
+    assert!(
+        result.is_err(),
+        "DID with invalid characters must be rejected"
+    );
+
+    // Invalid: contains invalid characters (special symbols)
+    let symbol_did = String::from_str(&env, "did:privy:user@123");
+    let signature = sign_did_link(&env, &signing_key, &symbol_did, &wallet);
+    let result = client.try_register_privy_did(&symbol_did, &wallet, &signature);
+    assert!(
+        result.is_err(),
+        "DID with special symbols must be rejected"
+    );
+}
+
+/// Verify that unlink_privy_did removes the bidirectional DID <-> wallet mapping
+/// and publishes the appropriate event for off-chain indexers.
+///
+/// Issue #984: users can unlink their Privy DID from their wallet.
+#[test]
+fn test_unlink_privy_did_removes_mapping_and_publishes_event() {
+    let (env, client, signing_key) = setup();
+    let wallet = Address::generate(&env);
+    let did = String::from_str(&env, "did:privy:unlinktest");
+    let signature = sign_did_link(&env, &signing_key, &did, &wallet);
+
+    // Register the DID first
+    client.register_privy_did(&did, &wallet, &signature);
+
+    // Verify it's registered
+    assert_eq!(
+        client.get_wallet_for_did(&did),
+        wallet,
+        "DID must be registered before unlinking"
+    );
+    assert_eq!(
+        client.get_did_for_wallet(&wallet),
+        did,
+        "reverse lookup must work before unlinking"
+    );
+
+    // Unlink the DID
+    client.unlink_privy_did(&did, &wallet);
+
+    // Verify both forward and reverse mappings are removed
+    env.as_contract(&client.address, || {
+        assert!(
+            !env.storage()
+                .persistent()
+                .has(&DataKey::PrivyDid(did.clone())),
+            "forward DID mapping must be removed"
+        );
+        assert!(
+            !env.storage()
+                .persistent()
+                .has(&DataKey::WalletDid(wallet.clone())),
+            "reverse wallet mapping must be removed"
+        );
+    });
+
+    // Verify event was published
+    let events = env.events().all();
+    let unlink_event_exists = events.iter().any(|e| {
+        if let Some(topic) = e.1.first() {
+            topic.to_string().contains("PrivyLinkRemoved")
+        } else {
+            false
+        }
+    });
+    assert!(
+        unlink_event_exists,
+        "PrivyLinkRemoved event must be published for off-chain indexers"
+    );
+}
+
