@@ -7,9 +7,15 @@
 //!   verification helpers used by financial actions.
 //! - Issue 75: on-chain roles (`Owner`, `Admin`, `Member`), permission gates,
 //!   role-change events and administrative recovery paths.
+//! - Issue 79: member contributions with asset and rule enforcement, verified
+//!   token transfers, contribution records and accounting.
+//!
+//! The contract instance is both the circle and its vault, so the contract
+//! address doubles as the circle ID.
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, IntoVal, String,
+    Symbol, Val, Vec,
 };
 
 #[cfg(test)]
@@ -43,9 +49,20 @@ enum DataKey {
     PendingOwner,
     Recovery,
     WithdrawalCount,
+    Active,
+    ContributionRules,
+    ContributionCount,
     // ── Persistent storage ──
     Member(Address),
     Withdrawal(u64),
+    /// Contribution record by ID.
+    Contribution(u64),
+    /// Lifetime amount contributed by (member, asset).
+    MemberContributed(Address, Address),
+    /// Lifetime amount contributed to the circle per asset.
+    TotalContributed(Address),
+    /// Contributions a member made in the latest round they took part in.
+    RoundUsage(Address),
 }
 
 /// On-chain role held by a circle participant.
@@ -88,6 +105,48 @@ pub struct CircleSettings {
     pub contribution_amount: i128,
     /// Largest amount a single withdrawal authorization may cover.
     pub max_withdrawal: i128,
+}
+
+/// Rules every contribution must satisfy. Until the owner sets them explicitly,
+/// each contribution must equal `CircleSettings::contribution_amount` and no
+/// schedule applies.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContributionRules {
+    /// Smallest amount a single contribution may carry (inclusive).
+    pub min_amount: i128,
+    /// Largest amount a single contribution may carry (inclusive).
+    pub max_amount: i128,
+    /// Timestamp from which contributions are accepted (inclusive).
+    pub starts_at: u64,
+    /// Timestamp at which contributions close (exclusive); 0 for no end.
+    pub ends_at: u64,
+    /// Round length in seconds; 0 treats the whole schedule as one round.
+    pub round_secs: u64,
+    /// Contributions a member may make per round; 0 for no limit.
+    pub max_per_round: u32,
+}
+
+/// Number of contributions a member made in the round starting at `round_start`.
+#[contracttype]
+#[derive(Clone)]
+struct RoundUsage {
+    round_start: u64,
+    count: u32,
+}
+
+/// A settled contribution. Also the data payload of `ContributionReceived`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContributionRecord {
+    pub id: u64,
+    pub contributor: Address,
+    pub asset: Address,
+    pub amount: i128,
+    /// Start timestamp of the round the contribution counts towards.
+    pub round_start: u64,
+    pub timestamp: u64,
+    pub ledger: u32,
 }
 
 /// A pending, timelocked request by an `Admin` to take over ownership.
@@ -158,6 +217,20 @@ pub enum Error {
     InvalidTarget = 21,
     /// A counter overflowed.
     Overflow = 22,
+    /// Contribution rules are inconsistent (amount bounds or schedule).
+    InvalidContributionRules = 23,
+    /// The circle is not accepting contributions.
+    CircleInactive = 24,
+    /// Contribution is below `min_amount`.
+    ContributionBelowMinimum = 25,
+    /// Contribution is above `max_amount`.
+    ContributionAboveMaximum = 26,
+    /// Contribution is outside the scheduled contribution window.
+    ContributionWindowClosed = 27,
+    /// The member already made `max_per_round` contributions this round.
+    RoundLimitReached = 28,
+    /// The token transfer failed or did not deliver the full amount.
+    TransferFailed = 29,
 }
 
 #[contract]
@@ -304,6 +377,127 @@ impl CirclesContract {
             assets.len(),
         );
         Ok(())
+    }
+
+    /// Replace the contribution rules.
+    pub fn set_contribution_rules(
+        env: Env,
+        caller: Address,
+        rules: ContributionRules,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_permission(&env, &caller, Permission::ModifyFinancialRules)?;
+        Self::validate_contribution_rules(&rules)?;
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ContributionRules, &rules);
+        Self::extend_instance(&env);
+        env.events().publish(
+            (Symbol::new(&env, "ContributionRulesUpdated"), caller),
+            rules,
+        );
+        Ok(())
+    }
+
+    /// Rules in force: the owner's explicit rules, or the defaults derived from
+    /// the circle settings.
+    pub fn get_contribution_rules(env: Env) -> Result<ContributionRules, Error> {
+        let stored: Option<ContributionRules> =
+            env.storage().instance().get(&DataKey::ContributionRules);
+        match stored {
+            Some(rules) => Ok(rules),
+            None => {
+                let amount = Self::get_settings(env)?.contribution_amount;
+                Ok(ContributionRules {
+                    min_amount: amount,
+                    max_amount: amount,
+                    starts_at: 0,
+                    ends_at: 0,
+                    round_secs: 0,
+                    max_per_round: 0,
+                })
+            }
+        }
+    }
+
+    /// Open (`true`) or close (`false`) the circle for contributions.
+    pub fn set_active(env: Env, caller: Address, active: bool) -> Result<(), Error> {
+        caller.require_auth();
+        Self::require_permission(&env, &caller, Permission::ModifyFinancialRules)?;
+
+        env.storage().instance().set(&DataKey::Active, &active);
+        Self::extend_instance(&env);
+        env.events()
+            .publish((Symbol::new(&env, "CircleStatusChanged"), caller), active);
+        Ok(())
+    }
+
+    /// An initialized circle is active unless the owner closed it.
+    pub fn is_active(env: Env) -> bool {
+        let storage = env.storage().instance();
+        storage.has(&DataKey::Owner) && storage.get(&DataKey::Active).unwrap_or(true)
+    }
+
+    // ─── Issue 79: contributions ────────────────────────────────────────────
+
+    /// Contribute `amount` of `asset` to the circle and return the contribution
+    /// ID. The contributor must be a member and authorize the call, including
+    /// the nested token transfer.
+    ///
+    /// Records and accounting are written only after the transfer has been
+    /// verified; any error reverts the whole invocation.
+    pub fn contribute(
+        env: Env,
+        contributor: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<u64, Error> {
+        contributor.require_auth();
+        Self::require_member(&env, &contributor)?;
+        if !Self::is_active(env.clone()) {
+            return Err(Error::CircleInactive);
+        }
+        if !Self::is_supported_asset(env.clone(), asset.clone()) {
+            return Err(Error::UnsupportedAsset);
+        }
+        let round_start = Self::check_contribution_rules(&env, &contributor, amount)?;
+
+        Self::collect_tokens(&env, &contributor, &asset, amount)?;
+
+        let record = Self::record_contribution(&env, &contributor, &asset, amount, round_start)?;
+        let id = record.id;
+        env.events().publish(
+            (
+                Symbol::new(&env, "ContributionReceived"),
+                env.current_contract_address(),
+                contributor,
+            ),
+            record,
+        );
+        Ok(id)
+    }
+
+    pub fn get_contribution(env: Env, id: u64) -> Option<ContributionRecord> {
+        env.storage().persistent().get(&DataKey::Contribution(id))
+    }
+
+    /// Number of contributions recorded; IDs run from 1 to this value.
+    pub fn contribution_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ContributionCount)
+            .unwrap_or(0)
+    }
+
+    /// Lifetime amount of `asset` contributed by `member`.
+    pub fn member_contributed(env: Env, member: Address, asset: Address) -> i128 {
+        Self::read_amount(&env, &DataKey::MemberContributed(member, asset))
+    }
+
+    /// Lifetime amount of `asset` contributed to the circle.
+    pub fn total_contributed(env: Env, asset: Address) -> i128 {
+        Self::read_amount(&env, &DataKey::TotalContributed(asset))
     }
 
     // ─── Issue 74: membership ───────────────────────────────────────────────
@@ -767,6 +961,153 @@ impl CirclesContract {
             }
         }
         Ok(())
+    }
+
+    fn validate_contribution_rules(rules: &ContributionRules) -> Result<(), Error> {
+        let bounds_ok = rules.min_amount > 0 && rules.max_amount >= rules.min_amount;
+        let window_ok = rules.ends_at == 0 || rules.ends_at > rules.starts_at;
+        if !bounds_ok || !window_ok {
+            return Err(Error::InvalidContributionRules);
+        }
+        Ok(())
+    }
+
+    /// Enforce amount bounds, schedule and per-round limit. Returns the start
+    /// of the round the contribution belongs to.
+    fn check_contribution_rules(
+        env: &Env,
+        contributor: &Address,
+        amount: i128,
+    ) -> Result<u64, Error> {
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let rules = Self::get_contribution_rules(env.clone())?;
+        if amount < rules.min_amount {
+            return Err(Error::ContributionBelowMinimum);
+        }
+        if amount > rules.max_amount {
+            return Err(Error::ContributionAboveMaximum);
+        }
+
+        let round_start = Self::current_round_start(env, &rules)?;
+        if rules.max_per_round > 0
+            && Self::round_count(env, contributor, round_start) >= rules.max_per_round
+        {
+            return Err(Error::RoundLimitReached);
+        }
+        Ok(round_start)
+    }
+
+    fn current_round_start(env: &Env, rules: &ContributionRules) -> Result<u64, Error> {
+        let now = env.ledger().timestamp();
+        if now < rules.starts_at || (rules.ends_at != 0 && now >= rules.ends_at) {
+            return Err(Error::ContributionWindowClosed);
+        }
+        if rules.round_secs == 0 {
+            return Ok(rules.starts_at);
+        }
+        let elapsed = now.checked_sub(rules.starts_at).ok_or(Error::Overflow)?;
+        now.checked_sub(elapsed % rules.round_secs)
+            .ok_or(Error::Overflow)
+    }
+
+    /// Contributions `member` already made in the round starting at
+    /// `round_start`. Usage from any other round does not count.
+    fn round_count(env: &Env, member: &Address, round_start: u64) -> u32 {
+        let usage: Option<RoundUsage> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RoundUsage(member.clone()));
+        match usage {
+            Some(usage) if usage.round_start == round_start => usage.count,
+            _ => 0,
+        }
+    }
+
+    /// Pull `amount` of `asset` from `contributor` into the circle and verify
+    /// that the full amount arrived.
+    fn collect_tokens(
+        env: &Env,
+        contributor: &Address,
+        asset: &Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        let vault = env.current_contract_address();
+        let client = token::Client::new(env, asset);
+        let before = client.balance(&vault);
+        match client.try_transfer(contributor, &vault, &amount) {
+            Ok(Ok(())) => {}
+            _ => return Err(Error::TransferFailed),
+        }
+        let received = client
+            .balance(&vault)
+            .checked_sub(before)
+            .ok_or(Error::Overflow)?;
+        if received != amount {
+            return Err(Error::TransferFailed);
+        }
+        Ok(())
+    }
+
+    /// Persist the record and accounting of a settled contribution. Every new
+    /// value is computed before the first write.
+    fn record_contribution(
+        env: &Env,
+        contributor: &Address,
+        asset: &Address,
+        amount: i128,
+        round_start: u64,
+    ) -> Result<ContributionRecord, Error> {
+        let member_key = DataKey::MemberContributed(contributor.clone(), asset.clone());
+        let total_key = DataKey::TotalContributed(asset.clone());
+
+        let id = Self::contribution_count(env.clone())
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+        let member_total = Self::read_amount(env, &member_key)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        let circle_total = Self::read_amount(env, &total_key)
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        let count = Self::round_count(env, contributor, round_start)
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
+
+        let record = ContributionRecord {
+            id,
+            contributor: contributor.clone(),
+            asset: asset.clone(),
+            amount,
+            round_start,
+            timestamp: env.ledger().timestamp(),
+            ledger: env.ledger().sequence(),
+        };
+        Self::write_persistent(env, &DataKey::Contribution(id), &record);
+        Self::write_persistent(env, &member_key, &member_total);
+        Self::write_persistent(env, &total_key, &circle_total);
+        Self::write_persistent(
+            env,
+            &DataKey::RoundUsage(contributor.clone()),
+            &RoundUsage { round_start, count },
+        );
+        env.storage()
+            .instance()
+            .set(&DataKey::ContributionCount, &id);
+        Self::extend_instance(env);
+        Ok(record)
+    }
+
+    fn read_amount(env: &Env, key: &DataKey) -> i128 {
+        env.storage().persistent().get(key).unwrap_or(0)
+    }
+
+    fn write_persistent<V: IntoVal<Env, Val>>(env: &Env, key: &DataKey, value: &V) {
+        env.storage().persistent().set(key, value);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, TTL_THRESHOLD, TTL_EXTEND_TO);
     }
 
     fn extend_instance(env: &Env) {

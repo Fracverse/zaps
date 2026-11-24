@@ -1,5 +1,5 @@
-//! Unit tests for circle initialization (Issue 73), membership (Issue 74) and
-//! role management (Issue 75).
+//! Unit tests for circle initialization (Issue 73), membership (Issue 74),
+//! role management (Issue 75) and contributions (Issue 79).
 
 use super::*;
 use soroban_sdk::{
@@ -865,4 +865,458 @@ fn removing_recovery_candidate_clears_request() {
     ctx.client.initiate_recovery(&ctx.admin);
     ctx.client.remove_member(&ctx.owner, &ctx.admin);
     assert_eq!(ctx.client.get_recovery(), None);
+}
+
+// ─── Issue 79: contributions ────────────────────────────────────────────────
+
+const FUNDS: i128 = 10_000;
+
+mod skimming_token {
+    use soroban_sdk::{contract, contractimpl, Address, Env};
+
+    /// Token that reports success but delivers one unit less than requested.
+    #[contract]
+    pub struct SkimmingToken;
+
+    #[contractimpl]
+    impl SkimmingToken {
+        pub fn balance(env: Env, id: Address) -> i128 {
+            env.storage().persistent().get(&id).unwrap_or(0)
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let balance = Self::balance(env.clone(), to.clone()) + amount - 1;
+            env.storage().persistent().set(&to, &balance);
+        }
+    }
+}
+
+/// Circle supporting one real token, with a member holding FUNDS of it.
+fn setup_contributions() -> (Ctx, Address) {
+    let mut ctx = setup();
+    let member = new_member(&ctx);
+    ctx.asset = ctx
+        .env
+        .register_stellar_asset_contract(Address::generate(&ctx.env));
+    ctx.client
+        .set_supported_assets(&ctx.owner, &vec![&ctx.env, ctx.asset.clone()]);
+    mint(&ctx, &member, FUNDS);
+    (ctx, member)
+}
+
+fn mint(ctx: &Ctx, to: &Address, amount: i128) {
+    token::StellarAssetClient::new(&ctx.env, &ctx.asset).mint(to, &amount);
+}
+
+fn balance(ctx: &Ctx, account: &Address) -> i128 {
+    token::Client::new(&ctx.env, &ctx.asset).balance(account)
+}
+
+fn set_time(env: &Env, timestamp: u64) {
+    env.ledger().with_mut(|li| {
+        li.timestamp = timestamp;
+    });
+}
+
+fn bounds(min_amount: i128, max_amount: i128) -> ContributionRules {
+    ContributionRules {
+        min_amount,
+        max_amount,
+        starts_at: 0,
+        ends_at: 0,
+        round_secs: 0,
+        max_per_round: 0,
+    }
+}
+
+/// Assert that nothing was recorded, accounted for or announced.
+fn assert_no_contributions(ctx: &Ctx, member: &Address, asset: &Address) {
+    assert_eq!(ctx.client.contribution_count(), 0);
+    assert_eq!(ctx.client.get_contribution(&1), None);
+    assert_eq!(ctx.client.member_contributed(member, asset), 0);
+    assert_eq!(ctx.client.total_contributed(asset), 0);
+    assert!(find_event(&ctx.env, "ContributionReceived").is_none());
+}
+
+#[test]
+fn member_contribution_moves_funds_and_updates_accounting() {
+    let (ctx, member) = setup_contributions();
+    set_time(&ctx.env, 1_234);
+
+    let id = ctx.client.contribute(&member, &ctx.asset, &CONTRIBUTION);
+    assert_eq!(id, 1);
+    assert_eq!(balance(&ctx, &member), FUNDS - CONTRIBUTION);
+    assert_eq!(balance(&ctx, &ctx.client.address), CONTRIBUTION);
+    assert_eq!(
+        ctx.client.get_contribution(&id),
+        Some(ContributionRecord {
+            id,
+            contributor: member.clone(),
+            asset: ctx.asset.clone(),
+            amount: CONTRIBUTION,
+            round_start: 0,
+            timestamp: 1_234,
+            ledger: ctx.env.ledger().sequence(),
+        })
+    );
+
+    // Admins and the owner are members too; totals stay separate per member.
+    mint(&ctx, &ctx.admin, FUNDS);
+    let id = ctx.client.contribute(&ctx.admin, &ctx.asset, &CONTRIBUTION);
+    assert_eq!(id, 2);
+    ctx.client.contribute(&member, &ctx.asset, &CONTRIBUTION);
+
+    assert_eq!(ctx.client.contribution_count(), 3);
+    assert_eq!(
+        ctx.client.member_contributed(&member, &ctx.asset),
+        2 * CONTRIBUTION
+    );
+    assert_eq!(
+        ctx.client.member_contributed(&ctx.admin, &ctx.asset),
+        CONTRIBUTION
+    );
+    assert_eq!(ctx.client.total_contributed(&ctx.asset), 3 * CONTRIBUTION);
+    assert_eq!(balance(&ctx, &ctx.client.address), 3 * CONTRIBUTION);
+}
+
+#[test]
+fn contributions_are_accounted_per_asset() {
+    let (mut ctx, member) = setup_contributions();
+    let first = ctx.asset.clone();
+    let second = ctx
+        .env
+        .register_stellar_asset_contract(Address::generate(&ctx.env));
+    ctx.client
+        .set_supported_assets(&ctx.owner, &vec![&ctx.env, first.clone(), second.clone()]);
+    ctx.asset = second.clone();
+    mint(&ctx, &member, FUNDS);
+
+    ctx.client.contribute(&member, &first, &CONTRIBUTION);
+    assert_eq!(ctx.client.member_contributed(&member, &first), CONTRIBUTION);
+    assert_eq!(ctx.client.member_contributed(&member, &second), 0);
+    assert_eq!(ctx.client.total_contributed(&second), 0);
+
+    ctx.client.contribute(&member, &second, &CONTRIBUTION);
+    assert_eq!(ctx.client.total_contributed(&first), CONTRIBUTION);
+    assert_eq!(ctx.client.total_contributed(&second), CONTRIBUTION);
+}
+
+#[test]
+fn contribution_emits_structured_event() {
+    let (ctx, member) = setup_contributions();
+    set_time(&ctx.env, 777);
+    let id = ctx.client.contribute(&member, &ctx.asset, &CONTRIBUTION);
+
+    let topics: Vec<Val> = (
+        Symbol::new(&ctx.env, "ContributionReceived"),
+        ctx.client.address.clone(),
+        member.clone(),
+    )
+        .into_val(&ctx.env);
+    let mut payload = None;
+    for item in ctx.env.events().all().iter() {
+        if item.0 == ctx.client.address && item.1 == topics {
+            payload = Some(item.2);
+        }
+    }
+
+    let data = payload.expect("ContributionReceived not emitted");
+    let record: ContributionRecord = data.try_into_val(&ctx.env).unwrap();
+    assert_eq!(
+        record,
+        ContributionRecord {
+            id,
+            contributor: member,
+            asset: ctx.asset.clone(),
+            amount: CONTRIBUTION,
+            round_start: 0,
+            timestamp: 777,
+            ledger: ctx.env.ledger().sequence(),
+        }
+    );
+}
+
+#[test]
+fn contribution_requires_contributor_auth() {
+    let (ctx, member) = setup_contributions();
+
+    ctx.client.contribute(&member, &ctx.asset, &CONTRIBUTION);
+    let auths = ctx.env.auths();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(auths[0].0, member);
+    // The token transfer is covered by the same authorization tree.
+    assert_eq!(auths[0].1.sub_invocations.len(), 1);
+
+    ctx.env.mock_auths(&[]);
+    assert!(ctx
+        .client
+        .try_contribute(&member, &ctx.asset, &CONTRIBUTION)
+        .is_err());
+    assert_eq!(ctx.client.contribution_count(), 1);
+    assert_eq!(ctx.client.total_contributed(&ctx.asset), CONTRIBUTION);
+    assert_eq!(balance(&ctx, &member), FUNDS - CONTRIBUTION);
+}
+
+#[test]
+fn non_members_cannot_contribute() {
+    let (ctx, member) = setup_contributions();
+    let outsider = Address::generate(&ctx.env);
+    mint(&ctx, &outsider, FUNDS);
+
+    assert_err(
+        ctx.client
+            .try_contribute(&outsider, &ctx.asset, &CONTRIBUTION),
+        Error::NotMember,
+    );
+    assert_no_contributions(&ctx, &outsider, &ctx.asset);
+    assert_eq!(balance(&ctx, &outsider), FUNDS);
+
+    // Membership is checked at contribution time.
+    ctx.client.remove_member(&ctx.owner, &member);
+    assert_err(
+        ctx.client
+            .try_contribute(&member, &ctx.asset, &CONTRIBUTION),
+        Error::NotMember,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+    assert_eq!(balance(&ctx, &member), FUNDS);
+}
+
+#[test]
+fn contribution_before_initialization_fails() {
+    let (env, client) = uninitialized();
+    assert!(!client.is_active());
+    assert_err(client.try_get_contribution_rules(), Error::NotInitialized);
+    assert_err(
+        client.try_contribute(
+            &Address::generate(&env),
+            &Address::generate(&env),
+            &CONTRIBUTION,
+        ),
+        Error::NotInitialized,
+    );
+}
+
+#[test]
+fn unsupported_asset_is_rejected() {
+    let (mut ctx, member) = setup_contributions();
+    ctx.asset = ctx
+        .env
+        .register_stellar_asset_contract(Address::generate(&ctx.env));
+    mint(&ctx, &member, FUNDS);
+
+    assert_err(
+        ctx.client
+            .try_contribute(&member, &ctx.asset, &CONTRIBUTION),
+        Error::UnsupportedAsset,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+    assert_eq!(balance(&ctx, &member), FUNDS);
+}
+
+#[test]
+fn default_rules_require_the_configured_contribution_amount() {
+    let (ctx, member) = setup_contributions();
+    assert_eq!(
+        ctx.client.get_contribution_rules(),
+        bounds(CONTRIBUTION, CONTRIBUTION)
+    );
+
+    for bad in [0, -1] {
+        assert_err(
+            ctx.client.try_contribute(&member, &ctx.asset, &bad),
+            Error::InvalidAmount,
+        );
+    }
+    assert_err(
+        ctx.client
+            .try_contribute(&member, &ctx.asset, &(CONTRIBUTION - 1)),
+        Error::ContributionBelowMinimum,
+    );
+    assert_err(
+        ctx.client
+            .try_contribute(&member, &ctx.asset, &(CONTRIBUTION + 1)),
+        Error::ContributionAboveMaximum,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+
+    // The defaults follow the circle settings.
+    let mut s = settings(&ctx.env, MAX_MEMBERS);
+    s.contribution_amount = CONTRIBUTION + 1;
+    ctx.client.update_settings(&ctx.owner, &s);
+    ctx.client
+        .contribute(&member, &ctx.asset, &(CONTRIBUTION + 1));
+}
+
+#[test]
+fn contribution_amount_bounds_are_enforced() {
+    let (ctx, member) = setup_contributions();
+    ctx.client
+        .set_contribution_rules(&ctx.owner, &bounds(100, 500));
+    assert!(find_event(&ctx.env, "ContributionRulesUpdated").is_some());
+
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &99),
+        Error::ContributionBelowMinimum,
+    );
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &501),
+        Error::ContributionAboveMaximum,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+    assert_eq!(balance(&ctx, &member), FUNDS);
+
+    ctx.client.contribute(&member, &ctx.asset, &100);
+    ctx.client.contribute(&member, &ctx.asset, &500);
+    assert_eq!(ctx.client.total_contributed(&ctx.asset), 600);
+}
+
+#[test]
+fn contribution_schedule_and_round_limit_are_enforced() {
+    let (ctx, member) = setup_contributions();
+    let mut rules = bounds(1, FUNDS);
+    rules.starts_at = 1_000;
+    rules.ends_at = 1_250;
+    rules.round_secs = 100;
+    rules.max_per_round = 1;
+    ctx.client.set_contribution_rules(&ctx.owner, &rules);
+    assert_eq!(ctx.client.get_contribution_rules(), rules);
+
+    set_time(&ctx.env, 999);
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &10),
+        Error::ContributionWindowClosed,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+
+    set_time(&ctx.env, 1_000);
+    ctx.client.contribute(&member, &ctx.asset, &10);
+
+    // Last second of the round, also after leaving and rejoining.
+    set_time(&ctx.env, 1_099);
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &10),
+        Error::RoundLimitReached,
+    );
+    ctx.client.leave_circle(&member);
+    ctx.client.add_member(&ctx.owner, &member);
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &10),
+        Error::RoundLimitReached,
+    );
+
+    // The limit is per member.
+    mint(&ctx, &ctx.admin, FUNDS);
+    ctx.client.contribute(&ctx.admin, &ctx.asset, &10);
+
+    set_time(&ctx.env, 1_100);
+    let id = ctx.client.contribute(&member, &ctx.asset, &10);
+    let record = ctx.client.get_contribution(&id).unwrap();
+    assert_eq!(record.round_start, 1_100);
+
+    set_time(&ctx.env, 1_249);
+    let id = ctx.client.contribute(&member, &ctx.asset, &10);
+    let record = ctx.client.get_contribution(&id).unwrap();
+    assert_eq!(record.round_start, 1_200);
+
+    set_time(&ctx.env, 1_250);
+    assert_err(
+        ctx.client.try_contribute(&member, &ctx.asset, &10),
+        Error::ContributionWindowClosed,
+    );
+    assert_eq!(ctx.client.member_contributed(&member, &ctx.asset), 30);
+    assert_eq!(ctx.client.total_contributed(&ctx.asset), 40);
+}
+
+#[test]
+fn inactive_circle_rejects_contributions() {
+    let (ctx, member) = setup_contributions();
+    assert!(ctx.client.is_active());
+    assert_err(
+        ctx.client.try_set_active(&ctx.admin, &false),
+        Error::Unauthorized,
+    );
+
+    ctx.client.set_active(&ctx.owner, &false);
+    assert!(find_event(&ctx.env, "CircleStatusChanged").is_some());
+    assert!(!ctx.client.is_active());
+    assert_err(
+        ctx.client
+            .try_contribute(&member, &ctx.asset, &CONTRIBUTION),
+        Error::CircleInactive,
+    );
+    assert_no_contributions(&ctx, &member, &ctx.asset);
+    assert_eq!(balance(&ctx, &member), FUNDS);
+
+    ctx.client.set_active(&ctx.owner, &true);
+    ctx.client.contribute(&member, &ctx.asset, &CONTRIBUTION);
+}
+
+#[test]
+fn contribution_rules_are_owner_only_and_validated() {
+    let (ctx, member) = setup_contributions();
+    let rules = bounds(1, 2);
+    for caller in [&ctx.admin, &member] {
+        assert_err(
+            ctx.client.try_set_contribution_rules(caller, &rules),
+            Error::Unauthorized,
+        );
+    }
+
+    let mut bad_window = bounds(1, 2);
+    bad_window.starts_at = 100;
+    bad_window.ends_at = 100;
+    for bad in [bounds(0, 10), bounds(-1, 10), bounds(10, 9), bad_window] {
+        assert_err(
+            ctx.client.try_set_contribution_rules(&ctx.owner, &bad),
+            Error::InvalidContributionRules,
+        );
+    }
+    assert_eq!(
+        ctx.client.get_contribution_rules(),
+        bounds(CONTRIBUTION, CONTRIBUTION)
+    );
+}
+
+#[test]
+fn failed_transfer_leaves_accounting_unchanged() {
+    let (ctx, _) = setup_contributions();
+    let poor = new_member(&ctx);
+    mint(&ctx, &poor, CONTRIBUTION - 1);
+    // One contribution per round: a failed attempt must not use up the slot.
+    let mut rules = bounds(CONTRIBUTION, CONTRIBUTION);
+    rules.max_per_round = 1;
+    ctx.client.set_contribution_rules(&ctx.owner, &rules);
+
+    assert_err(
+        ctx.client.try_contribute(&poor, &ctx.asset, &CONTRIBUTION),
+        Error::TransferFailed,
+    );
+    assert_no_contributions(&ctx, &poor, &ctx.asset);
+    assert_eq!(balance(&ctx, &poor), CONTRIBUTION - 1);
+    assert_eq!(balance(&ctx, &ctx.client.address), 0);
+
+    mint(&ctx, &poor, 1);
+    let id = ctx.client.contribute(&poor, &ctx.asset, &CONTRIBUTION);
+    assert_eq!(id, 1);
+    assert_eq!(ctx.client.total_contributed(&ctx.asset), CONTRIBUTION);
+}
+
+#[test]
+fn partial_transfer_is_reverted() {
+    let (ctx, member) = setup_contributions();
+    let skimming = ctx
+        .env
+        .register_contract(None, skimming_token::SkimmingToken);
+    ctx.client
+        .set_supported_assets(&ctx.owner, &vec![&ctx.env, skimming.clone()]);
+
+    assert_err(
+        ctx.client.try_contribute(&member, &skimming, &CONTRIBUTION),
+        Error::TransferFailed,
+    );
+    assert_no_contributions(&ctx, &member, &skimming);
+    let vault_balance = token::Client::new(&ctx.env, &skimming).balance(&ctx.client.address);
+    assert_eq!(vault_balance, 0);
 }
