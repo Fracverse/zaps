@@ -91,6 +91,7 @@
 
 use crate::api::auth_middleware::AuthenticatedUser;
 use crate::services::circle_audit;
+use crate::services::circle_contribution_verification::{ChainSource, HorizonClient};
 use crate::services::circle_goals;
 use crate::services::circle_membership::{self, CirclePermission, CircleRole, MemberRoleEntry};
 use crate::services::circle_notifications as circle_notifier;
@@ -123,13 +124,20 @@ pub struct CirclesState {
     pub pool: PgPool,
     /// #1225: fan-out point for real-time circle events.
     pub hub: crate::api::circle_events::CircleEventHub,
+    /// #1207: where contribution verification reads Stellar transactions from.
+    pub chain: std::sync::Arc<dyn ChainSource>,
 }
 
 impl CirclesState {
     pub fn new(pool: PgPool) -> Self {
+        Self::with_chain(pool, std::sync::Arc::new(HorizonClient::from_env()))
+    }
+
+    pub fn with_chain(pool: PgPool, chain: std::sync::Arc<dyn ChainSource>) -> Self {
         Self {
             pool,
             hub: crate::api::circle_events::CircleEventHub::default(),
+            chain,
         }
     }
 }
@@ -1125,10 +1133,13 @@ pub async fn contribute(
     };
 
     let contribution_id = Uuid::new_v4();
+    // Legacy behaviour, unchanged: this endpoint credits the balance below
+    // without an on-chain check. The status is stated explicitly because the
+    // column default is `pending` (new rows must be verified before they count).
     let insert = sqlx::query!(
         r#"
-        INSERT INTO circle_contributions (id, circle_id, member_address, amount, tx_hash)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO circle_contributions (id, circle_id, member_address, amount, tx_hash, status)
+        VALUES ($1, $2, $3, $4, $5, 'confirmed')
         "#,
         contribution_id,
         id,
@@ -2450,100 +2461,6 @@ pub async fn verify_audit_log(
         Ok(valid) => Json(serde_json::json!({ "valid": valid })).into_response(),
         Err(_) => internal().into_response(),
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateContributionRuleRequest {
-    pub min_amount: String,
-    pub max_amount: Option<String>,
-    pub frequency: String,
-    pub is_mandatory: bool,
-}
-
-/// PUT /api/circles/:id/contribution-rules — admin-only; writes an audit entry.
-pub async fn update_contribution_rule(
-    State(state): State<CirclesState>,
-    auth: AuthenticatedUser,
-    Path(circle_id): Path<Uuid>,
-    Json(req): Json<UpdateContributionRuleRequest>,
-) -> impl IntoResponse {
-    if let Err(response) = require_audit_access(&state.pool, circle_id, &auth.address).await {
-        return response.into_response();
-    }
-    let min_amount: i64 = match req.min_amount.parse() {
-        Ok(v) if v >= 0 => v,
-        _ => return err("invalid_amount").into_response(),
-    };
-    let max_amount = match req.max_amount.as_deref() {
-        Some(v) => match v.parse::<i64>() {
-            Ok(n) if n >= min_amount => Some(n),
-            _ => return err("invalid_amount").into_response(),
-        },
-        None => None,
-    };
-    if !["none", "daily", "weekly", "monthly"].contains(&req.frequency.as_str()) {
-        return err("invalid_frequency").into_response();
-    }
-
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM circle_contribution_rules WHERE circle_id = $1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(circle_id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    let result = if let Some(rule_id) = existing {
-        sqlx::query(
-            r#"
-            UPDATE circle_contribution_rules
-               SET min_amount = $1, max_amount = $2, frequency = $3,
-                   is_mandatory = $4, updated_at = NOW()
-             WHERE id = $5
-            "#,
-        )
-        .bind(min_amount)
-        .bind(max_amount)
-        .bind(&req.frequency)
-        .bind(req.is_mandatory)
-        .bind(rule_id)
-        .execute(&state.pool)
-        .await
-    } else {
-        sqlx::query(
-            r#"
-            INSERT INTO circle_contribution_rules
-                (circle_id, min_amount, max_amount, frequency, is_mandatory)
-            VALUES ($1, $2, $3, $4, $5)
-            "#,
-        )
-        .bind(circle_id)
-        .bind(min_amount)
-        .bind(max_amount)
-        .bind(&req.frequency)
-        .bind(req.is_mandatory)
-        .execute(&state.pool)
-        .await
-    };
-
-    if result.is_err() {
-        return internal().into_response();
-    }
-    audit(
-        &state.pool,
-        circle_id,
-        &auth.address,
-        "contribution_rule_changed",
-        &circle_id.to_string(),
-        serde_json::json!({
-            "min_amount": min_amount.to_string(),
-            "max_amount": max_amount.map(|v| v.to_string()),
-            "frequency": req.frequency,
-            "is_mandatory": req.is_mandatory,
-        }),
-    )
-    .await;
-    Json(serde_json::json!({ "status": "updated" })).into_response()
 }
 
 #[derive(Debug, Deserialize)]

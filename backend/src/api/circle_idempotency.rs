@@ -10,7 +10,7 @@
 use axum::{
     body::{to_bytes, Body},
     extract::{Request, State},
-    http::{header::CONTENT_TYPE, HeaderMap, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderMap, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -34,6 +34,20 @@ fn key_from_headers(headers: &HeaderMap) -> Option<String> {
         }
     }
     None
+}
+
+/// #1205 / #1207: the contribution pipeline's write endpoints.
+fn contribution_operation(method: &Method, path: &str) -> Option<&'static str> {
+    if method != Method::POST || !path.contains("/contributions") {
+        return None;
+    }
+    if path.ends_with("/verify") {
+        Some("contribution_verify")
+    } else if path.ends_with("/contributions") {
+        Some("contribution_initiate")
+    } else {
+        None
+    }
 }
 
 fn operation_for(path: &str) -> Option<&'static str> {
@@ -84,10 +98,11 @@ pub fn spawn_cleanup(pool: PgPool) {
 /// Idempotency middleware for circle financial operations.
 pub async fn circle_idempotency(State(pool): State<PgPool>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let operation = match operation_for(&path) {
-        Some(op) => op,
-        None => return next.run(req).await,
-    };
+    let operation =
+        match contribution_operation(req.method(), &path).or_else(|| operation_for(&path)) {
+            Some(op) => op,
+            None => return next.run(req).await,
+        };
 
     let key = match key_from_headers(req.headers()) {
         Some(key) => key,
@@ -284,6 +299,19 @@ mod tests {
             Some("payout_approve")
         );
         assert_eq!(operation_for("/api/circles/search"), None);
+        // #1205 / #1207: only the POST writes of the contribution pipeline.
+        assert_eq!(
+            contribution_operation(&Method::POST, "/api/circles/1/contributions"),
+            Some("contribution_initiate")
+        );
+        assert_eq!(
+            contribution_operation(&Method::POST, "/api/circles/1/contributions/2/verify"),
+            Some("contribution_verify")
+        );
+        assert_eq!(
+            contribution_operation(&Method::GET, "/api/circles/1/contributions"),
+            None
+        );
         let mut headers = HeaderMap::new();
         headers.insert("idempotency-key", "abc".parse().unwrap());
         assert_eq!(key_from_headers(&headers).as_deref(), Some("abc"));
