@@ -280,6 +280,7 @@ async fn main() {
         Router::new()
             .nest("/api/feed", api::feed_routes(pool.clone()))
             .nest("/api/social", api::social_routes(pool.clone()))
+            .nest("/api/circles", api::circle_routes(pool.clone()))
             .nest("/api/bridge", api::bridge_routes(bridge_state.clone()))
             .nest("/api/registry", api::registry_routes(pool.clone()))
             .nest(

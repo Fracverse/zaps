@@ -19,6 +19,8 @@ tags:
     description: Public, friends, and private payment feeds
   - name: Social
     description: Likes and comments on payments
+  - name: Circles
+    description: Circle details, privacy, and membership
   - name: Bridge
     description: Cross-chain token quote, submission, and status tracking
   - name: Yield
@@ -103,7 +105,7 @@ components:
       properties:
         token:
           type: string
-          description: "JWT valid for 24 hours; include as Authorization: Bearer header"
+          description: 'JWT valid for 24 hours; include as Authorization: Bearer header'
         username:
           type: string
           description: Auto-generated username prefixed with u_ followed by chars 2-15 of the Stellar address
@@ -247,6 +249,87 @@ components:
           type: string
           format: date-time
           description: ISO8601 / RFC3339 timestamp
+
+    CirclePreview:
+      type: object
+      required:
+        - id
+        - name
+        - description
+        - objective
+        - goal_amount
+        - currency
+        - progress_amount
+        - contribution_amount
+        - contribution_frequency
+        - contribution_rules
+        - membership_restrictions
+        - visibility
+        - member_count
+        - member_limit
+        - is_member
+        - can_join
+        - join_unavailable_reason
+        - owner_username
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        objective:
+          type: string
+        goal_amount:
+          type: string
+          description: Goal amount in the circle's currency, encoded as a decimal integer string
+        currency:
+          type: string
+        progress_amount:
+          type: string
+          description: Sum of recorded circle contributions, encoded as a decimal integer string
+        contribution_amount:
+          type: string
+          description: Required contribution amount per period, encoded as a decimal integer string
+        contribution_frequency:
+          type: string
+          enum: [DAILY, WEEKLY, MONTHLY]
+        contribution_rules:
+          type: string
+        membership_restrictions:
+          type: string
+        visibility:
+          type: string
+          enum: [PUBLIC, PRIVATE]
+        member_count:
+          type: integer
+        member_limit:
+          type: integer
+          nullable: true
+        is_member:
+          type: boolean
+        can_join:
+          type: boolean
+          description: True only for public circles that are accepting members and have capacity
+        join_unavailable_reason:
+          type: string
+          nullable: true
+        owner_username:
+          type: string
+        created_at:
+          type: string
+          description: Circle creation timestamp
+
+    CircleJoinResponse:
+      type: object
+      required:
+        - joined
+      properties:
+        joined:
+          type: boolean
+          description: True when the authenticated user is a circle member
 
     LikeRequest:
       type: object
@@ -414,7 +497,7 @@ components:
         apy:
           type: number
           format: double
-          description: "Current APY as a percentage (e.g. 5.0 for 5%)"
+          description: 'Current APY as a percentage (e.g. 5.0 for 5%)'
         auto_earn_enabled:
           type: boolean
           description: Whether idle available balance is automatically swept into the vault
@@ -585,7 +668,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChallengeResponse'
               example:
-                challenge: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                challenge: '3fa85f64-5717-4562-b3fc-2c963f66afa6'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -634,6 +717,88 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
               example:
                 error: Internal database error
+
+  /api/circles/{id}:
+    get:
+      tags:
+        - Circles
+      summary: Get a circle preview
+      description: Public circle details are available to authenticated users. Private circle details are returned only to existing members; other users receive 404.
+      operationId: getCircle
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Complete circle preview and current user's membership eligibility
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CirclePreview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Circle not found or private circle is not accessible to this user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unable to load circle details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/circles/{id}/join:
+    post:
+      tags:
+        - Circles
+      summary: Join an eligible public circle
+      description: Adds the authenticated user as a member if the public circle is accepting members and has capacity. Private circle join requests are concealed as not found.
+      operationId: joinCircle
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: User is a member of the circle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CircleJoinResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Circle not found or private circle is not accessible to this user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Circle is closed to new members or has reached its limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unable to add circle membership
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/users/profile:
     get:
@@ -1287,7 +1452,7 @@ paths:
         - name: limit
           in: query
           required: false
-          description: "Number of records to return (1–100, default: 20)"
+          description: 'Number of records to return (1–100, default: 20)'
           schema:
             type: integer
             format: int64
@@ -1297,7 +1462,7 @@ paths:
         - name: offset
           in: query
           required: false
-          description: "Number of records to skip (default: 0)"
+          description: 'Number of records to skip (default: 0)'
           schema:
             type: integer
             format: int64
@@ -1312,11 +1477,11 @@ paths:
                 $ref: '#/components/schemas/YieldHistoryResponse'
               example:
                 items:
-                  - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
-                    tx_hash: "zaps-yield-deposit-3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                  - id: '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+                    tx_hash: 'zaps-yield-deposit-3fa85f64-5717-4562-b3fc-2c963f66afa6'
                     type: DEPOSIT
                     amount: 5000000
-                    created_at: "2026-06-27T10:00:00Z"
+                    created_at: '2026-06-27T10:00:00Z'
                 limit: 20
                 offset: 0
                 total: 1
@@ -1450,7 +1615,7 @@ paths:
                 $ref: '#/components/schemas/ToggleAutoEarnResponse'
               example:
                 auto_earn_enabled: true
-                message: "Auto-earn enabled. Idle stablecoins will be swept into the yield vault."
+                message: 'Auto-earn enabled. Idle stablecoins will be swept into the yield vault.'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':

@@ -9,6 +9,7 @@ pub use admin::admin_routes;
 pub mod auth;
 pub mod auth_middleware;
 pub mod bridge;
+pub mod circles;
 pub mod feed;
 pub mod payouts;
 pub mod privy_jwks;
@@ -108,6 +109,13 @@ pub fn feed_routes(pool: sqlx::PgPool) -> Router {
         .route("/public", get(feed::get_public_feed))
         .route("/friends", get(feed::get_friends_feed))
         .route("/private", get(feed::get_private_feed))
+        .with_state(pool)
+}
+
+pub fn circle_routes(pool: sqlx::PgPool) -> Router {
+    Router::new()
+        .route("/:id", get(circles::get_circle))
+        .route("/:id/join", post(circles::join_circle))
         .with_state(pool)
 }
 
