@@ -1,3 +1,5 @@
+
+
 -- #546: historical log of on-chain yield-vault accrual events.
 --
 -- Deposits are already tracked in yield_transactions, and administrator/

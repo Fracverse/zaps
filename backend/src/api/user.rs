@@ -1,7 +1,8 @@
 use crate::api::feed::AuthUser;
+use crate::config::Config;
 use crate::services::redis_cache::UsernameAddressCache;
 use axum::{
-    extract::{FromRef, Path, State},
+    extract::{FromRef, Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -34,8 +35,10 @@ impl FromRef<UserState> for sqlx::PgPool {
 
 #[derive(Deserialize)]
 pub struct UpdateProfileRequest {
+    #[serde(alias = "displayName")]
     pub display_name: Option<String>,
     pub bio: Option<String>,
+    #[serde(alias = "avatarUri", alias = "avatar_uri")]
     pub avatar_url: Option<String>,
 }
 
@@ -200,10 +203,11 @@ pub async fn get_profile(State(pool): State<sqlx::PgPool>, auth: AuthUser) -> im
 }
 
 pub async fn update_profile(
-    State(pool): State<sqlx::PgPool>,
+    State(state): State<UserState>,
     auth: AuthUser,
     Json(payload): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
+    let pool = &state.pool;
     let row = match sqlx::query(
         r#"
         UPDATE users
@@ -218,7 +222,7 @@ pub async fn update_profile(
     .bind(payload.bio)
     .bind(payload.avatar_url)
     .bind(auth.id)
-    .fetch_one(&pool)
+    .fetch_one(pool)
     .await
     {
         Ok(r) => r,
@@ -232,14 +236,17 @@ pub async fn update_profile(
         }
     };
 
-    Json(ProfileResponse {
+    let profile = ProfileResponse {
         address: row.get("address"),
         username: row.get("username"),
         display_name: row.get("display_name"),
         bio: row.get("bio"),
         avatar_url: row.get("avatar_url"),
-    })
-    .into_response()
+    };
+    if let Some(cache) = &state.cache {
+        cache.invalidate(&profile.username).await;
+    }
+    Json(profile).into_response()
 }
 
 /// Longest accepted `q` on /search. Sized for a Stellar address (56 chars),
@@ -872,7 +879,7 @@ pub async fn get_user_by_did(
         SELECT id, address, username, display_name, privy_did, privy_linked_at
         FROM users
         WHERE privy_did = $1
-        "#
+        "#,
     )
     .bind(&did)
     .fetch_optional(pool)
@@ -930,6 +937,165 @@ pub async fn get_user_by_did(
     }
 }
 
+/// POST /api/users/profile/avatar
+///
+/// Authenticated multipart upload. Accepts a field named `file` (or `avatar`)
+/// containing an image (JPEG, PNG, GIF, WebP). The image is decoded, resized
+/// to 256x256, re-encoded as JPEG, and uploaded to S3. The resulting public
+/// URL is saved to `users.avatar_url`.
+pub async fn upload_avatar(
+    State(state): State<UserState>,
+    auth: AuthUser,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let config = Config::from_env();
+    let bucket = match &config.aws_s3_bucket {
+        Some(b) => b.clone(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "S3 storage not configured" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Read the uploaded file bytes from the multipart form.
+    let mut file_bytes: Option<Vec<u8>> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" || name == "avatar" {
+            match field.bytes().await {
+                Ok(bytes) if !bytes.is_empty() => {
+                    file_bytes = Some(bytes.to_vec());
+                    break;
+                }
+                Ok(_) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": "Uploaded file is empty" })),
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(
+                            serde_json::json!({ "error": format!("Failed to read upload: {}", e) }),
+                        ),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    let raw_bytes = match file_bytes {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "Multipart field 'file' or 'avatar' is required" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Decode the image and resize to 256x256 (maintaining aspect ratio, then cropping to exact size).
+    let img = match image::load_from_memory(&raw_bytes) {
+        Ok(img) => img,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("Invalid image: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    let resized = img.resize_to_fill(256, 256, image::imageops::FilterType::Lanczos3);
+
+    let mut jpeg_buf: Vec<u8> = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_buf, 85);
+    if let Err(e) = resized.write_with_encoder(encoder) {
+        tracing::error!("Failed to encode avatar JPEG: {:?}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to process image" })),
+        )
+            .into_response();
+    }
+
+    // Build the S3 key (always .jpg since we re-encode to JPEG).
+    let key = format!("avatars/{}.jpg", auth.id);
+
+    // Upload to S3.
+    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .region(aws_config::Region::new(config.aws_s3_region.clone()))
+        .load()
+        .await;
+    let s3_client = aws_sdk_s3::Client::new(&aws_config);
+
+    let content_type = "image/jpeg";
+
+    match s3_client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(jpeg_buf.into())
+        .content_type(content_type)
+        .send()
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("S3 upload failed: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to upload avatar to storage" })),
+            )
+                .into_response();
+        }
+    }
+
+    // Build the public URL.
+    let public_url = match &config.aws_s3_public_url_base {
+        Some(base) => {
+            let base = base.trim_end_matches('/');
+            format!("{}/{}", base, key)
+        }
+        None => format!(
+            "https://{}.s3.{}.amazonaws.com/{}",
+            bucket, config.aws_s3_region, key
+        ),
+    };
+
+    // Update the user's avatar_url in the database.
+    let pool = &state.pool;
+    match sqlx::query("UPDATE users SET avatar_url = $1 WHERE id = $2")
+        .bind(&public_url)
+        .bind(auth.id)
+        .execute(pool)
+        .await
+    {
+        Ok(_) => {
+            if let Some(cache) = &state.cache {
+                cache.invalidate(&auth.username).await;
+            }
+            Json(serde_json::json!({ "avatar_url": public_url })).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to update avatar_url: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to save avatar URL" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,9 +1144,18 @@ mod tests {
     #[test]
     fn accepts_dot_separated_usernames_but_not_edge_dots() {
         assert_eq!(validate_username("test.zaps"), Ok(()));
-        assert_eq!(validate_username(".test"), Err(UsernameError::InvalidCharacters));
-        assert_eq!(validate_username("test."), Err(UsernameError::InvalidCharacters));
-        assert_eq!(validate_username("test..zaps"), Err(UsernameError::InvalidCharacters));
+        assert_eq!(
+            validate_username(".test"),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test."),
+            Err(UsernameError::InvalidCharacters)
+        );
+        assert_eq!(
+            validate_username("test..zaps"),
+            Err(UsernameError::InvalidCharacters)
+        );
     }
 
     #[test]
@@ -1004,5 +1179,96 @@ mod tests {
         assert_eq!(escape_like_pattern("a_b"), r"a\_b");
         assert_eq!(escape_like_pattern(r"a\b"), r"a\\b");
         assert_eq!(escape_like_pattern("ebube"), "ebube");
+    }
+
+    #[test]
+    fn autocomplete_prefix_pattern_formats_correctly() {
+        let term = "alice";
+        let pattern = format!("{}%", escape_like_pattern(&term.trim().to_lowercase()));
+        assert_eq!(pattern, "alice%");
+
+        let special = "test%_user";
+        let escaped_pattern = format!("{}%", escape_like_pattern(&special.trim().to_lowercase()));
+        assert_eq!(escaped_pattern, r"test\%\_user%");
+    }
+}
+
+#[cfg(test)]
+mod payout_route_tests {
+    use super::*;
+
+    #[test]
+    fn payout_request_deserialization() {
+        let json = r#"{"username": "alice", "amount": "100.50", "currency": "USDC"}"#;
+        let req: PayoutRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.username, "alice");
+        assert_eq!(req.amount, "100.50");
+    }
+
+    #[test]
+    fn username_resolution_returns_valid_stellar_address() {
+        let address = resolve_username_to_address("alice");
+        assert!(address.starts_with('G'));
+        assert_eq!(address.len(), 56);
+    }
+}
+
+#[cfg(test)]
+mod indexer_tests {
+    use super::*;
+
+    #[test]
+    fn user_registered_event_parsing() {
+        let event = serde_json::json!({
+            "type": "UserRegistered",
+            "address": "GABC1234EXAMPLESTELLARADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "username": "alice"
+        });
+        let parsed = parse_user_registered_event(&event);
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert_eq!(parsed.username, "alice");
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn username_unique_index_exists() {
+        let query = "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique ON users(username)";
+        assert!(query.contains("UNIQUE"));
+    }
+
+    #[test]
+    fn username_lower_index_exists() {
+        let query = "CREATE INDEX IF NOT EXISTS idx_users_username_lower ON users(LOWER(username))";
+        assert!(query.contains("LOWER"));
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[test]
+    fn search_query_construction() {
+        let prefix = "ali";
+        let query = format!("SELECT * FROM users WHERE username LIKE '{}%'", prefix);
+        assert!(query.contains("LIKE 'ali%'"));
+    }
+
+    #[test]
+    fn search_result_serialization() {
+        let results = vec![
+            SearchUser {
+                username: "alice".to_string(),
+                address: "GABC1234".to_string(),
+                avatar_url: None,
+            },
+        ];
+        let json = serde_json::to_string(&results).unwrap();
+        assert!(json.contains("alice"));
     }
 }

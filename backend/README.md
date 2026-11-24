@@ -23,6 +23,9 @@ This codebase is structured with stubs and `todo!()` macros so that contributors
 ## Local Development
 
 Ensure PostgreSQL is running locally and set the `DATABASE_URL` environment variable.
+Bank account linking also requires `PAYSTACK_SECRET_KEY`; the authenticated
+`/api/bank-accounts` routes use Paystack to list Nigerian banks and verify
+account ownership before saving the merchant's verified bank details.
 
 To verify compiling:
 

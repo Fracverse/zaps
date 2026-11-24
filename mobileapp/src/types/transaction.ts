@@ -1,10 +1,5 @@
 export type TransactionType =
-  | "sent"
-  | "received"
-  | "swap"
-  | "payment"
-  | "yield"
-  | "mass_payout";
+  "sent" | "received" | "swap" | "payment" | "yield" | "mass_payout";
 export type TransactionStatus = "completed" | "pending" | "failed";
 export type YieldType = "interest" | "reward" | "apy";
 
@@ -25,6 +20,9 @@ export interface Transaction {
   feeAsset?: string;
   network?: string;
   yieldType?: YieldType;
+  /** Base64-encoded XDR envelope of the original transaction, allowing a
+   *  stuck (pending) transaction to be re-bumped with a higher fee. */
+  stellarTxXdr?: string;
   /** Populated for mass_payout (SDP disbursement) transactions */
   senderName?: string;
   /** Anchor/organisation that issued the SDP disbursement */
@@ -35,6 +33,7 @@ export interface TransactionPage {
   items: Transaction[];
   nextCursor: string | null;
   total: number;
+  offlineCache?: boolean;
 }
 
 export interface TransactionFilters {
@@ -46,4 +45,8 @@ export interface TransactionFilters {
   amountMin?: string;
   amountMax?: string;
   yieldOnly?: boolean;
+  /** Narrow yield updates to one yield type (implies yieldOnly). */
+  yieldType?: YieldType;
+  /** Asset code filter (e.g. "XLM", "USDC", "USDT"). */
+  asset?: string;
 }

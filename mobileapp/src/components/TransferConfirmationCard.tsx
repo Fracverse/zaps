@@ -6,11 +6,21 @@ import { Avatar } from "./Avatar";
 import { VerificationBadge } from "./VerificationBadge";
 import type { ZapsUser } from "../types/user";
 
+interface TransferFeeEstimate {
+  baseFee: string;
+  minResourceFee: string;
+  totalFee: string;
+  cpuInsns?: string;
+  memBytes?: string;
+}
+
 interface TransferConfirmationCardProps {
   recipient: ZapsUser;
   amount: string;
   tokenSymbol: string;
   description?: string;
+  visibility?: "PUBLIC" | "FRIENDS" | "PRIVATE";
+  feeEstimate?: TransferFeeEstimate | null;
 }
 
 export const TransferConfirmationCard = React.memo(
@@ -19,14 +29,43 @@ export const TransferConfirmationCard = React.memo(
     amount,
     tokenSymbol,
     description,
+    visibility,
+    feeEstimate,
   }: TransferConfirmationCardProps) {
+    const formatStroops = (value?: string) => {
+      const numeric = Number(value ?? "0");
+      return `${Number.isFinite(numeric) ? numeric.toLocaleString() : "0"} stroops`;
+    };
+
+    const realName =
+      recipient.name || recipient.display_name || recipient.real_name;
+
     return (
       <View style={styles.card}>
-        <Avatar uri={recipient.avatar_url} name={recipient.username} size={80} />
+        <Avatar
+          uri={recipient.avatar_url}
+          name={realName || recipient.username}
+          size={80}
+        />
 
-        <View style={styles.nameRow}>
-          <Text style={styles.username}>{recipient.username}</Text>
-          {recipient.isVerified && <VerificationBadge />}
+        <View style={styles.recipientHeader}>
+          {Boolean(realName) && (
+            <Text style={styles.realName} testID="confirmation-real-name">
+              {realName}
+            </Text>
+          )}
+
+          <View style={styles.nameRow}>
+            <Text
+              style={[
+                styles.username,
+                Boolean(realName) && styles.usernameSubtitle,
+              ]}
+            >
+              {recipient.username}
+            </Text>
+            {recipient.isVerified && <VerificationBadge />}
+          </View>
         </View>
 
         {recipient.address && (
@@ -59,6 +98,70 @@ export const TransferConfirmationCard = React.memo(
               <Text style={styles.detailValue}>{description || "No note"}</Text>
             </View>
           </View>
+
+          {visibility && (
+            <View style={[styles.detailRow, { marginTop: 16 }]} testID="confirmation-visibility-row">
+              <View style={styles.detailIcon}>
+                <Ionicons
+                  name={
+                    visibility === "PUBLIC"
+                      ? "globe-outline"
+                      : visibility === "FRIENDS"
+                      ? "people-outline"
+                      : "lock-closed-outline"
+                  }
+                  size={18}
+                  color="#777"
+                />
+              </View>
+              <View style={styles.detailCol}>
+                <Text style={styles.detailLabel}>Privacy</Text>
+                <Text style={styles.detailValue} testID="confirmation-visibility-value">
+                  {visibility}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {feeEstimate && (
+            <>
+              <View style={[styles.detailRow, { marginTop: 16 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="server-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Network base fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.baseFee)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.detailRow, { marginTop: 12 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="flash-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Soroban resource fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.minResourceFee)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.detailRow, { marginTop: 12 }]}>
+                <View style={styles.detailIcon}>
+                  <Ionicons name="calculator-outline" size={18} color="#777" />
+                </View>
+                <View style={styles.detailCol}>
+                  <Text style={styles.detailLabel}>Estimated total fee</Text>
+                  <Text style={styles.detailValue}>
+                    {formatStroops(feeEstimate.totalFee)}
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
         </View>
       </View>
     );
@@ -74,15 +177,30 @@ const styles = StyleSheet.create({
     borderColor: "#F0F0F0",
     alignItems: "center",
   },
+  recipientHeader: {
+    alignItems: "center",
+    marginTop: 14,
+  },
+  realName: {
+    fontSize: 20,
+    fontFamily: "Outfit_700Bold",
+    color: COLORS.black,
+    textAlign: "center",
+  },
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 16,
+    marginTop: 4,
   },
   username: {
     fontSize: 20,
     fontFamily: "Outfit_700Bold",
     color: COLORS.black,
+  },
+  usernameSubtitle: {
+    fontSize: 14,
+    fontFamily: "Outfit_500Medium",
+    color: "#666",
   },
   address: {
     fontSize: 13,

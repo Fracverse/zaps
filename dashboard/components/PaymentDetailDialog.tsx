@@ -536,9 +536,35 @@ function JsonNode({ data, name, level = 0 }: JsonNodeProps) {
   );
 }
 
+function XdrDecodeError({ message }: { message: string }) {
+  return (
+    <div
+      role="alert"
+      className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+    >
+      <p className="font-semibold mb-1">Failed to decode XDR</p>
+      <p className="font-mono text-xs break-all">{message}</p>
+    </div>
+  );
+}
+
 function XdrViewer({ xdr }: { xdr: string }) {
+  // decodeXdr throws on unknown payloads. Decode here rather than relying on
+  // a try/catch around <XdrViewer />, which cannot catch render-time errors.
+  const result = useMemo(() => {
+    try {
+      return { decoded: decodeXdr(xdr) };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "Unknown error" };
+    }
+  }, [xdr]);
+
+  if ("error" in result) return <XdrDecodeError message={result.error} />;
+  return <DecodedXdrView xdr={xdr} decoded={result.decoded} />;
+}
+
+function DecodedXdrView({ xdr, decoded }: { xdr: string; decoded: XdrDecodeResult }) {
   const [copied, setCopied] = useState<"raw" | "json" | null>(null);
-  const decoded = useMemo(() => decodeXdr(xdr), [xdr]);
   const jsonString = useMemo(
     () => JSON.stringify(decoded.data, null, 2),
     [decoded],
@@ -709,20 +735,6 @@ export default function PaymentDetailDialog({
   }, [onClose, selectedXdr, xdr]);
 
   if (selectedXdr) {
-    let content: React.ReactNode;
-    try {
-      content = <XdrViewer xdr={selectedXdr} />;
-    } catch (e) {
-      content = (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          <p className="font-semibold mb-1">Failed to decode XDR</p>
-          <p className="font-mono text-xs break-all">
-            {e instanceof Error ? e.message : "Unknown error"}
-          </p>
-        </div>
-      );
-    }
-
     const headerTitle =
       title ??
       (xdr
@@ -763,7 +775,7 @@ export default function PaymentDetailDialog({
             </div>
           </div>
           <div className="overflow-y-auto px-6 py-4 flex-1">
-            {content}
+            <XdrViewer xdr={selectedXdr} />
             {decodeError && (
               <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
                 {decodeError}

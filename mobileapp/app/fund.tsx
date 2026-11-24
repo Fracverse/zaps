@@ -14,29 +14,111 @@ import { useRouter, Stack } from "expo-router";
 import { COLORS } from "../src/constants/colors";
 import { Button } from "../src/components/Button";
 import { fetchWithRetry } from "../src/utils/retry";
+import { getLocalKeypair } from "../src/services/stellarWallet";
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8080";
 
 const NETWORKS = [
-  { id: "solana", name: "Solana" },
-  { id: "ethereum", name: "Ethereum" },
-  { id: "bsc", name: "BNB Chain" },
-  { id: "polygon", name: "Polygon" },
+  { id: "SOL", name: "Solana" },
+  { id: "ETH", name: "Ethereum" },
+  { id: "BSC", name: "BNB Chain" },
+  { id: "POL", name: "Polygon" },
 ];
 
 const TOKENS = [
-  { id: "usdc", name: "USDC", symbol: "USDC" },
-  { id: "usdt", name: "USDT", symbol: "USDT" },
-  { id: "sol", name: "SOL", symbol: "SOL" },
-  { id: "eth", name: "ETH", symbol: "ETH" },
+  { id: "usdc", name: "USDC", symbol: "USDC", decimals: 6 },
+  { id: "usdt", name: "USDT", symbol: "USDT", decimals: 6 },
+  { id: "sol", name: "SOL", symbol: "SOL", decimals: 9 },
+  { id: "eth", name: "ETH", symbol: "ETH", decimals: 18 },
 ];
 
 interface BridgeQuote {
   fee: string;
-  receiveAmount: string;
-  route: string;
-  estimatedTime: number;
-  bridgeId: string;
+  receive_amount: string;
+  bridge_tx_data: string;
+  route?: string;
+  bridgeId?: string;
+}
+
+interface DropdownOption {
+  id: string;
+  name: string;
+}
+
+interface DropdownSelectorProps {
+  label: string;
+  value: DropdownOption;
+  options: DropdownOption[];
+  onChange: (option: DropdownOption) => void;
+}
+
+function DropdownSelector({
+  label,
+  value,
+  options,
+  onChange,
+}: DropdownSelectorProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <View style={styles.selectorContainer}>
+      <Text style={styles.sectionLabel}>{label}</Text>
+      <TouchableOpacity
+        style={styles.selectorButton}
+        onPress={() => setExpanded((current) => !current)}
+        accessibilityRole="button"
+        accessibilityLabel={`${label}: ${value.name}`}
+        accessibilityState={{ expanded }}
+      >
+        <Text style={styles.selectorValue}>{value.name}</Text>
+        <Ionicons
+          name={expanded ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={COLORS.primary}
+        />
+      </TouchableOpacity>
+      {expanded ? (
+        <View style={styles.selectorOptions}>
+          {options.map((option) => (
+            <TouchableOpacity
+              key={option.id}
+              style={[
+                styles.selectorOption,
+                option.id === value.id && styles.selectorOptionActive,
+              ]}
+              onPress={() => {
+                onChange(option);
+                setExpanded(false);
+              }}
+              accessibilityRole="button"
+              accessibilityState={{ selected: option.id === value.id }}
+            >
+              <Text
+                style={[
+                  styles.selectorOptionText,
+                  option.id === value.id && styles.selectorOptionTextActive,
+                ]}
+              >
+                {option.name}
+              </Text>
+              {option.id === value.id ? (
+                <Ionicons name="checkmark" size={18} color={COLORS.primary} />
+              ) : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function toBaseUnits(amount: string, decimals: number): string | null {
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(amount.trim());
+  if (!match || (match[2]?.length ?? 0) > decimals) return null;
+
+  const units = `${match[1]}${(match[2] ?? "").padEnd(decimals, "0")}`;
+  const normalized = units.replace(/^0+(?=\d)/, "");
+  return /^0+$/.test(normalized) ? null : normalized;
 }
 
 interface BridgeStatus {
@@ -60,6 +142,7 @@ export default function FundScreen() {
   const [selectedNetwork, setSelectedNetwork] = useState(NETWORKS[0]);
   const [selectedToken, setSelectedToken] = useState(TOKENS[0]);
   const [amount, setAmount] = useState("");
+  const [destinationAddress, setDestinationAddress] = useState("");
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [quote, setQuote] = useState<BridgeQuote | null>(null);
   const [error, setError] = useState("");
@@ -69,39 +152,79 @@ export default function FundScreen() {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus | null>(null);
   const [bridgeId, setBridgeId] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchQuote = useCallback(async () => {
-    if (!amount || parseFloat(amount) <= 0) return;
-    setLoadingQuote(true);
-    setError("");
-    try {
-      const res = await fetchWithRetry(`${API_BASE}/api/bridge/quote`, {
-        method: "POST",
-        body: JSON.stringify({
-          sourceNetwork: selectedNetwork.id,
-          sourceToken: selectedToken.symbol,
-          amount,
-          destinationNetwork: "stellar",
-          destinationToken: "USDC",
-        }),
-      });
-      const data: BridgeQuote = await res.json();
-      setQuote(data);
-    } catch {
-      setError("Failed to fetch bridge quote. Please try again.");
-    } finally {
-      setLoadingQuote(false);
-    }
-  }, [amount, selectedNetwork.id, selectedToken.symbol]);
+  const quoteRequestRef = useRef(0);
 
   useEffect(() => {
+    let isMounted = true;
+    getLocalKeypair().then((keypair) => {
+      if (isMounted && keypair) setDestinationAddress(keypair.publicKey());
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const fetchQuote = useCallback(
+    async (requestId: number) => {
+      const amountInBaseUnits = toBaseUnits(amount, selectedToken.decimals);
+      if (!amountInBaseUnits) return;
+      if (!destinationAddress.trim()) {
+        setError("Enter a Stellar destination address to get a quote.");
+        return;
+      }
+
+      setLoadingQuote(true);
+      setError("");
+      try {
+        const res = await fetchWithRetry(`${API_BASE}/api/bridge/quote`, {
+          method: "POST",
+          body: JSON.stringify({
+            source_chain: selectedNetwork.id,
+            source_token: selectedToken.symbol,
+            amount: amountInBaseUnits,
+            destination_chain: "STLR",
+            destination_token: "USDC",
+            destination_address: destinationAddress.trim(),
+          }),
+        });
+        const data = (await res.json()) as BridgeQuote;
+        if (!data.fee || !data.receive_amount) {
+          throw new Error("The bridge provider returned an incomplete quote.");
+        }
+        if (requestId !== quoteRequestRef.current) return;
+        setQuote(data);
+      } catch (quoteError) {
+        if (requestId !== quoteRequestRef.current) return;
+        setError(
+          quoteError instanceof Error
+            ? quoteError.message
+            : "Failed to fetch bridge quote. Please try again."
+        );
+      } finally {
+        if (requestId === quoteRequestRef.current) setLoadingQuote(false);
+      }
+    },
+    [amount, destinationAddress, selectedNetwork.id, selectedToken]
+  );
+
+  useEffect(() => {
+    const requestId = ++quoteRequestRef.current;
     setQuote(null);
     setError("");
-    if (amount && parseFloat(amount) > 0) {
-      const debounce = setTimeout(fetchQuote, 500);
+    setLoadingQuote(false);
+    if (toBaseUnits(amount, selectedToken.decimals)) {
+      const debounce = setTimeout(() => {
+        void fetchQuote(requestId);
+      }, 500);
       return () => clearTimeout(debounce);
     }
-  }, [selectedNetwork.id, selectedToken.id, amount, fetchQuote]);
+  }, [
+    selectedNetwork.id,
+    selectedToken,
+    amount,
+    destinationAddress,
+    fetchQuote,
+  ]);
 
   const pollBridgeStatus = useCallback(async (id: string) => {
     try {
@@ -198,72 +321,25 @@ export default function FundScreen() {
               wallet using Allbridge Core.
             </Text>
 
-            <Text style={styles.sectionLabel}>Source Network</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.horizontalScroll}
-            >
-              {NETWORKS.map((network) => (
-                <TouchableOpacity
-                  key={network.id}
-                  style={[
-                    styles.networkCard,
-                    selectedNetwork.id === network.id &&
-                      styles.networkCardActive,
-                  ]}
-                  onPress={() => {
-                    setSelectedNetwork(network);
-                    setQuote(null);
-                  }}
-                >
-                  <Ionicons
-                    name="radio-button-off-outline"
-                    size={20}
-                    color={
-                      selectedNetwork.id === network.id
-                        ? COLORS.secondary
-                        : COLORS.primary
-                    }
-                  />
-                  <Text
-                    style={[
-                      styles.networkName,
-                      selectedNetwork.id === network.id &&
-                        styles.networkNameActive,
-                    ]}
-                  >
-                    {network.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            <DropdownSelector
+              label="Source Network"
+              value={selectedNetwork}
+              options={NETWORKS}
+              onChange={(option) => {
+                const network = NETWORKS.find((item) => item.id === option.id);
+                if (network) setSelectedNetwork(network);
+              }}
+            />
 
-            <Text style={styles.sectionLabel}>Token to Bridge</Text>
-            <View style={styles.tokenGrid}>
-              {TOKENS.map((token) => (
-                <TouchableOpacity
-                  key={token.id}
-                  style={[
-                    styles.tokenCard,
-                    selectedToken.id === token.id && styles.tokenCardActive,
-                  ]}
-                  onPress={() => {
-                    setSelectedToken(token);
-                    setQuote(null);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.tokenText,
-                      selectedToken.id === token.id && styles.tokenTextActive,
-                    ]}
-                  >
-                    {token.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <DropdownSelector
+              label="Token to Bridge"
+              value={selectedToken}
+              options={TOKENS}
+              onChange={(option) => {
+                const token = TOKENS.find((item) => item.id === option.id);
+                if (token) setSelectedToken(token);
+              }}
+            />
 
             <Text style={styles.sectionLabel}>Amount</Text>
             <View style={styles.amountInputContainer}>
@@ -278,6 +354,18 @@ export default function FundScreen() {
                 }}
               />
               <Text style={styles.currencySuffix}>{selectedToken.symbol}</Text>
+            </View>
+
+            <Text style={styles.sectionLabel}>Stellar Destination</Text>
+            <View style={styles.amountInputContainer}>
+              <TextInput
+                style={styles.amountInput}
+                placeholder="Enter Stellar public key"
+                autoCapitalize="characters"
+                value={destinationAddress}
+                onChangeText={setDestinationAddress}
+                accessibilityLabel="Stellar destination address"
+              />
             </View>
 
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
@@ -296,7 +384,9 @@ export default function FundScreen() {
 
                 <View style={styles.quoteRow}>
                   <Text style={styles.quoteLabel}>Bridge Route:</Text>
-                  <Text style={styles.quoteVal}>{quote.route}</Text>
+                  <Text style={styles.quoteVal}>
+                    {quote.route ?? `${selectedNetwork.name} to Stellar`}
+                  </Text>
                 </View>
 
                 <View style={styles.quoteRow}>
@@ -311,24 +401,18 @@ export default function FundScreen() {
                     Estimated USDC Received:
                   </Text>
                   <Text style={styles.quoteValHighlight}>
-                    ${quote.receiveAmount} USDC
-                  </Text>
-                </View>
-
-                <View style={styles.quoteRow}>
-                  <Text style={styles.quoteLabel}>Est. Time:</Text>
-                  <Text style={styles.quoteVal}>
-                    ~{Math.ceil(quote.estimatedTime / 60)} min
+                    {quote.receive_amount} USDC
                   </Text>
                 </View>
 
                 <Button
                   title="Confirm & Initiate Bridge"
                   onPress={startBridge}
-                  style={[
-                    styles.actionBtn,
-                    { marginTop: 16, backgroundColor: "#2E7D32" },
-                  ]}
+                  style={{
+                    ...styles.actionBtn,
+                    marginTop: 16,
+                    backgroundColor: "#2E7D32",
+                  }}
                 />
               </View>
             ) : null}
@@ -359,23 +443,35 @@ export default function FundScreen() {
             <View style={styles.progressContainer}>
               {BRIDGE_STEPS.map((s, i) => {
                 const currentStep = getStepIndex();
-                const isActive = i < currentStep;
+                const isStepCompleted =
+                  i < currentStep - 1 ||
+                  (i === currentStep - 1 && bridgeStatus?.completed);
+                const isCurrent =
+                  i === currentStep - 1 && !bridgeStatus?.completed;
                 const isLast = i === BRIDGE_STEPS.length - 1;
+
                 return (
                   <React.Fragment key={s.key}>
                     <View
                       style={[
                         styles.progressDot,
-                        isActive && styles.progressDotActive,
+                        isStepCompleted && styles.progressDotActive,
+                        isCurrent && styles.progressDotCurrent,
                       ]}
                     >
-                      {isActive && (
+                      {isStepCompleted ? (
                         <Ionicons
                           name="checkmark"
-                          size={10}
+                          size={12}
                           color={COLORS.secondary}
                         />
-                      )}
+                      ) : isCurrent ? (
+                        <ActivityIndicator
+                          size="small"
+                          color={COLORS.secondary}
+                          style={{ transform: [{ scale: 0.6 }] }}
+                        />
+                      ) : null}
                     </View>
                     {!isLast && (
                       <View
@@ -393,15 +489,18 @@ export default function FundScreen() {
             <View style={styles.progressLabels}>
               {BRIDGE_STEPS.map((s, i) => {
                 const currentStep = getStepIndex();
+                const isStepCompleted =
+                  i < currentStep - 1 ||
+                  (i === currentStep - 1 && bridgeStatus?.completed);
+                const isCurrent =
+                  i === currentStep - 1 && !bridgeStatus?.completed;
                 return (
                   <Text
                     key={s.key}
                     style={[
                       styles.progressLabel,
-                      i < currentStep && styles.progressLabelActive,
-                      i === currentStep - 1 && bridgeStatus?.completed
-                        ? styles.progressLabelActive
-                        : null,
+                      (isStepCompleted || isCurrent) &&
+                        styles.progressLabelActive,
                     ]}
                   >
                     {i + 1}. {s.label}
@@ -409,6 +508,44 @@ export default function FundScreen() {
                 );
               })}
             </View>
+
+            {/* Dynamic polling confirmations badge & progress bar */}
+            {bridgeStatus &&
+              bridgeStatus.requiredConfirmations > 0 &&
+              !bridgeStatus.completed && (
+                <View style={styles.confirmationBox}>
+                  <View style={styles.confirmationHeader}>
+                    <View style={styles.confirmationPulseDot} />
+                    <Text style={styles.confirmationLabel}>
+                      Lock Confirmations
+                    </Text>
+                    <Text style={styles.confirmationCount}>
+                      {bridgeStatus.confirmations} /{" "}
+                      {bridgeStatus.requiredConfirmations}
+                    </Text>
+                  </View>
+                  <View style={styles.confirmationProgressBar}>
+                    <View
+                      style={[
+                        styles.confirmationProgressFill,
+                        {
+                          width: `${Math.min(
+                            100,
+                            Math.max(
+                              5,
+                              Math.round(
+                                (bridgeStatus.confirmations /
+                                  bridgeStatus.requiredConfirmations) *
+                                  100
+                              )
+                            )
+                          )}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+              )}
 
             {bridgeStatus?.txHash ? (
               <Text style={styles.txHash}>
@@ -420,10 +557,11 @@ export default function FundScreen() {
               <Button
                 title="Back to Wallet"
                 onPress={handleDone}
-                style={[
-                  styles.actionBtn,
-                  { marginTop: 40, backgroundColor: COLORS.primary },
-                ]}
+                style={{
+                  ...styles.actionBtn,
+                  marginTop: 40,
+                  backgroundColor: COLORS.primary,
+                }}
               />
             )}
           </View>
@@ -477,63 +615,53 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: 10,
   },
-  horizontalScroll: {
-    marginBottom: 16,
+  selectorContainer: {
+    marginBottom: 8,
   },
-  networkCard: {
+  selectorButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F5F5F5",
+    justifyContent: "space-between",
+    backgroundColor: COLORS.white,
+    height: 52,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 100,
-    marginRight: 10,
-    gap: 8,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#E0E0E0",
+    borderColor: "#DDE5DF",
   },
-  networkCardActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  networkName: {
-    fontSize: 14,
-    color: COLORS.primary,
+  selectorValue: {
+    fontSize: 15,
     fontFamily: "Outfit_500Medium",
+    color: COLORS.black,
   },
-  networkNameActive: {
-    color: COLORS.secondary,
-    fontFamily: "Outfit_700Bold",
-  },
-  tokenGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 20,
-  },
-  tokenCard: {
-    flex: 1,
-    minWidth: "22%",
-    height: 44,
-    backgroundColor: "#F5F5F5",
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
+  selectorOptions: {
+    marginTop: 6,
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#E0E0E0",
+    borderColor: "#DDE5DF",
+    overflow: "hidden",
   },
-  tokenCardActive: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
+  selectorOption: {
+    minHeight: 48,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2EF",
   },
-  tokenText: {
+  selectorOptionActive: {
+    backgroundColor: "#F0F7F2",
+  },
+  selectorOptionText: {
     fontSize: 14,
-    color: COLORS.primary,
-    fontFamily: "Outfit_600SemiBold",
+    fontFamily: "Outfit_400Regular",
+    color: COLORS.black,
   },
-  tokenTextActive: {
-    color: COLORS.secondary,
-    fontFamily: "Outfit_700Bold",
+  selectorOptionTextActive: {
+    fontFamily: "Outfit_600SemiBold",
+    color: COLORS.primary,
   },
   amountInputContainer: {
     flexDirection: "row",
@@ -674,6 +802,56 @@ const styles = StyleSheet.create({
   },
   progressDotActive: {
     backgroundColor: COLORS.primary,
+  },
+  progressDotCurrent: {
+    backgroundColor: COLORS.primary,
+    borderWidth: 2,
+    borderColor: "#4ADE80",
+    transform: [{ scale: 1.15 }],
+  },
+  confirmationBox: {
+    width: "82%",
+    backgroundColor: "#F4FAF6",
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 24,
+    borderWidth: 1,
+    borderColor: "#D1E7DD",
+  },
+  confirmationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  confirmationPulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#16A34A",
+    marginRight: 6,
+  },
+  confirmationLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#166534",
+  },
+  confirmationCount: {
+    fontSize: 13,
+    fontFamily: "Outfit_700Bold",
+    color: "#166534",
+  },
+  confirmationProgressBar: {
+    height: 6,
+    backgroundColor: "#E2E8F0",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  confirmationProgressFill: {
+    height: "100%",
+    backgroundColor: "#16A34A",
+    borderRadius: 3,
   },
   progressLine: {
     flex: 1,

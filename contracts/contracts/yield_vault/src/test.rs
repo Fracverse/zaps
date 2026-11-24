@@ -60,6 +60,43 @@ fn test_initialize_sets_defaults() {
 }
 
 #[test]
+fn test_initialize_stores_configuration_in_instance_storage() {
+    let (env, client, contract_id, owner, depositor, token) = setup();
+
+    env.as_contract(&contract_id, || {
+        assert_eq!(env.storage().instance().get(&OWNER_KEY), Some(owner));
+        assert_eq!(env.storage().instance().get(&TOKEN_KEY), Some(token));
+        assert_eq!(env.storage().instance().get(&APY_KEY), Some(APY_BPS));
+        assert_eq!(env.storage().instance().get(&SHARES_KEY), Some(0i128));
+        assert_eq!(env.storage().instance().get(&ASSETS_KEY), Some(0i128));
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&DataKey::UserShares(depositor)));
+    });
+
+    assert_eq!(client.apy(), APY_BPS);
+}
+
+#[test]
+fn test_deposit_keeps_user_shares_in_persistent_storage() {
+    let (env, client, contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&depositor, &amount, &0);
+
+    env.as_contract(&contract_id, || {
+        let user_shares_key = DataKey::UserShares(depositor);
+        assert_eq!(
+            env.storage().persistent().get(&user_shares_key),
+            Some(amount)
+        );
+        assert!(!env.storage().instance().has(&user_shares_key));
+        assert_eq!(env.storage().instance().get(&SHARES_KEY), Some(amount));
+        assert_eq!(env.storage().instance().get(&ASSETS_KEY), Some(amount));
+    });
+}
+
+#[test]
 #[ignore]
 fn test_initialize_twice_panics() {
     let (_env, client, _contract_id, owner, _depositor, token) = setup();
@@ -72,7 +109,7 @@ fn test_deposit_mints_shares_at_initial_index() {
     let (env, client, contract_id, _owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
 
     let expected_shares = amount * PRECISION / PRECISION;
     assert_eq!(client.shares_of(&depositor), expected_shares);
@@ -85,11 +122,71 @@ fn test_deposit_mints_shares_at_initial_index() {
 }
 
 #[test]
+fn test_deposit_uses_current_index_for_empty_vault_shares() {
+    let (env, client, _contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    let index = client.yield_index();
+    assert!(index > PRECISION, "the seeded ledger should accrue yield");
+
+    // With no existing shares/assets, virtual shares and assets price the
+    // deposit at the current index while protecting the initial exchange rate.
+    let virtual_assets = VIRTUAL_OFFSET * index / PRECISION;
+    let expected_shares = amount * VIRTUAL_OFFSET / virtual_assets;
+    client.deposit(&depositor, &amount, &expected_shares);
+
+    assert_eq!(client.shares_of(&depositor), expected_shares);
+    assert!(expected_shares < amount);
+}
+
+#[test]
+fn test_deposit_uses_current_index_with_existing_vault_shares() {
+    let (env, client, _contract_id, _owner, first_depositor, token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&first_depositor, &amount, &0);
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    let index = client.yield_index();
+    let second_depositor = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&second_depositor, &amount);
+
+    let virtual_assets = VIRTUAL_OFFSET * index / PRECISION;
+    let expected_shares = amount * (client.total_shares() + VIRTUAL_OFFSET)
+        / (client.total_assets() + virtual_assets);
+    client.deposit(&second_depositor, &amount, &expected_shares);
+
+    assert_eq!(client.shares_of(&second_depositor), expected_shares);
+    assert!(expected_shares < amount);
+}
+
+#[test]
 #[ignore]
 fn test_deposit_rejects_zero_amount() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
-    let res = client.try_deposit(&depositor, &0);
+    let res = client.try_deposit(&depositor, &0, &0);
     assert!(res.is_err());
+}
+
+#[test]
+fn test_deposit_rejects_when_shares_below_min_shares_out() {
+    let (_env, client, _contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+
+    // At the initial 1:1 index, `amount` yields exactly `amount` shares.
+    // Requiring one more share than that is achievable should revert.
+    let res = client.try_deposit(&depositor, &amount, &(amount + 1));
+    assert!(res.is_err(), "deposit must revert with SlippageExceeded");
+}
+
+#[test]
+fn test_deposit_succeeds_when_min_shares_out_met() {
+    let (_env, client, _contract_id, _owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+
+    // Exactly matching the achievable share output must succeed.
+    client.deposit(&depositor, &amount, &amount);
+    assert_eq!(client.shares_of(&depositor), amount);
 }
 
 #[test]
@@ -97,7 +194,7 @@ fn test_withdraw_releases_reentrancy_lock() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
     let amount = 1_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let shares = client.shares_of(&depositor);
     let half = shares / 2;
 
@@ -109,10 +206,10 @@ fn test_withdraw_releases_reentrancy_lock() {
 
 #[test]
 fn test_withdraw_returns_principal_at_initial_index() {
-    let (env, client, _contract_id, _owner, depositor, token) = setup();
+    let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let shares = client.shares_of(&depositor);
 
     client.withdraw(&depositor, &shares);
@@ -121,8 +218,71 @@ fn test_withdraw_returns_principal_at_initial_index() {
     assert_eq!(client.total_shares(), 0);
     assert_eq!(client.total_assets(), 0);
 
+    // #999: 0.1% exit fee (10 bps) goes to treasury (owner by default).
+    let fee = amount * 10 / 10_000;
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT - fee);
+    assert_eq!(token_client.balance(&owner), fee);
+}
+
+#[test]
+fn test_withdraw_exit_fee_routed_to_treasury() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 1_000_000i128;
+    let treasury = Address::generate(&env);
+
+    assert_eq!(client.exit_fee_bps(), 10);
+    assert_eq!(client.treasury(), owner);
+
+    client.set_treasury(&owner, &treasury);
+    client.deposit(&depositor, &amount, &0);
+    let shares = client.shares_of(&depositor);
+    client.withdraw(&depositor, &shares);
+
+    let fee = amount * 10 / 10_000; // 1_000
+    let token_client = token::Client::new(&env, &token);
+    assert_eq!(token_client.balance(&treasury), fee);
+    assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT - fee);
+}
+
+#[test]
+fn test_withdraw_zero_exit_fee_sends_full_amount() {
+    let (env, client, _contract_id, owner, depositor, token) = setup();
+    let amount = 1_000_000i128;
+
+    client.set_exit_fee_bps(&owner, &0);
+    assert_eq!(client.exit_fee_bps(), 0);
+
+    client.deposit(&depositor, &amount, &0);
+    let shares = client.shares_of(&depositor);
+    client.withdraw(&depositor, &shares);
+
     let token_client = token::Client::new(&env, &token);
     assert_eq!(token_client.balance(&depositor), DEPOSIT_AMOUNT);
+    assert_eq!(token_client.balance(&owner), 0);
+}
+
+#[test]
+fn test_accrue_yield_emits_accrue_yield_event_on_compound() {
+    let (env, client, _contract_id, owner, depositor, _token) = setup();
+    let amount = 1_000_000i128;
+    client.deposit(&depositor, &amount, &0);
+
+    advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    client.accrue_yield(&owner);
+
+    let topic: Val = Symbol::new(&env, "accrue_yield").into_val(&env);
+    let mut found = false;
+    for item in env.events().all().iter() {
+        if item.1.contains(topic) {
+            let (old_index, new_index, total_assets): (i128, i128, i128) =
+                item.2.try_into_val(&env).unwrap();
+            assert!(new_index > old_index, "index must compound");
+            assert_eq!(total_assets, amount);
+            found = true;
+        }
+    }
+    assert!(found, "accrue_yield event not emitted on compound");
 }
 
 #[test]
@@ -137,7 +297,7 @@ fn test_withdraw_rejects_zero_shares() {
 #[ignore]
 fn test_withdraw_rejects_insufficient_shares() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
-    client.deposit(&depositor, &1_000_000);
+    client.deposit(&depositor, &1_000_000, &0);
     let res = client.try_withdraw(&depositor, &999_999_999);
     assert!(res.is_err());
 }
@@ -166,7 +326,7 @@ fn test_exchange_rate_scales_after_ledger_advance() {
     let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 1_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let first_shares = client.shares_of(&depositor);
 
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
@@ -177,7 +337,7 @@ fn test_exchange_rate_scales_after_ledger_advance() {
     let token_client = token::StellarAssetClient::new(&env, &token);
     token_client.mint(&second_depositor, &amount);
 
-    client.deposit(&second_depositor, &amount);
+    client.deposit(&second_depositor, &amount, &0);
     let second_shares = client.shares_of(&second_depositor);
 
     assert!(
@@ -200,7 +360,7 @@ fn test_deposit_withdraw_boundary_full_balance() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
     let amount = DEPOSIT_AMOUNT;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let shares = client.shares_of(&depositor);
     client.withdraw(&depositor, &shares);
 
@@ -213,7 +373,7 @@ fn test_partial_withdraw_leaves_remaining_shares() {
     let (_env, client, _contract_id, _owner, depositor, _token) = setup();
     let amount = 2_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let total_shares = client.shares_of(&depositor);
     let half = total_shares / 2;
 
@@ -284,7 +444,7 @@ fn test_mock_protocol_access_control_rejects_non_owner() {
 #[test]
 fn test_mock_protocol_rewards_accrue_over_time() {
     let (env, client, _contract_id, owner, depositor, _token) = setup();
-    client.deposit(&depositor, &1_000_000);
+    client.deposit(&depositor, &1_000_000, &0);
 
     advance_ledgers(&env, LEDGERS_PER_YEAR / 10);
     let pending = client.mock_protocol_pending_rewards();
@@ -340,34 +500,83 @@ fn test_salvage_token_rejects_non_owner() {
 }
 
 #[test]
-fn test_full_lifecycle_deposit_yield_withdraw() {
-    let (env, client, _contract_id, owner, depositor, token) = setup();
-    let amount = 5_000_000i128;
+fn test_full_yield_vault_lifecycle() {
+    let (env, client, contract_id, owner, depositor, token) = setup();
+    let deposit_amount = 5_000_000i128;
+    let initial_user_balance = DEPOSIT_AMOUNT;
+    let initial_apy = client.apy();
 
-    client.deposit(&depositor, &amount);
-    let shares = client.shares_of(&depositor);
+    // Deposit and verify both external funds and the newly-created position.
+    let balance_before_deposit = token::Client::new(&env, &token).balance(&depositor);
+    client.deposit(&depositor, &deposit_amount, &0);
+    let shares_after_deposit = client.shares_of(&depositor);
+    assert_eq!(balance_before_deposit - deposit_amount, DEPOSIT_AMOUNT - deposit_amount);
+    assert_eq!(token::Client::new(&env, &token).balance(&contract_id), deposit_amount);
+    assert_eq!(shares_after_deposit, deposit_amount);
+    assert_eq!(client.user_deposit(&depositor), deposit_amount);
+    assert_eq!(client.total_assets(), deposit_amount);
 
+    // Queue and apply an APY change through the production timelocked path.
+    let updated_apy = 1_000;
+    client.update_apy(&owner, &updated_apy);
+    assert_eq!(client.apy(), initial_apy);
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.apy(), updated_apy);
+
+    // Advance both ledger dimensions before explicitly realizing yield.
     advance_ledgers(&env, YIELD_TEST_LEDGERS);
+    advance_timestamp(&env, 5 * YIELD_TEST_LEDGERS as u64);
+    let index_before_accrual = client.yield_index();
+    let assets_before_accrual = client.total_assets();
     client.accrue_yield(&owner);
+    let index_after_accrual = client.yield_index();
+    let assets_after_accrual = client.total_assets();
+    let expected_index = index_before_accrual
+        + index_before_accrual * updated_apy as i128 * YIELD_TEST_LEDGERS as i128
+            / (10_000 * LEDGERS_PER_YEAR as i128);
+    let expected_protocol_rewards = deposit_amount * 650i128 * YIELD_TEST_LEDGERS as i128
+        / (10_000 * LEDGERS_PER_YEAR as i128);
+    assert_eq!(index_after_accrual, expected_index);
+    assert_eq!(assets_after_accrual, assets_before_accrual + expected_protocol_rewards);
+    assert!(assets_after_accrual > deposit_amount);
 
-    let index = client.yield_index();
-    assert!(
-        index > PRECISION,
-        "yield should compound after ledger advance"
+    // Withdraw half the position and retain the remainder for emergency exit.
+    let partial_shares = shares_after_deposit / 2;
+    assert!(partial_shares > 0 && partial_shares < shares_after_deposit);
+    let expected_partial = partial_shares
+        * (assets_after_accrual + VIRTUAL_OFFSET)
+        / (client.total_shares() + VIRTUAL_OFFSET);
+    // #999: 0.1% exit fee deducted from the withdrawn amount.
+    let expected_partial_fee = expected_partial * 10 / 10_000;
+    let expected_partial_net = expected_partial - expected_partial_fee;
+    let balance_before_partial = token::Client::new(&env, &token).balance(&depositor);
+    client.withdraw(&depositor, &partial_shares);
+    let balance_after_partial = token::Client::new(&env, &token).balance(&depositor);
+    assert_eq!(balance_after_partial - balance_before_partial, expected_partial_net);
+    assert_eq!(client.shares_of(&depositor), shares_after_deposit - partial_shares);
+    assert!(client.shares_of(&depositor) > 0);
+
+    // Exit the remaining position and assert the complete final balance state.
+    let remaining_shares = client.shares_of(&depositor);
+    let assets_before_exit = client.total_assets();
+    let expected_exit = remaining_shares
+        * (assets_before_exit + VIRTUAL_OFFSET)
+        / (client.total_shares() + VIRTUAL_OFFSET);
+    let balance_before_exit = token::Client::new(&env, &token).balance(&depositor);
+    client.emergency_exit(&depositor);
+    let final_user_balance = token::Client::new(&env, &token).balance(&depositor);
+
+    assert_eq!(final_user_balance, balance_before_exit + expected_exit);
+    assert_eq!(
+        final_user_balance,
+        initial_user_balance - deposit_amount + expected_partial_net + expected_exit
     );
-
-    let half_shares = shares / 2;
-    let tot_shares = client.total_shares();
-    let tot_assets = client.total_assets();
-    // SC-051: expected_out uses virtual offset formula
-    let expected_out = half_shares * (tot_assets + VIRTUAL_OFFSET) / (tot_shares + VIRTUAL_OFFSET);
-    client.withdraw(&depositor, &half_shares);
-
-    let token_client = token::Client::new(&env, &token);
-    let withdrawn = token_client.balance(&depositor) - (DEPOSIT_AMOUNT - amount);
-    assert_eq!(withdrawn, expected_out);
-    assert_eq!(client.shares_of(&depositor), shares - half_shares);
-    assert!(client.total_assets() > 0);
+    assert_eq!(client.shares_of(&depositor), 0);
+    assert_eq!(client.user_deposit(&depositor), 0);
+    assert_eq!(client.total_shares(), 0);
+    assert_eq!(client.total_assets(), 0);
+    assert_eq!(token::Client::new(&env, &token).balance(&contract_id), 0);
 }
 
 #[test]
@@ -377,11 +586,11 @@ fn test_pause_unpause_and_deposit_rejection() {
 
     client.pause(&owner);
 
-    let res = client.try_deposit(&depositor, &1_000_000);
+    let res = client.try_deposit(&depositor, &1_000_000, &0);
     assert!(res.is_err(), "deposit must fail when vault is paused");
 
     client.unpause(&owner);
-    client.deposit(&depositor, &1_000_000);
+    client.deposit(&depositor, &1_000_000, &0);
     assert_eq!(client.shares_of(&depositor), 1_000_000);
 }
 
@@ -390,7 +599,7 @@ fn test_emergency_exit_rescues_assets() {
     let (env, client, _contract_id, owner, depositor, token) = setup();
     let amount = 2_000_000i128;
 
-    client.deposit(&depositor, &amount);
+    client.deposit(&depositor, &amount, &0);
     let _shares = client.shares_of(&depositor);
 
     client.pause(&owner);
@@ -436,6 +645,62 @@ fn test_apply_apy_rejects_without_pending_change() {
 }
 
 #[test]
+fn test_cancel_apy_clears_pending_change() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    client.update_apy(&owner, &1_000);
+    assert_eq!(client.pending_apy(), Some(1_000));
+
+    client.cancel_apy(&owner);
+
+    // Pending state must be cleared.
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+
+    // Active APY must remain unchanged after cancellation.
+    assert_eq!(client.apy(), APY_BPS);
+
+    // A new APY change can be queued after cancellation.
+    client.update_apy(&owner, &1_500);
+    assert_eq!(client.pending_apy(), Some(1_500));
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.apy(), 1_500);
+}
+
+#[test]
+#[ignore]
+fn test_cancel_apy_rejects_without_pending_change() {
+    let (_env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    let res = client.try_cancel_apy(&owner);
+    assert!(res.is_err(), "cancel_apy must fail with no pending change");
+}
+
+#[test]
+fn test_pending_apy_view_helpers() {
+    let (env, client, _contract_id, owner, _depositor, _token) = setup();
+
+    // No pending change initially.
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+
+    client.update_apy(&owner, &800);
+
+    // After queuing, both helpers must return values.
+    assert_eq!(client.pending_apy(), Some(800));
+    let activation = client.pending_apy_activation().expect("activation must be set");
+    let now = env.ledger().timestamp();
+    assert_eq!(activation, now + APY_TIMELOCK_SECS);
+
+    // After applying, helpers must clear again.
+    advance_timestamp(&env, APY_TIMELOCK_SECS);
+    client.apply_apy(&owner);
+    assert_eq!(client.pending_apy(), None);
+    assert_eq!(client.pending_apy_activation(), None);
+}
+
+#[test]
 fn test_admin_emergency_exit_rescues_reserves() {
     let (env, client, _contract_id, owner, _depositor, token) = setup();
     let amount = 5_000_000i128;
@@ -445,7 +710,7 @@ fn test_admin_emergency_exit_rescues_reserves() {
     token_admin_client.mint(&owner, &amount);
 
     // Admin deposits into the vault
-    client.deposit(&owner, &amount);
+    client.deposit(&owner, &amount, &0);
 
     // Pause the vault
     client.pause(&owner);
@@ -480,7 +745,7 @@ mod fuzz_tests {
             let token_admin_client = token::StellarAssetClient::new(&env, &token);
 
             token_admin_client.mint(&depositor1, &deposit1);
-            client.deposit(&depositor1, &deposit1);
+            client.deposit(&depositor1, &deposit1, &0);
 
             if yield_amount > 0 {
                 client.mock_protocol_supply(&owner, &yield_amount);
@@ -489,7 +754,7 @@ mod fuzz_tests {
             let depositor2 = Address::generate(&env);
             token_admin_client.mint(&depositor2, &deposit2);
 
-            client.deposit(&depositor2, &deposit2);
+            client.deposit(&depositor2, &deposit2, &0);
             let shares2 = client.shares_of(&depositor2);
 
             let total_assets = client.total_assets();

@@ -39,3 +39,5 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+mobileapp/package-lock.json
+package-lock.json

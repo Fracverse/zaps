@@ -26,11 +26,17 @@ const AUTH_COOKIE = {
   path: "/",
 } as const;
 
-async function seedAuthCookies(page: Page): Promise<void> {
-  await page.context().addCookies([
+async function seedAuthCookies(page: Page, isSuperadmin = false): Promise<void> {
+  const cookies = [
     AUTH_COOKIE,
     { ...AUTH_COOKIE, name: "zaps-auth", value: "1" },
-  ]);
+  ];
+
+  if (isSuperadmin) {
+    cookies.push({ ...AUTH_COOKIE, name: "user_role", value: "superadmin" });
+  }
+
+  await page.context().addCookies(cookies);
 }
 
 // ── Privy stub ───────────────────────────────────────────────────────────────
@@ -225,6 +231,8 @@ interface WalletMockOptions {
   connected?: boolean;
   /** Make signTransaction resolve with an error, as a user rejection does. */
   signError?: string;
+  /** Whether the user has superadmin role for RBAC testing. */
+  isSuperadmin?: boolean;
 }
 
 /**
@@ -232,11 +240,11 @@ interface WalletMockOptions {
  */
 async function visitVaultWithWallet(
   page: Page,
-  options: WalletMockOptions = {},
+  options: WalletMockOptions & { isSuperadmin?: boolean } = {},
 ): Promise<void> {
-  const { installed = true, connected = true, signError } = options;
+  const { installed = true, connected = true, signError, isSuperadmin = true } = options;
 
-  await seedAuthCookies(page);
+  await seedAuthCookies(page, isSuperadmin);
 
   await page.addInitScript(
     ({ key, publicKey, signedXdr, installed, connected, signError }) => {
@@ -294,7 +302,7 @@ async function submitApy(page: Page, apy: string): Promise<void> {
 
 test.describe("Yield Vault: APY parameter updates", () => {
   test("admin can update APY and sign with Freighter", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await submitApy(page, "7.5");
 
@@ -304,8 +312,43 @@ test.describe("Yield Vault: APY parameter updates", () => {
     );
   });
 
+  test("admin updates APY config and submits a Freighter signature", async ({
+    page,
+  }) => {
+    await visitVaultWithWallet(page, { isSuperadmin: true });
+
+    // Fill the APY input field.
+    await page.getByLabel("APY (%)").fill("9.75");
+
+    // Tick the confirmation checkbox before the update can be submitted.
+    await page.locator("#vault-confirm").check();
+
+    // Click update; the mocked wallet signs the transaction.
+    await page
+      .getByRole("button", { name: /sign & submit via freighter/i })
+      .click();
+
+    // Success toast is visible with the expected message.
+    const success = page.getByTestId("vault-success");
+    await expect(success).toBeVisible({ timeout: 8_000 });
+    await expect(success).toContainText(/transaction signed and submitted/i);
+
+    // The signed payload carries the entered APY and the connected wallet
+    // address as the admin.
+    const payload = await page.evaluate(() => {
+      const calls = (window as unknown as Record<string, unknown>)
+        .__freighterSignCalls as { xdr: string }[] | undefined;
+      return calls?.length ? JSON.parse(atob(calls[calls.length - 1].xdr)) : null;
+    });
+
+    expect(payload).not.toBeNull();
+    expect(payload.fn).toBe("set_vault_params");
+    expect(payload.apy).toBe("9.75");
+    expect(payload.admin).toBe(MOCK_PUBLIC_KEY);
+  });
+
   test("the APY value entered is what gets signed", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await submitApy(page, "12.25");
     await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
@@ -328,7 +371,7 @@ test.describe("Yield Vault: APY parameter updates", () => {
   });
 
   test("the connected wallet address is submitted as the admin", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await submitApy(page, "6.0");
     await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
@@ -344,7 +387,7 @@ test.describe("Yield Vault: APY parameter updates", () => {
   });
 
   test("the pause flag is carried through with the APY change", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await page.getByRole("switch", { name: /pause vault/i }).click();
     await submitApy(page, "5.5");
@@ -362,7 +405,7 @@ test.describe("Yield Vault: APY parameter updates", () => {
   });
 
   test("submission is blocked until the confirmation box is ticked", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await page.getByLabel("APY (%)").fill("9.0");
 
@@ -374,7 +417,7 @@ test.describe("Yield Vault: APY parameter updates", () => {
   });
 
   test("the confirmation box is cleared after a successful submission", async ({ page }) => {
-    await visitVaultWithWallet(page);
+    await visitVaultWithWallet(page, { isSuperadmin: true });
 
     await submitApy(page, "8.0");
     await expect(page.getByTestId("vault-success")).toBeVisible({ timeout: 8_000 });
@@ -387,7 +430,7 @@ test.describe("Yield Vault: APY parameter updates", () => {
   test("a rejected signature surfaces the wallet's message, not a success toast", async ({
     page,
   }) => {
-    await visitVaultWithWallet(page, { signError: "User declined access" });
+    await visitVaultWithWallet(page, { signError: "User declined access", isSuperadmin: true });
 
     await submitApy(page, "7.5");
 
@@ -397,10 +440,20 @@ test.describe("Yield Vault: APY parameter updates", () => {
   });
 
   test("submission is unavailable while the wallet is disconnected", async ({ page }) => {
-    await visitVaultWithWallet(page, { connected: false });
+    await visitVaultWithWallet(page, { connected: false, isSuperadmin: true });
 
     const submit = page.getByRole("button", { name: /connect wallet to sign/i });
     await expect(submit).toBeVisible();
     await expect(submit).toBeDisabled();
+  });
+
+  test("non-superadmin is redirected from vault page", async ({ page }) => {
+    await seedAuthCookies(page, false); // Regular admin, not superadmin
+    await stubPrivyAuth(page, true);
+    await page.goto("/dashboard/yield");
+
+    // Should be redirected to dashboard with access denied
+    await page.waitForURL((url) => url.pathname === "/dashboard", { timeout: 15_000 });
+    expect(new URL(page.url()).searchParams.get("error")).toBe("access_denied");
   });
 });

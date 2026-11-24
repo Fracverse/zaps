@@ -19,24 +19,27 @@ export default function BatchPayoutSummary({ summary, items }: Props) {
     <View style={styles.card}>
       <Text style={styles.title}>Batch Payout</Text>
 
-      <Text style={styles.totalAmount}>
+      <Text style={styles.totalAmount} testID="batch-payout-total">
         {summary.totalAmount} {summary.currency}
       </Text>
 
       <View style={styles.statsRow}>
-        <Text style={styles.stat}>
+        <Text style={styles.stat} testID="batch-payout-item-count">
           {summary.itemCount} item{summary.itemCount !== 1 ? "s" : ""}
         </Text>
-        <Text style={[styles.stat, styles.completedStat]}>
+        <Text
+          style={[styles.stat, styles.completedStat]}
+          testID="batch-payout-completed-count"
+        >
           {summary.completedCount} completed
         </Text>
         {summary.failedCount > 0 && (
-          <Text style={[styles.stat, styles.failedStat]}>
+          <Text style={[styles.stat, styles.failedStat]} testID="batch-payout-failed-count">
             {summary.failedCount} failed
           </Text>
         )}
         {pendingCount > 0 && (
-          <Text style={[styles.stat, styles.pendingStat]}>
+          <Text style={[styles.stat, styles.pendingStat]} testID="batch-payout-pending-count">
             {pendingCount} pending
           </Text>
         )}

@@ -25,6 +25,8 @@ tags:
     description: Cross-chain token quote, submission, and status tracking
   - name: Yield
     description: Yield vault balance, transaction history, deposit, withdraw, and auto-earn toggle
+  - name: Transactions
+    description: Authenticated paginated transaction history and transaction details
 
 components:
   securitySchemes:
@@ -639,6 +641,120 @@ components:
           description: Human-readable confirmation of the new setting
 
 paths:
+  /api/transactions/history:
+    get:
+      tags:
+        - Transactions
+      summary: Get the authenticated user's transaction history
+      operationId: getTransactionHistory
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: ID of the last item from the previous page
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [sent, received, swap, payment, yield, mass_payout]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [completed, pending, failed]
+        - name: asset
+          in: query
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: amount_min
+          in: query
+          schema:
+            type: number
+        - name: amount_max
+          in: query
+          schema:
+            type: number
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: yield_type
+          in: query
+          schema:
+            type: string
+            enum: [interest, reward, apy]
+      responses:
+        '200':
+          description: Server-backed transaction page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  next_cursor:
+                    type: string
+                    nullable: true
+                  total:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Failed to retrieve transaction history
+
+  /api/transactions/history/{id}:
+    get:
+      tags:
+        - Transactions
+      summary: Get one transaction owned by the authenticated user
+      operationId: getTransactionHistoryDetail
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Transaction detail
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          description: Transaction not found
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
   /health:
     get:
       tags:

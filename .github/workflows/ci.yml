@@ -30,10 +30,10 @@ jobs:
         with:
           node-version: 18
           cache: npm
-          cache-dependency-path: mobileapp/package-lock.json
+          cache-dependency-path: mobileapp/package.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --legacy-peer-deps
 
       - name: Lint
         run: npm run lint || true

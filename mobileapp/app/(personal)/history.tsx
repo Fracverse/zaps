@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -18,8 +18,58 @@ import { useTransactions } from "../../src/hooks/useTransactions";
 import { TransactionFilterSheet } from "../../src/components/TransactionFilterSheet";
 import { Transaction, TransactionFilters } from "../../src/types/transaction";
 import { formatDate } from "../../src/utils/formatting";
+import {
+  speedUpTransaction,
+  getLocalKeypair,
+  checkFreighter,
+} from "../../src/services/stellarWallet";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** A pending transaction is considered "stuck" (and eligible to Speed Up) once
+ *  it has been pending longer than this, in milliseconds. */
+const STUCK_PENDING_MS = 60 * 1000;
+
+// #692 — Yield transaction history filtering presets.
+const DATE_PRESETS: { label: string; days: number }[] = [
+  { label: "7D", days: 7 },
+  { label: "30D", days: 30 },
+  { label: "90D", days: 90 },
+  { label: "1Y", days: 365 },
+];
+
+function presetStartIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function isPresetActive(filters: TransactionFilters, days: number): boolean {
+  return filters.dateFrom === presetStartIso(days) && !filters.dateTo;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * A pending transaction can be sped up once it has been pending for more than a
+ * minute and we hold the original envelope XDR needed to build a fee bump.
+ */
+function canSpeedUp(tx: Transaction): boolean {
+  if (tx.status !== "pending" || !tx.stellarTxXdr) return false;
+  return Date.now() - new Date(tx.timestamp).getTime() > STUCK_PENDING_MS;
+}
+
+/** Resolve the currently connected wallet backend, preferring the local
+ *  keypair (this app's bundled demo wallet) and falling back to Freighter. */
+async function resolveWalletSource(): Promise<
+  "freighter" | "albedo" | "local"
+> {
+  const kp = await getLocalKeypair();
+  if (kp) return "local";
+  if (await checkFreighter()) return "freighter";
+  return "local";
+}
 
 function statusColor(status: Transaction["status"]): string {
   switch (status) {
@@ -81,7 +131,8 @@ function hasActiveFilters(f: TransactionFilters): boolean {
     !!f.dateTo ||
     !!f.amountMin ||
     !!f.amountMax ||
-    !!f.yieldOnly
+    !!f.yieldOnly ||
+    !!f.asset
   );
 }
 
@@ -90,9 +141,13 @@ function hasActiveFilters(f: TransactionFilters): boolean {
 const TransactionRow = React.memo(function TransactionRow({
   item,
   onPress,
+  onSpeedUp,
+  speedingUp,
 }: {
   item: Transaction;
   onPress: () => void;
+  onSpeedUp: (tx: Transaction) => void;
+  speedingUp: boolean;
 }) {
   const icon = typeIcon(item.type);
   const isOutgoing = item.type === "sent";
@@ -105,6 +160,7 @@ const TransactionRow = React.memo(function TransactionRow({
     hour: "2-digit",
     minute: "2-digit",
   });
+  const showSpeedUp = canSpeedUp(item);
 
   return (
     <TouchableOpacity
@@ -127,16 +183,25 @@ const TransactionRow = React.memo(function TransactionRow({
             {isMassPayout && item.senderName ? item.senderName : label}
           </Text>
           {isMassPayout && (
-            <View style={styles.massPayoutBadge}>
-              <Ionicons name="people" size={10} color="#7C3AED" />
-              <Text style={styles.massPayoutBadgeText}>Mass Payout</Text>
+            <View
+              style={styles.massPayoutBadge}
+              testID="sdp-disbursement-badge"
+            >
+              <Ionicons name="shield-checkmark" size={10} color="#7C3AED" />
+              <Text style={styles.massPayoutBadgeText}>SDP Disbursement</Text>
             </View>
           )}
         </View>
         {/* Anchor/sender info for SDP disbursements */}
-        {isMassPayout && item.senderAnchor && (
-          <Text style={styles.senderAnchor} numberOfLines={1}>
-            via {item.senderAnchor}
+        {isMassPayout && (
+          <Text
+            style={styles.senderAnchor}
+            numberOfLines={1}
+            testID="sender-anchor-info"
+          >
+            {item.senderAnchor
+              ? `via ${item.senderAnchor}`
+              : "Stellar Disbursement Platform"}
           </Text>
         )}
         <View style={styles.txMeta}>
@@ -167,6 +232,30 @@ const TransactionRow = React.memo(function TransactionRow({
             </View>
           )}
         </View>
+        {showSpeedUp && (
+          <TouchableOpacity
+            style={styles.speedUpBtn}
+            onPress={() => onSpeedUp(item)}
+            disabled={speedingUp}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={`Speed up ${item.amount} ${item.asset}`}
+          >
+            {speedingUp ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <>
+                <Ionicons
+                  name="speedometer-outline"
+                  size={13}
+                  color="#fff"
+                  style={{ marginRight: 5 }}
+                />
+                <Text style={styles.speedUpBtnText}>Speed up</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Amount */}
@@ -273,6 +362,7 @@ export default function HistoryScreen() {
     refreshing,
     loadingMore,
     error,
+    offlineCache,
     filters,
     total,
     reload,
@@ -286,6 +376,29 @@ export default function HistoryScreen() {
   const [searchDebounce, setSearchDebounce] = useState<ReturnType<
     typeof setTimeout
   > | null>(null);
+
+  // Id of the transaction currently being sped up (for per-row loading state).
+  const [speedingUpId, setSpeedingUpId] = useState<string | null>(null);
+
+  const handleSpeedUp = useCallback(
+    async (tx: Transaction) => {
+      if (!tx.stellarTxXdr) return;
+      setSpeedingUpId(tx.id);
+      try {
+        const source = await resolveWalletSource();
+        await speedUpTransaction(tx.stellarTxXdr, source);
+        if (global.toast) global.toast.success("Transaction sped up");
+        // Reflect the new on-chain state.
+        reload();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Could not speed up";
+        if (global.toast) global.toast.error(msg);
+      } finally {
+        setSpeedingUpId(null);
+      }
+    },
+    [reload]
+  );
 
   // Initial load
   useEffect(() => {
@@ -316,6 +429,15 @@ export default function HistoryScreen() {
   const listData = groupByDate(items);
   const filtersActive = hasActiveFilters(filters);
 
+  // #692 — Distinct asset codes present in the filtered result set.
+  const assetOptions = useMemo(
+    () => [
+      "All",
+      ...Array.from(new Set(items.map((tx) => tx.asset.toUpperCase()))).sort(),
+    ],
+    [items]
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: ListItem }) => {
       if (item.kind === "header") {
@@ -328,10 +450,12 @@ export default function HistoryScreen() {
         <TransactionRow
           item={item.tx}
           onPress={() => router.push(`/transaction/${item.tx.id}` as any)}
+          onSpeedUp={handleSpeedUp}
+          speedingUp={speedingUpId === item.tx.id}
         />
       );
     },
-    [router]
+    [router, handleSpeedUp, speedingUpId]
   );
 
   const ListFooter = () => {
@@ -482,6 +606,111 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* #692 — Yield history filters: asset type chips + date range */}
+      {filters.yieldOnly && (
+        <View style={styles.yieldFiltersCard}>
+          <View style={styles.yieldFiltersHeader}>
+            <Ionicons name="trending-up" size={14} color="#16A34A" />
+            <Text style={styles.yieldFiltersTitle}>Filter yield history</Text>
+          </View>
+
+          <Text style={styles.yieldFiltersLabel}>Asset type</Text>
+          <View style={styles.yieldChipRow}>
+            {assetOptions.map((asset) => {
+              const selected =
+                asset === "All" ? !filters.asset : filters.asset === asset;
+              return (
+                <TouchableOpacity
+                  key={asset}
+                  style={[styles.assetChip, selected && styles.assetChipActive]}
+                  onPress={() =>
+                    applyFilters({
+                      ...filters,
+                      asset: asset === "All" ? undefined : asset,
+                      search: searchText,
+                    })
+                  }
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={`Filter by ${asset}`}
+                >
+                  <Text
+                    style={[
+                      styles.assetChipText,
+                      selected && styles.assetChipTextActive,
+                    ]}
+                  >
+                    {asset}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.yieldFiltersLabel}>Date range</Text>
+          <View style={styles.yieldChipRow}>
+            <TouchableOpacity
+              style={[
+                styles.assetChip,
+                !filters.dateFrom && styles.assetChipActive,
+              ]}
+              onPress={() =>
+                applyFilters({
+                  ...filters,
+                  dateFrom: undefined,
+                  dateTo: undefined,
+                  search: searchText,
+                })
+              }
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: !filters.dateFrom }}
+              accessibilityLabel="Filter by all dates"
+            >
+              <Text
+                style={[
+                  styles.assetChipText,
+                  !filters.dateFrom && styles.assetChipTextActive,
+                ]}
+              >
+                All
+              </Text>
+            </TouchableOpacity>
+            {DATE_PRESETS.map((preset) => {
+              const active = isPresetActive(filters, preset.days);
+              return (
+                <TouchableOpacity
+                  key={preset.label}
+                  style={[styles.assetChip, active && styles.assetChipActive]}
+                  onPress={() =>
+                    applyFilters({
+                      ...filters,
+                      dateFrom: presetStartIso(preset.days),
+                      dateTo: undefined,
+                      search: searchText,
+                    })
+                  }
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`Filter by last ${preset.label}`}
+                >
+                  <Text
+                    style={[
+                      styles.assetChipText,
+                      active && styles.assetChipTextActive,
+                    ]}
+                  >
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
       {/* Summary row */}
       {!loading && items.length > 0 && (
         <View style={styles.summaryRow}>
@@ -490,6 +719,11 @@ export default function HistoryScreen() {
             {filtersActive || searchText ? " (filtered)" : ""}
           </Text>
         </View>
+      )}
+      {!loading && !error && offlineCache && (
+        <Text style={styles.offlineCacheNotice} testID="offline-cache-notice">
+          Offline — showing saved server history.
+        </Text>
       )}
 
       {/* Loading skeleton */}
@@ -606,6 +840,13 @@ const styles = StyleSheet.create({
   clearBtn: { padding: 4 },
   // Summary
   summaryRow: { paddingHorizontal: 20, paddingBottom: 6 },
+  offlineCacheNotice: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    color: "#9A6700",
+    fontSize: 12,
+    fontFamily: "Outfit_400Regular",
+  },
   summaryText: {
     fontSize: 12,
     fontFamily: "Outfit_400Regular",
@@ -704,6 +945,24 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 100,
   },
+  speedUpBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+    backgroundColor: COLORS.primary,
+    minWidth: 92,
+    justifyContent: "center",
+  },
+  speedUpBtnText: {
+    fontSize: 12,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#fff",
+    textTransform: "capitalize",
+  },
   statusPillText: {
     fontSize: 11,
     fontFamily: "Outfit_600SemiBold",
@@ -786,6 +1045,62 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === "ios" ? 40 : 24,
+  },
+  // #692 — Yield history filter card
+  yieldFiltersCard: {
+    marginHorizontal: 20,
+    marginBottom: 10,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: "#F0FDF4",
+    borderWidth: 1,
+    borderColor: "#C8EAD1",
+  },
+  yieldFiltersHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 12,
+  },
+  yieldFiltersTitle: {
+    fontSize: 13,
+    fontFamily: "Outfit_700Bold",
+    color: "#16A34A",
+  },
+  yieldFiltersLabel: {
+    fontSize: 11,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#6B8D74",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  yieldChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 8,
+  },
+  assetChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 100,
+    borderWidth: 1.5,
+    borderColor: "#B9DCC4",
+    backgroundColor: "#FFFFFF",
+  },
+  assetChipActive: {
+    borderColor: "#16A34A",
+    backgroundColor: "#16A34A",
+  },
+  assetChipText: {
+    fontSize: 13,
+    fontFamily: "Outfit_600SemiBold",
+    color: "#166534",
+  },
+  assetChipTextActive: {
+    color: COLORS.secondary,
   },
   footerLoader: { paddingVertical: 20, alignItems: "center" },
   // Empty
