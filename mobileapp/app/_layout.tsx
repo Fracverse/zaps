@@ -220,6 +220,10 @@ function LayoutContent() {
         <Stack.Screen name="password" />
         <Stack.Screen name="biometric" />
         <Stack.Screen name="username" />
+        <Stack.Screen
+          name="circles/[id]"
+          options={{ animation: "slide_from_right" }}
+        />
 
         {/* Secure key management screens — Issue #97 */}
         <Stack.Screen

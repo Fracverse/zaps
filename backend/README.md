@@ -5,6 +5,7 @@ Welcome to the rebranded Zaps Backend codebase! This is a high-performance Rust 
 ## Architecture
 
 The backend handles the social layers of Zaps and indexes transaction states from Stellar:
+
 - **`api/`**: Axum endpoints grouped by features (User profiles/friends, Social feed parsing, Like/Comment registry, Allbridge integration proxies).
 - **`db/`**: SQL database models and PostgreSQL initialization script (`schema.sql`).
 - **`indexer/`**: Background worker daemon that polls Soroban events and caches them in the PostgreSQL database.
@@ -13,6 +14,7 @@ The backend handles the social layers of Zaps and indexes transaction states fro
 ## How to Contribute
 
 This codebase is structured with stubs and `todo!()` macros so that contributors can implement features step-by-step.
+
 1. Check the local issues under `/issues/backend/` or GitHub Issues.
 2. Locate the corresponding file in `src/` (e.g., `src/api/feed.rs` for feed pagination).
 3. Replace the placeholder stubs with proper Rust/SQLx implementation logic.
@@ -26,11 +28,22 @@ Bank account linking also requires `PAYSTACK_SECRET_KEY`; the authenticated
 account ownership before saving the merchant's verified bank details.
 
 To verify compiling:
+
 ```bash
 cargo check
 ```
 
 To run the development server:
+
 ```bash
 cargo run
 ```
+
+## Circles API
+
+Circle preview and membership routes require a valid bearer token:
+
+- `GET /api/circles/{id}` returns public details to authenticated users and private details only to existing members. An inaccessible private circle returns `404`.
+- `POST /api/circles/{id}/join` joins a public circle only while it is accepting members and has capacity. Membership changes are serialized per circle.
+
+The circles migration creates circle, membership, and contribution tables. Preview progress is the sum of recorded circle contributions; amounts are returned as decimal integer strings to preserve precision.
